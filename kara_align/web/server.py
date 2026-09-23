@@ -481,6 +481,13 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     def get_result(pid: str, rid: str):
         return S.get_result(handle(pid), rid).model_dump(mode="json")
 
+    @app.post("/api/projects/{pid}/results/import")
+    def import_result(pid: str, body: TextBody):
+        _check_text(body.text)
+        h = handle(pid)
+        r = S.import_result_json(h, body.text)
+        return view(h, result_id=r.id)
+
     @app.post("/api/projects/{pid}/results/{rid}/activate")
     def activate(pid: str, rid: str):
         h = handle(pid)

@@ -46,6 +46,8 @@ matches the current lyrics text / readings / calibration / mode / audio get
 | POST | `/api/lyrics/song` | `{platform, song_id}` | `{kind: "song", song: FetchedSong}` |
 | POST | `/api/projects/{pid}/lyrics/from-song` | `{platform, song_id}` | `LyricsPreview` (original track; translation/romanization offered as `extra_tracks`) |
 
+`lyrics/parse` also accepts `prepared.json` (lyrics with readings). For project / alignment / reading-patch JSON it returns an `error` plus `route` naming where that file belongs.
+
 `LyricsPreview` = `{preview_id, detected, warnings: [str], error: str|null, doc: LyricsDoc, extra_tracks: {kind: text}}`. When `error` is set (e.g. LRC mode without valid times) the preview cannot be applied; the UI must offer to add times or switch mode.
 `FetchedSong` = `{platform, song_id, title, artists: [str], album, duration_ms, tracks: {original?, translation?, romanization?}, has_timestamps: {track: bool}}`.
 
@@ -95,6 +97,7 @@ Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; 
 | --- | --- | --- | --- |
 | POST | `/api/projects/{pid}/align` | `{line_ids?: [str], audio_role?: "original"\|"vocals", config?: partial AlignConfig}` | `Job` (output `{result_id}`) |
 | GET | `/api/projects/{pid}/results/{rid}` | – | `AlignmentResult` (with fresh `stale`) |
+| POST | `/api/projects/{pid}/results/import` | `{text}` (alignment.json content) | `ProjectView` + `result_id` (non-active; staleness recomputed) |
 | POST | `/api/projects/{pid}/results/{rid}/activate` | – | `ProjectView` |
 | PUT | `/api/projects/{pid}/results/{rid}/units/{uid}` | `{start_ms, end_ms, locked}` | `UnitTiming` |
 | DELETE | `/api/projects/{pid}/results/{rid}/units/{uid}/manual` | – | `UnitTiming` |

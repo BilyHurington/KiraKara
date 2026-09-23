@@ -255,6 +255,13 @@ def cmd_results(a) -> None:
         print(f"已激活 {a.activate}", file=sys.stderr)
 
 
+def cmd_import_result(a) -> None:
+    h = S.open_dir(Path(a.project))
+    text, _, _ = _read_text(a.file)
+    r = S.import_result_json(h, text)
+    _print({"result_id": r.id, "stale": r.stale, "stale_reason": r.stale_reason})
+
+
 def cmd_show(a) -> None:
     h = S.open_dir(Path(a.project))
     r = S.get_result(h, a.result) if a.result else h.project.result()
@@ -470,6 +477,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("results", cmd_results, "列出结果")
     p.add_argument("--activate")
+
+    p = add("import-result", cmd_import_result, "导入 alignment.json 作为（非激活）结果")
+    p.add_argument("file")
 
     p = add("show", cmd_show, "显示结果")
     p.add_argument("--result")

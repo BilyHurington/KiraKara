@@ -259,10 +259,18 @@ def _deep_merge(base: dict, over: dict) -> dict:
 def parse_lyrics(h: ProjectHandle, text: str, *, origin: str = "paste", filename: Optional[str] = None,
                  mode: Optional[str] = None) -> dict:
     """Parse text into a preview; nothing in the project changes until apply."""
-    from .lyrics.parse import LyricsFormatError, LyricsModeError, parse_lyrics_text, detect_format
+    from .lyrics.parse import LyricsFormatError, LyricsModeError, detect_format, parse_lyrics_text
 
     mode = mode or h.project.mode
     preview_id = new_id("pv")
+    detected = detect_format(text, filename)
+    if detected == "json-prepared":
+        return _parse_prepared(h, text, origin, filename, mode)
+    if detected in ("json-project", "json-alignment", "json-reading-patch"):
+        where = {"json-project": "请使用“导入项目”", "json-alignment": "请使用“导入结果”",
+                 "json-reading-patch": "请在“粘贴 AI 结果”处使用"}[detected]
+        return {"preview_id": None, "detected": detected, "warnings": [], "doc": None, "extra_tracks": {},
+                "error": f"这是 {detected} 文件，不是歌词；{where}", "route": detected}
     try:
         res = parse_lyrics_text(text, mode=mode, origin=origin, filename=filename)  # type: ignore[arg-type]
     except LyricsModeError as e:
@@ -275,6 +283,65 @@ def parse_lyrics(h: ProjectHandle, text: str, *, origin: str = "paste", filename
     h.previews[preview_id] = res
     return {"preview_id": preview_id, "detected": res.detected, "warnings": res.warnings, "error": None,
             "doc": res.doc.model_dump(mode="json"), "extra_tracks": {}}
+
+
+def _parse_prepared(h: ProjectHandle, text: str, origin: str, filename: Optional[str], mode: str) -> dict:
+    """``prepared.json`` (lyrics + readings) → preview; times kept only in LRC mode."""
+    import hashlib
+    import json
+
+    from .lyrics.parse import ParseResult
+
+    data = json.loads(text)
+    try:
+        doc = LyricsDoc.model_validate({k: data[k] for k in ("language", "meta", "lines", "embedded_offset_raw",
+                                                            "embedded_shift_ms", "embedded_offset_note")
+                                        if k in data})
+    except Exception as e:
+        return {"preview_id": None, "detected": "json-prepared", "warnings": [], "doc": None, "extra_tracks": {},
+                "error": f"prepared.json 校验失败: {e}"}
+    warnings = []
+    has_times = any(ln.imported_start_ms is not None for ln in doc.lines)
+    if mode == "plain" and has_times:
+        for ln in doc.lines:
+            ln.imported_start_ms = ln.imported_end_ms = None
+        warnings.append("普通模式：只导入正文与读音，已忽略其中的行时间")
+    if mode == "lrc" and not has_times:
+        return {"preview_id": None, "detected": "json-prepared", "warnings": [], "doc": None, "extra_tracks": {},
+                "error": "LRC 增强模式需要带行时间的歌词：请补充时间或切换到普通模式"}
+    snap = SourceSnapshot(origin=origin, kind="readings", filename=filename, text=text,  # type: ignore[arg-type]
+                          sha256=hashlib.sha256(text.encode("utf-8")).hexdigest())
+    for ln in doc.lines:
+        ln.source.source_id = snap.id
+    res = ParseResult(doc=doc, warnings=warnings, detected="json-prepared", snapshot=snap)  # type: ignore[arg-type]
+    preview_id = new_id("pv")
+    h.previews[preview_id] = res
+    return {"preview_id": preview_id, "detected": "json-prepared", "warnings": warnings, "error": None,
+            "doc": doc.model_dump(mode="json"), "extra_tracks": {}}
+
+
+def import_result_json(h: ProjectHandle, text: str) -> AlignmentResult:
+    """Import an ``alignment.json`` (e.g. shared by someone) as a non-active result.
+
+    Only accepted when its units refer to the current lyrics; staleness is
+    recomputed so a result made from different inputs is clearly marked.
+    """
+    try:
+        r = AlignmentResult.model_validate_json(text)
+    except Exception as e:
+        raise ServiceError(f"对齐结果 JSON 校验失败: {e}") from e
+    known = {u.id for ln in h.project.lyrics.lines for u in ln.units()}
+    unknown = [u.unit_id for u in r.units if u.unit_id not in known]
+    if unknown:
+        raise ServiceError(f"结果中有 {len(unknown)} 个单元不属于当前歌词（读音分组或歌词不同），无法导入")
+    with h.lock:
+        if any(x.id == r.id for x in h.project.results):
+            r.id = new_id("r")
+        r.stats["imported"] = True
+        h.project.results.append(r)
+        refresh_staleness(h.project)
+        h.save()
+    return r
 
 
 def apply_lyrics(h: ProjectHandle, preview_id: str, *, prepare: bool = True) -> list[str]:

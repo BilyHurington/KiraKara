@@ -223,3 +223,20 @@ def test_http_api_flow(tmp_path):
     assert client.post(f"/api/projects/{pid}/mix/export", json={"vocal_keep_pct": 20}).status_code == 400
     # the UI is served
     assert client.get("/").status_code in (200, 404)
+
+
+def test_prepared_and_result_json_roundtrip(tmp_path):
+    h = _project(tmp_path, "plain")
+    r = S.run_align(h)
+    prepared = S.export(h, "prepared").content
+    alignment = S.export(h, "alignment").content
+    h2 = S.create_dir(tmp_path / "p2", "t2", "plain")
+    pv = S.parse_lyrics(h2, prepared, origin="upload", filename="prepared.json")
+    assert pv["detected"] == "json-prepared" and pv["error"] is None
+    S.apply_lyrics(h2, pv["preview_id"])
+    assert [u.id for u in h2.project.lyrics.lines[0].units()] == [u.id for u in h.project.lyrics.lines[0].units()]
+    S.add_audio(h2, tmp_path / "song.wav", "original")
+    imported = S.import_result_json(h2, alignment)
+    assert imported.units[0].start_ms == r.units[0].start_ms
+    # routing hints for non-lyrics JSON
+    assert S.parse_lyrics(h2, alignment)["route"] == "json-alignment"
