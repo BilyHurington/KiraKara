@@ -33,6 +33,10 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
             _flag(u, "short_unit")
             issues.append(Issue(code="short_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
                                 message=f"unit '{u.reading}' lasts only {d} ms", data={"duration_ms": d}))
+        elif "token_gap" in u.flags:
+            issues.append(Issue(code="token_gap", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                                message=f"unit '{u.reading}' tokens are split by a long pause ({d} ms total); "
+                                        "the reading may not match the singing", data={"duration_ms": d}))
         elif d > cfg.max_unit_ms:
             _flag(u, "long_unit")
             issues.append(Issue(code="long_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
@@ -146,5 +150,5 @@ def run_checks(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckConfi
 
 
 # issue codes that a retry could plausibly improve
-RETRYABLE = {"short_unit", "long_unit", "anchor_deviation", "window_edge", "line_overlap", "order_conflict",
+RETRYABLE = {"short_unit", "token_gap", "long_unit", "anchor_deviation", "window_edge", "line_overlap", "order_conflict",
              "unstable_boundary", "line_incomplete", "decode_failed", "boundary_conflict"}

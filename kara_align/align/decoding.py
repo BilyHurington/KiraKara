@@ -106,6 +106,12 @@ class UnitSpan:
     score: float
     start_frame: int
     end_frame: int
+    max_gap_ms: int = 0  # longest blank gap between this unit's own tokens
+
+
+# a unit whose tokens are split by a longer blank gap is flagged ("token_gap"):
+# typically the reading does not match what is sung
+TOKEN_GAP_MS = 300
 
 
 @dataclass
@@ -188,14 +194,16 @@ def decode_task(
         a = agg.get(uid)
         n = span.end_frame - span.start_frame
         if a is None:
-            agg[uid] = [span.start_frame, span.end_frame, span.acoustic_score * n, n]
+            agg[uid] = [span.start_frame, span.end_frame, span.acoustic_score * n, n, 0]
         else:
+            a[4] = max(a[4], span.start_frame - a[1])
             a[0] = min(a[0], span.start_frame)
             a[1] = max(a[1], span.end_frame)
             a[2] += span.acoustic_score * n
             a[3] += n
-    for uid, (s, e, tot, n) in agg.items():
-        out.units[uid] = UnitSpan(fm.frame_start_ms(s), fm.frame_start_ms(e), tot / max(1, n), s, e)
+    for uid, (s, e, tot, n, gap) in agg.items():
+        out.units[uid] = UnitSpan(fm.frame_start_ms(s), fm.frame_start_ms(e), tot / max(1, n), s, e,
+                                  int(round(gap * frame_ms)))
     for lid in task.participating_line_ids:
         spans = [out.units[u] for u in prep.line_units.get(lid, []) if u in out.units]
         if line_units_override and lid in line_units_override:
@@ -227,5 +235,7 @@ def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_i
             ut.acoustic_score = sp.score
             if info.unknown:
                 ut.flags.append("partial_tokens")
+            if sp.max_gap_ms >= TOKEN_GAP_MS:
+                ut.flags.append("token_gap")
         res.append(ut)
     return res
