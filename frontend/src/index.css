@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic design tokens. Components use these names only (bg-surface,
+   text-muted, border-line …) so light and dark themes stay consistent. */
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-surface-3: var(--c-surface-3);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-subtle: var(--c-subtle);
+  --color-accent: var(--c-accent);
+  --color-accent-fg: var(--c-accent-fg);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-ok: var(--c-ok);
+  --color-ok-soft: var(--c-ok-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-info: var(--c-info);
+  --color-info-soft: var(--c-info-soft);
+
+  --radius-card: 14px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 4px 16px -6px rgb(15 23 42 / 0.08);
+  --shadow-pop: 0 10px 38px -10px rgb(15 23 42 / 0.35), 0 10px 20px -15px rgb(15 23 42 / 0.2);
+
+  --animate-in: fade-in 160ms ease-out;
+  --animate-slide-up: slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+:root {
+  --c-canvas: #f6f7f9;
+  --c-surface: #ffffff;
+  --c-surface-2: #f3f4f6;
+  --c-surface-3: #e9ebef;
+  --c-line: #e5e7eb;
+  --c-line-strong: #d1d5db;
+  --c-fg: #0f172a;
+  --c-muted: #5b6474;
+  --c-subtle: #8b93a1;
+  --c-accent: #5b5bf0;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: #eef0ff;
+  --c-ok: #15924a;
+  --c-ok-soft: #e8f7ee;
+  --c-warn: #b86e00;
+  --c-warn-soft: #fff5e0;
+  --c-danger: #d42a2a;
+  --c-danger-soft: #fdecec;
+  --c-info: #2563eb;
+  --c-info-soft: #e8f0fe;
+
+  /* waveform (read by the canvas renderer) */
+  --wave-bg: #101322;
+  --wave-grid: rgba(255, 255, 255, 0.06);
+  --wave-fg: #7c83ff;
+  --wave-fg-2: #a5b4fc;
+  --wave-text: #c7cbe0;
+  --wave-played: rgba(124, 131, 255, 0.18);
+  color-scheme: light;
+}
+
+.dark {
+  --c-canvas: #0b0d14;
+  --c-surface: #12151f;
+  --c-surface-2: #181c28;
+  --c-surface-3: #212636;
+  --c-line: #232838;
+  --c-line-strong: #323950;
+  --c-fg: #e7e9f2;
+  --c-muted: #9aa1b5;
+  --c-subtle: #6b7289;
+  --c-accent: #7c7cff;
+  --c-accent-fg: #0b0d14;
+  --c-accent-soft: #1d1f3d;
+  --c-ok: #3ccf7c;
+  --c-ok-soft: #10261b;
+  --c-warn: #f2b33d;
+  --c-warn-soft: #2a2110;
+  --c-danger: #ff6b6b;
+  --c-danger-soft: #2c1417;
+  --c-info: #6aa2ff;
+  --c-info-soft: #132038;
+
+  --wave-bg: #090b12;
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+body {
+  @apply bg-canvas text-fg font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* thin, theme aware scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-strong) transparent;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--c-accent) 28%, transparent);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* focus ring shared by all interactive primitives */
+.focus-ring {
+  @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-1 focus-visible:ring-offset-surface;
+}

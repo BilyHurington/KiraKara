@@ -1,0 +1,114 @@
+// No project open: create, import or open one.
+
+import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer } from 'lucide-react';
+import { useState } from 'react';
+import { api } from '@/lib/api';
+import { cn, fmtRelative } from '@/lib/format';
+import type { Mode, ProjectView } from '@/lib/types';
+import { loadProjects, openProject, run, setPV, setStep, toast, useApp } from '@/store/app';
+import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input } from '@/components/ui';
+import { ModeChoice } from './Mode';
+
+export function HomePage() {
+  const projects = useApp((s) => s.projects);
+  const [name, setName] = useState('');
+  const [mode, setMode] = useState<Mode>('plain');
+  const [busy, setBusy] = useState(false);
+
+  const create = () => run(async () => {
+    setBusy(true);
+    try {
+      const pv = await api.post<ProjectView>('/api/projects', { name: name.trim() || '未命名歌曲', mode });
+      await loadProjects();
+      setPV(pv);
+      setStep('input');
+      toast('ok', '已创建项目', pv.project.name);
+    } finally {
+      setBusy(false);
+    }
+  }, '创建失败');
+
+  const importFile = (file: File) => run(async () => {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const pv = await api.post<ProjectView>('/api/projects/import', fd);
+    await loadProjects();
+    await openProject(pv.project.id);
+    toast('ok', '已导入项目', pv.project.name);
+  }, '导入失败');
+
+  return (
+    <div className="space-y-8">
+      <section className="relative overflow-hidden rounded-3xl border border-line bg-surface px-8 py-10 shadow-[var(--shadow-card)]">
+        <div className="pointer-events-none absolute -top-24 -right-16 size-80 rounded-full bg-gradient-to-br from-indigo-500/25 to-fuchsia-500/20 blur-3xl" />
+        <div className="relative max-w-2xl">
+          <Badge tone="accent">本地运行 · 不上传任何数据</Badge>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight">把已知歌词精确对齐到每一个发音</h1>
+          <p className="mt-3 text-[15px] leading-7 text-muted">
+            输入音频与歌词（可选 LRC），得到可复用的逐发音单元时间 —— 原音频起点起算的整数毫秒。
+            可选 AI 注音往返、人声分离与 LRC 首音校准，结果可人工检查、锁定并导出。
+          </p>
+          <div className="mt-6 flex flex-wrap gap-6 text-[13px] text-muted">
+            <span className="flex items-center gap-2"><ListMusic className="size-4 text-accent" />逐单元时间</span>
+            <span className="flex items-center gap-2"><Timer className="size-4 text-accent" />LRC 锚点约束</span>
+            <span className="flex items-center gap-2"><FileMusic className="size-4 text-accent" />人声保留混音</span>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-3">
+          <CardHeader title="新建项目" description="第一步：选择是否使用 LRC 增强（之后仍可切换，输入与人工修改都会保留）" />
+          <CardBody className="space-y-5">
+            <Input placeholder="歌曲名，例如：夜に駆ける" value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && create()} className="h-10 text-[15px]" />
+            <ModeChoice value={mode} onChange={setMode} />
+            <div className="flex justify-end">
+              <Button variant="primary" size="lg" loading={busy} onClick={create} icon={<ArrowRight className="size-4" />}>创建并开始</Button>
+            </div>
+          </CardBody>
+        </Card>
+
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader title="导入项目" description="project.json 或便携包 .kara.zip" icon={<FolderInput className="size-4" />} />
+            <CardBody>
+              <DropZone accept=".json,.zip,application/json,application/zip" onFile={importFile}
+                title="拖入或点击选择项目文件" hint="音频缺失时可在项目中重新上传" compact />
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader title="最近项目" icon={<Clock className="size-4" />} />
+            <div className="p-2">
+              {projects.length === 0 ? (
+                <EmptyState className="m-2 py-8" title="还没有项目" description="新建一个项目开始对齐" />
+              ) : (
+                <ul className="max-h-80 overflow-y-auto">
+                  {projects.map((p) => (
+                    <li key={p.id}>
+                      <button
+                        onClick={() => run(() => openProject(p.id), '打开项目失败')}
+                        className={cn('focus-ring group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-surface-2')}
+                      >
+                        <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted group-hover:bg-accent-soft group-hover:text-accent">
+                          <FileMusic className="size-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium">{p.name}</div>
+                          <div className="text-xs text-muted">{fmtRelative(p.updated)}</div>
+                        </div>
+                        <Badge tone={p.mode === 'lrc' ? 'accent' : 'neutral'}>{p.mode === 'lrc' ? 'LRC 增强' : '普通'}</Badge>
+                        <ArrowRight className="size-4 text-subtle opacity-0 transition group-hover:opacity-100" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}

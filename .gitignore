@@ -22,3 +22,7 @@ dist/
 *.aiff
 !tests/data/**
 .DS_Store
+
+# frontend
+frontend/node_modules/
+frontend/*.tsbuildinfo
