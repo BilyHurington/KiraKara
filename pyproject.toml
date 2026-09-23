@@ -44,8 +44,9 @@ packages = ["kara_align"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "network: requires internet access",
     "ml: requires torch/transformers and model weights",
 ]
-addopts = "-m 'not network and not ml'"
+addopts = "-m 'not network and not ml' --import-mode=importlib"
