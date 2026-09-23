@@ -240,3 +240,38 @@ def test_prepared_and_result_json_roundtrip(tmp_path):
     assert imported.units[0].start_ms == r.units[0].start_ms
     # routing hints for non-lyrics JSON
     assert S.parse_lyrics(h2, alignment)["route"] == "json-alignment"
+
+
+def test_separation_stores_each_stems_own_sync_report(tmp_path, monkeypatch):
+    from kara_align.audio import separation as sep_mod
+
+    h = _project(tmp_path, "plain")
+
+    def fake_separate(src, out_dir, preset, cancel=None, progress=None, device="auto"):
+        v, i = out_dir / "v.wav", out_dir / "i.wav"
+        _wav(v)
+        _wav(i)
+        report = {"model_filename": "m.ckpt", "audio_separator_version": "0.30.2",
+                  "sync": {"vocals": {"role": "vocals", "ok": True, "lag_ms": 0.0},
+                           "instrumental": {"role": "instrumental", "ok": False, "lag_ms": 0.0}}}
+        return sep_mod.SeparationOutput(v, i, report)
+
+    monkeypatch.setattr(sep_mod, "separate", fake_separate)
+    S.run_separation(h, "melband-roformer")
+    reports = {a.role: a.sync_report for a in h.project.audio if a.role != "original"}
+    assert reports["vocals"]["role"] == "vocals" and reports["vocals"]["ok"] is True
+    assert reports["instrumental"]["role"] == "instrumental" and reports["instrumental"]["ok"] is False
+
+
+def test_calibration_checks_and_mismatch_warning(tmp_path):
+    h = _project(tmp_path, "lrc")
+    first, second = [ln.id for ln in h.project.lyrics.sung_lines()]
+    S.calibration_op(h, "mark", line_id=first, marked_ms=1000)
+    S.calibration_op(h, "check", line_id=second, marked_ms=3040)
+    cal = S.open_dir(h.dir).project.calibration  # persisted and loadable
+    assert [(c.line_id, c.residual_ms) for c in cal.checks] == [(second, 40)]
+    assert not S.project_view(h)["view"]["calibration_issues"]
+    S.calibration_op(h, "check", line_id=second, marked_ms=3900)  # replaces, now way off
+    view = S.project_view(h)["view"]
+    assert len(h.project.calibration.checks) == 1
+    assert any(i["severity"] == "warning" for i in view["calibration_issues"])

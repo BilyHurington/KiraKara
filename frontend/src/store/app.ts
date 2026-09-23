@@ -180,6 +180,7 @@ export async function openProject(pid: string) {
   setPV(pv);
   const hasLyrics = pv.project.lyrics.lines.length > 0;
   set({ step: pv.project.results.length ? 'review' : hasLyrics ? 'input' : 'mode' });
+  void resumeJobs(pid);
   try { localStorage.setItem('kara.pid', pid); } catch { /* ignore */ }
 }
 
@@ -258,6 +259,22 @@ export function trackJob(job: Job, opts: { label: string; onDone?: (j: Job) => v
   };
   setTimeout(tick, 300);
   return job;
+}
+
+const JOB_LABELS: Record<string, string> = { align: '对齐', separate: '人声分离', mix: '混音导出' };
+
+/** Re-attach to jobs still running on the server (e.g. after a page reload). */
+export async function resumeJobs(pid: string) {
+  let jobs: Job[] = [];
+  try {
+    jobs = await api.get<Job[]>(`/api/projects/${pid}/jobs`);
+  } catch {
+    return;
+  }
+  for (const j of jobs) {
+    if (TERMINAL.has(j.status) || get().jobs[j.id]) continue;
+    trackJob(j, { label: JOB_LABELS[j.kind] ?? j.kind, onDone: () => refreshProject() });
+  }
 }
 
 export async function cancelJob(id: string) {

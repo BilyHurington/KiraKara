@@ -140,3 +140,13 @@ def test_jobs_success_failure_cancel():
     assert bad.status == "failed" and "ZeroDivisionError" in bad.error
     assert c.status == "cancelled" and c.output is None
     jm.shutdown()
+
+
+def test_save_refuses_invalid_project_data(tmp_path):
+    p = _project()
+    store.save_project(p, tmp_path)
+    before = (tmp_path / "project.json").read_text()
+    p.calibration = (p.calibration, [])  # a bug that assigns the wrong type
+    with pytest.raises(store.ProjectError):
+        store.save_project(p, tmp_path)
+    assert (tmp_path / "project.json").read_text() == before  # file untouched

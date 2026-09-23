@@ -14,21 +14,21 @@ export function Topbar() {
   const staleCount = pv?.view.results.filter((r) => r.stale).length ?? 0;
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-canvas/80 px-6 backdrop-blur-md">
-      <div className="flex min-w-0 items-center gap-2 text-sm">
+    <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md md:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 text-sm whitespace-nowrap">
         {pv ? (
           <>
-            <span className="truncate font-medium">{pv.project.name}</span>
-            <span className="text-subtle">/</span>
-            <span className="text-muted">{stepLabel}</span>
-            <Badge tone={pv.project.mode === 'lrc' ? 'accent' : 'neutral'} className="ml-1">{pv.project.mode === 'lrc' ? 'LRC 增强' : '普通模式'}</Badge>
-            {staleCount > 0 && <Badge tone="warn" dot title="输入已修改，这些结果仍可查看但不再对应当前设置">{staleCount} 个结果已过期</Badge>}
+            <span className="min-w-0 truncate font-medium">{pv.project.name}</span>
+            <span className="hidden text-subtle md:inline">/</span>
+            <span className="hidden text-muted md:inline">{stepLabel}</span>
+            <Badge tone={pv.project.mode === 'lrc' ? 'accent' : 'neutral'} className="ml-1 hidden sm:inline-flex">{pv.project.mode === 'lrc' ? 'LRC 增强' : '普通模式'}</Badge>
+            {staleCount > 0 && <Badge className="hidden lg:inline-flex" tone="warn" dot title="输入已修改，这些结果仍可查看但不再对应当前设置">{staleCount} 个结果已过期</Badge>}
           </>
         ) : (
           <span className="font-medium">项目</span>
         )}
       </div>
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {pv && (
           <>
             <IconButton label={`撤销人工修改（${nUndo}） ⌘Z`} disabled={!nUndo} onClick={() => void undo()}><Undo2 className="size-4" /></IconButton>
@@ -40,7 +40,7 @@ export function Topbar() {
         {pv && (
           <Tip content="下载便携项目包（含音频），可在另一台电脑导入">
             <a href={ppath('/package?include_audio=1')} download>
-              <Button size="sm" variant="ghost" icon={<Download className="size-4" />}>项目包</Button>
+              <Button size="sm" variant="ghost" icon={<Download className="size-4" />}><span className="hidden md:inline">项目包</span></Button>
             </a>
           </Tip>
         )}
@@ -65,7 +65,7 @@ function JobsIndicator() {
         <button className={cn('focus-ring flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition',
           active.length ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2')}>
           {active.length ? <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-accent" /></span> : <Activity className="size-3.5" />}
-          {active.length ? `${active.length} 个任务运行中` : '任务'}
+          <span className="hidden md:inline">{active.length ? `${active.length} 个任务运行中` : '任务'}</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>

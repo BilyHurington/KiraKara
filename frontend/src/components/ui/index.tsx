@@ -260,9 +260,10 @@ export function Slider({ value, onChange, onCommit, min = 0, max = 100, step = 1
  * user releases the thumb or confirms the typed value (persist here).
  */
 export function SliderField({
-  label, value, onChange, onCommit, min = 0, max = 100, step = 1, unit = '%', disabled, hint, className, trackClassName,
+  label, name, value, onChange, onCommit, min = 0, max = 100, step = 1, unit = '%', disabled, hint, className, trackClassName,
 }: {
-  label?: ReactNode; value: number; onChange: (v: number) => void; onCommit?: (v: number) => void;
+  label?: ReactNode; /** accessible name when `label` is not plain text */ name?: string;
+  value: number; onChange: (v: number) => void; onCommit?: (v: number) => void;
   min?: number; max?: number; step?: number; unit?: string; disabled?: boolean; hint?: ReactNode;
   className?: string; trackClassName?: string;
 }) {
@@ -293,14 +294,14 @@ export function SliderField({
         className={cn('min-w-40 flex-1', trackClassName)}
         value={value} min={min} max={max} step={step} disabled={disabled}
         onChange={onChange} onCommit={onCommit}
-        label={typeof label === 'string' ? label : undefined}
+        label={typeof label === 'string' ? label : name}
       />
       <div className="relative shrink-0">
         <input
           type="text"
           inputMode="decimal"
           disabled={disabled}
-          aria-label={typeof label === 'string' ? `${label}（输入数值）` : '输入数值'}
+          aria-label={`${typeof label === 'string' ? label : name ?? ''}（输入数值）`}
           title="点击直接输入数值，回车确认"
           className={cn(
             'focus-ring tabular h-8 w-[4.75rem] rounded-lg border border-line bg-surface pr-6 pl-2 text-right font-mono text-[13px] font-semibold',

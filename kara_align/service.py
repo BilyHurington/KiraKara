@@ -735,8 +735,10 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
         assets.append(import_asset(path, role, h.assets_dir, source, project_dir=h.dir))  # type: ignore[arg-type]
     with h.lock:
         h.project.audio = [a for a in h.project.audio if a.role not in ("vocals", "instrumental")]
+        sync = report.get("sync") if isinstance(report.get("sync"), dict) else {}
         for a in assets:
-            a.sync_report = report.get("sync") if isinstance(report.get("sync"), dict) else None
+            # the separator reports sync per stem: keep each stem's own report
+            a.sync_report = sync.get(a.role) if isinstance(sync.get(a.role), dict) else None
             a.sync_checked = a.sync_report is not None
             h.project.audio.append(a)
         h.save()
@@ -802,7 +804,8 @@ def calibration_op(h: ProjectHandle, op: str, **kw: Any) -> None:
             p.calibration = C.confirm_zero(p.calibration)
         elif op == "check":
             _line(h, kw["line_id"])
-            p.calibration = C.add_check(p.calibration, p.lyrics, kw["line_id"], int(kw["marked_ms"]))
+            # issues are recomputed for every view, only the calibration is stored
+            p.calibration, _issues = C.add_check(p.calibration, p.lyrics, kw["line_id"], int(kw["marked_ms"]))
         elif op == "undo":
             p.calibration = C.undo(p.calibration)
         else:
@@ -837,7 +840,13 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
     from .audio.analysis import rms_envelope_db
     from .reading.profiles import get_profile
 
-    progress = progress or (lambda f, m="": None)
+    user_progress = progress or (lambda f, m="": None)
+    last_progress = {"value": 0.0}
+
+    def progress(frac: float, msg: str = "") -> None:
+        # never move the bar backwards (retries may run extra passes)
+        last_progress["value"] = max(last_progress["value"], frac)
+        user_progress(last_progress["value"], msg)
     with h.lock:
         snap: Project = copy.deepcopy(h.project)
     cfg = snap.config
@@ -893,8 +902,14 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
             audio = _load_for_backend(h, asset, sr)
             origin = int(round(asset.origin_offset_samples * sr / asset.sample_rate))
 
+            first_pass = not emissions
+
             def sub_progress(frac: float, msg: str = "") -> None:
-                progress(0.05 + 0.6 * frac, msg or f"声学推理（{role}）")
+                if first_pass:
+                    progress(0.05 + 0.6 * frac, msg or f"声学推理（{role}）")
+                else:
+                    # a retry needs another track: keep the bar where it is, update the text
+                    progress(last_progress["value"], f"重试：声学推理（{role}）{int(frac * 100)}%")
 
             em = backend.emissions(audio, origin_samples=origin, cancel=cancel, progress=sub_progress)
             if cancel is not None:

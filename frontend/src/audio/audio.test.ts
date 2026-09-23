@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fmtMs } from '@/lib/format';
+import { fmtMs, parseTime } from '@/lib/format';
 import { Waveform, type Overlays } from './waveform';
 
 function makeWave(width = 1000, height = 188) {
@@ -75,5 +75,16 @@ describe('format', () => {
     expect(fmtMs(61235)).toBe('1:01.235');
     expect(fmtMs(-500)).toBe('-0:00.500');
     expect(fmtMs(null)).toBe('—');
+  });
+});
+
+describe('parseTime', () => {
+  it('accepts m:ss.mmm, seconds and plain ms', () => {
+    expect(parseTime('0:48.990')).toBe(48990);
+    expect(parseTime('1:02.3')).toBe(62300);
+    expect(parseTime('48.99')).toBe(48990);
+    expect(parseTime('48990')).toBe(48990);
+    expect(parseTime('2:31')).toBe(151000);
+    expect(parseTime('abc')).toBeNull();
   });
 });

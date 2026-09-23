@@ -120,3 +120,23 @@ describe('step status', () => {
     expect(stepStatus('input', pv, none).state).toBe('todo');
   });
 });
+
+describe('job resume', () => {
+  it('re-attaches to running jobs of the opened project', async () => {
+    const pv = fixturePV();
+    mockApi({
+      [`GET /api/projects/${pv.project.id}/jobs`]: () => [
+        { id: 'j1', kind: 'separate', project_id: pv.project.id, status: 'running', progress: 0.3, message: '', error: null, created: 'a', finished: null, output: null },
+        { id: 'j2', kind: 'align', project_id: pv.project.id, status: 'succeeded', progress: 1, message: '', error: null, created: 'b', finished: 'c', output: null },
+      ],
+      [`GET /api/projects/${pv.project.id}`]: () => pv,
+      'GET /api/jobs/': () => ({ id: 'j1', kind: 'separate', project_id: pv.project.id, status: 'running', progress: 0.4, message: '', error: null, created: 'a', finished: null, output: null }),
+    });
+    useApp.setState({ jobs: {} });
+    const { openProject } = await import('./app');
+    await openProject(pv.project.id);
+    await tick(20);
+    expect(Object.keys(useApp.getState().jobs)).toEqual(['j1']);
+    expect(useApp.getState().jobs.j1.label).toBe('人声分离');
+  });
+});

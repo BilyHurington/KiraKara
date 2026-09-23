@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .io import file_sha256, load_audio, write_wav
+from .io import file_sha256, load_audio, write_stem, write_wav
 from .sync import check_stem_sync
 
 
@@ -271,8 +271,8 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
             raise SeparationError(f"{role} stem sample rate {xsr} != original {sr}; refusing to resample silently")
         pad = int(round(p.leading_padding_samples * sr / 44100))
         fixed, action = fix_stem_length(x, orig.shape[1], leading_padding=pad, max_mismatch=int(sr * 1.0))
-        dest = out_dir / f"{role}.wav"
-        write_wav(dest, fixed, sr, subtype="FLOAT")
+        # 24-bit FLAC keeps stems ~3x smaller than float WAV (float WAV if > full scale)
+        dest = write_stem(out_dir / role, fixed, sr)
         stems[role] = fixed
         outputs[role] = dest
         report[f"{role}_length_fix"] = action

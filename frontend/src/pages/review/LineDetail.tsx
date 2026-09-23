@@ -141,7 +141,7 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
                   </IconButton>
                 </Td>
                 <Td>
-                  <div className="flex items-baseline gap-1.5">
+                  <div className="flex items-baseline gap-1.5 whitespace-nowrap">
                     <span className="text-[15px] font-semibold">{ui?.unitSurface || u.reading}</span>
                     {ui && !ui.unitSurface && (
                       <span className="text-xs text-muted">{ui.segSurface}{ui.count > 1 ? ` ${ui.pos + 1}/${ui.count}` : ''}</span>

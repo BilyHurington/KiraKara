@@ -16,25 +16,25 @@ export function Sidebar() {
   const running = new Set(Object.values(jobs).filter((j) => j.status === 'queued' || j.status === 'running').map((j) => j.kind));
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-surface">
-      <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
+    <aside className="flex w-16 shrink-0 flex-col border-r border-line bg-surface lg:w-64">
+      <div className="flex items-center justify-center gap-2.5 px-3 pt-4 pb-3 lg:justify-start lg:px-4">
         <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-sm">
           <AudioWaveform className="size-4.5" />
         </div>
-        <div>
+        <div className="hidden lg:block">
           <div className="text-[15px] leading-5 font-semibold tracking-tight">Kara Align</div>
           <div className="text-[11px] text-muted">已知歌词时间戳对齐</div>
         </div>
       </div>
 
-      <div className="px-3 pb-3">
+      <div className="px-2 pb-3 lg:px-3">
         <ProjectSwitcher />
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 lg:px-3">
         {pv ? (
           <>
-            <div className="px-2 pb-2 text-[11px] font-semibold tracking-wider text-subtle uppercase">工作流程</div>
+            <div className="hidden px-2 pb-2 text-[11px] font-semibold tracking-wider text-subtle uppercase lg:block">工作流程</div>
             <ol className="relative space-y-0.5">
               {STEPS.map((st, i) => {
                 const status = stepStatus(st.id, pv, running);
@@ -54,14 +54,14 @@ export function Sidebar() {
             </ol>
           </>
         ) : (
-          <div className="rounded-xl border border-dashed border-line-strong px-3 py-4 text-center text-xs text-muted">
+          <div className="hidden rounded-xl border border-dashed border-line-strong px-3 py-4 text-center text-xs text-muted lg:block">
             新建或打开一个项目后，这里会显示工作流程
           </div>
         )}
       </nav>
 
-      <div className="flex items-center justify-between border-t border-line px-4 py-3">
-        <span className="text-[11px] text-subtle">v{version ?? '…'} · 本地运行</span>
+      <div className="flex items-center justify-center border-t border-line px-2 py-3 lg:justify-between lg:px-4">
+        <span className="hidden text-[11px] text-subtle lg:inline">v{version ?? '…'} · 本地运行</span>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           className="focus-ring grid size-8 place-items-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-fg"
@@ -96,11 +96,12 @@ function StepItem({ index, label, note, state, active, last, onClick }: {
   }[state];
   return (
     <li className="relative">
-      {!last && <span className="absolute top-9 bottom-[-6px] left-[21px] w-px bg-line" aria-hidden />}
+      {!last && <span className="absolute top-9 bottom-[-6px] left-1/2 w-px bg-line lg:left-[21px]" aria-hidden />}
       <button
         onClick={onClick}
+        title={note ? `${label} · ${note}` : label}
         className={cn(
-          'focus-ring group relative flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition',
+          'focus-ring group relative flex w-full items-start justify-center gap-3 rounded-lg px-2 py-2 text-left transition lg:justify-start',
           active ? 'bg-accent-soft' : 'hover:bg-surface-2',
           state === 'skipped' && !active && 'opacity-60',
         )}
@@ -108,7 +109,7 @@ function StepItem({ index, label, note, state, active, last, onClick }: {
         <span className={cn('relative z-[1] mt-0.5 grid size-6 shrink-0 place-items-center rounded-full transition', active && state !== 'done' && state !== 'attention' ? 'bg-accent text-accent-fg' : dotColor)}>
           {dot}
         </span>
-        <span className="min-w-0">
+        <span className="hidden min-w-0 lg:block">
           <span className={cn('block text-[13px] leading-5 font-medium', active ? 'text-accent' : 'text-fg')}>{label}</span>
           {note && <span className="block truncate text-[11px] leading-4 text-muted">{note}</span>}
         </span>
@@ -123,13 +124,13 @@ function ProjectSwitcher() {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="focus-ring flex w-full items-center gap-2.5 rounded-xl border border-line bg-surface-2/60 px-3 py-2 text-left transition hover:bg-surface-2">
+        <button className="focus-ring flex w-full items-center justify-center gap-2.5 rounded-xl border border-line bg-surface-2/60 px-2 py-2 text-left transition hover:bg-surface-2 lg:justify-start lg:px-3">
           <FolderOpen className="size-4 shrink-0 text-muted" />
-          <span className="min-w-0 flex-1">
+          <span className="hidden min-w-0 flex-1 lg:block">
             <span className="block truncate text-[13px] font-medium">{pv ? pv.project.name : '未打开项目'}</span>
             <span className="block text-[11px] text-muted">{pv ? (pv.project.mode === 'lrc' ? 'LRC 增强模式' : '普通模式') : `${projects.length} 个项目`}</span>
           </span>
-          <ChevronsUpDown className="size-4 shrink-0 text-subtle" />
+          <ChevronsUpDown className="hidden size-4 shrink-0 text-subtle lg:block" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

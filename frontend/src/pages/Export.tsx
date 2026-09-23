@@ -242,9 +242,9 @@ function MixCard() {
         ) : (
           <>
             <div className="space-y-3">
-              <SliderField label={<span className="inline-block w-16">人声保留</span>} value={p} onChange={setP} />
-              <SliderField label={<span className="inline-block w-16">伴奏</span>} value={q} onChange={setQ} />
-              <SliderField label={<span className="inline-block w-16">总增益</span>} value={master} onChange={setMaster} min={0} max={2} step={0.01} unit="×" />
+              <SliderField name="人声保留" label={<span className="inline-block w-16">人声保留</span>} value={p} onChange={setP} />
+              <SliderField name="伴奏" label={<span className="inline-block w-16">伴奏</span>} value={q} onChange={setQ} />
+              <SliderField name="总增益" label={<span className="inline-block w-16">总增益</span>} value={master} onChange={setMaster} min={0} max={2} step={0.01} unit="×" />
             </div>
             <div className="rounded-xl bg-surface-2/70 px-4 py-3 font-mono text-xs text-muted">
               mix = master × (p/100·V + q/100·I) = {master.toFixed(2)} × ({(p / 100).toFixed(2)}·V + {(q / 100).toFixed(2)}·I)

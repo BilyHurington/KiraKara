@@ -166,6 +166,23 @@ def write_wav(path: PathLike, data: np.ndarray, sr: int, subtype: str = "PCM_16"
     return path
 
 
+def write_stem(path_base: PathLike, data: np.ndarray, sr: int) -> Path:
+    """Store a stem compactly: 24-bit FLAC (lossless for audio in [-1, 1]).
+
+    Falls back to 32-bit float WAV when the signal exceeds full scale, so
+    nothing is ever clipped silently.  ``path_base`` gets the right suffix.
+    """
+    x = np.asarray(data, dtype=np.float32)
+    base = Path(path_base).with_suffix("")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    if x.size and float(np.max(np.abs(x))) > 1.0:
+        return write_wav(base.with_suffix(".wav"), x, sr, subtype="FLOAT")
+    out = x[None, :] if x.ndim == 1 else x
+    path = base.with_suffix(".flac")
+    sf.write(str(path), out.T, int(sr), subtype="PCM_24", format="FLAC")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # untrusted upload validation
 # ---------------------------------------------------------------------------

@@ -304,3 +304,20 @@ def test_separator_pipes_are_drained_and_progress_parsed(tmp_path, monkeypatch):
     with pytest.raises(S.SeparationError):
         S.separate(src, tmp_path / "out", "mdx-fast", progress=lambda f, m: seen.append((f, m)), timeout_s=60)
     assert any("%" in m for _, m in seen) or seen  # progress reported, no deadlock
+
+
+def test_write_stem_flac_and_float_fallback(tmp_path):
+    from kara_align.audio.io import load_audio, write_stem
+
+    sr = 44100
+    t = np.arange(sr, dtype=np.float32) / sr
+    x = (0.5 * np.sin(2 * np.pi * 440 * t))[None, :].repeat(2, 0)
+    p = write_stem(tmp_path / "vocals", x, sr)
+    assert p.suffix == ".flac"
+    y, ysr = load_audio(p)
+    assert ysr == sr and y.shape == x.shape and np.max(np.abs(y - x)) < 1e-6
+    loud = x * 3  # above full scale: must not be clipped
+    p2 = write_stem(tmp_path / "inst", loud, sr)
+    assert p2.suffix == ".wav"
+    z, _ = load_audio(p2)
+    assert np.allclose(z, loud, atol=1e-6)

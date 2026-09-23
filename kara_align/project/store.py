@@ -96,10 +96,16 @@ def save_project(project: Project, project_dir: Path) -> Path:
     project_dir.mkdir(parents=True, exist_ok=True)
     (project_dir / "assets").mkdir(exist_ok=True)
     project.updated = utcnow()
+    text = project_to_json(project)
+    # never write a file that would not load again (e.g. a wrongly typed field)
+    try:
+        Project.model_validate_json(text)
+    except Exception as e:  # pydantic.ValidationError
+        raise ProjectError(f"项目数据无效，已拒绝保存以免损坏项目文件：{e}") from e
     path = project_dir / PROJECT_FILE
     if path.exists():
         shutil.copyfile(path, project_dir / (PROJECT_FILE + ".bak"))
-    atomic_write_text(path, project_to_json(project))
+    atomic_write_text(path, text)
     return path
 
 

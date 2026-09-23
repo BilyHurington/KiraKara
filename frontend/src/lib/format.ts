@@ -81,3 +81,21 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Parse a user-typed time: "1:02.345", "62.345" (seconds with a dot),
+ * "62345" (plain integer = ms) or "1:02". Returns ms or null.
+ */
+export function parseTime(text: string): number | null {
+  const t = text.trim().replace('：', ':');
+  if (!t) return null;
+  let m = /^(\d+):(\d{1,2})(?:\.(\d{1,3}))?$/.exec(t);
+  if (m) {
+    const frac = m[3] ? Number(m[3].padEnd(3, '0')) : 0;
+    return Number(m[1]) * 60000 + Number(m[2]) * 1000 + frac;
+  }
+  m = /^(\d+)\.(\d{1,3})$/.exec(t);
+  if (m) return Number(m[1]) * 1000 + Number(m[2].padEnd(3, '0'));
+  if (/^\d+$/.test(t)) return Number(t);
+  return null;
+}

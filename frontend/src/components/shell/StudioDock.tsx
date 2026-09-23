@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { cn, fmtMs, ROLE_LABEL } from '@/lib/format';
+import { cn, fmtMs, parseTime, ROLE_LABEL } from '@/lib/format';
 import type { Source } from '@/lib/types';
 import { player, usePlayer, usePlayhead } from '@/audio/player';
 import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
@@ -121,8 +121,8 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
         )}
       </div>
 
-      <div className="tabular font-mono text-sm">
-        <span className="font-semibold text-fg">{fmtMs(ms)}</span>
+      <div className="tabular flex items-center font-mono text-sm">
+        <TimeJump ms={ms} disabled={!sources.length} />
         <span className="text-subtle"> / {fmtMs(p.durationMs)}</span>
       </div>
 
@@ -162,12 +162,14 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
           <>
             <div className="min-w-[320px] flex-1 basis-80">
               <SliderField
+                name="人声保留"
                 label={<HintLabel tip="线性幅度 ×p/100（“保留 p%”，不是“降低 p%”）；试听与导出使用同一规则">人声保留</HintLabel>}
                 value={p.mix.p} onChange={(v) => player.setMix({ p: v })} onCommit={persistMix}
               />
             </div>
             <div className="min-w-[320px] flex-1 basis-80">
               <SliderField
+                name="伴奏"
                 label={<HintLabel tip="伴奏线性幅度 ×q/100；人声 0% 时伴奏中仍可能残留人声">伴奏</HintLabel>}
                 value={p.mix.q} onChange={(v) => player.setMix({ q: v })} onCommit={persistMix}
               />
@@ -179,14 +181,22 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
             )}
           </>
         ) : (
-          <span className="min-w-[320px] flex-1 text-xs text-subtle">
-            {sources.length > 0
-              ? '人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声'
-              : '上传音频后可在此试听'}
-          </span>
+          <>
+            <span className="hidden min-w-0 flex-1 text-xs text-subtle lg:inline">
+              {sources.length > 0
+                ? '人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声'
+                : '上传音频后可在此试听'}
+            </span>
+            {sources.length > 0 && (
+              <Tip content="人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声">
+                <span className="flex-1 cursor-help text-xs text-subtle lg:hidden">人声比例：需要分轨 ⓘ</span>
+              </Tip>
+            )}
+          </>
         )}
-        <div className="w-72 shrink-0">
+        <div className="w-60 shrink-0 lg:w-72">
           <SliderField
+            name="监听音量"
             label={<HintLabel tip="监听音量：仅影响本机试听，不写入导出"><Volume2 className="inline size-4 align-[-3px]" /></HintLabel>}
             value={Math.round(p.monitorVolume * 100)}
             onChange={(v) => player.setMonitorVolume(v / 100)}
@@ -195,6 +205,61 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
       </div>
     </>
   );
+}
+
+/** Current time; click to type a time and jump there (e.g. 0:48.990). */
+function TimeJump({ ms, disabled }: { ms: number; disabled: boolean }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  if (draft === null) {
+    return (
+      <Tip content="点击输入时间跳转（如 0:48.990 或 48990）">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setDraft(fmtMs(ms))}
+          className="focus-ring cursor-text rounded-md px-1 font-semibold text-fg hover:bg-surface-2 disabled:cursor-default"
+          aria-label="当前时间（点击输入跳转）"
+        >
+          {fmtMs(ms)}
+        </button>
+      </Tip>
+    );
+  }
+  const go = (text: string) => {
+    const t = parseTime(text);
+    setDraft(null);
+    if (t === null) {
+      toast('warn', '无法识别的时间', '示例：0:48.990、48.99 或 48990（毫秒）');
+      return;
+    }
+    player.seek(t);
+    waveformRef.current?.reveal(Math.max(0, t - 1500), t + 3000);
+  };
+  return (
+    <input
+      autoFocus
+      aria-label="跳转到时间"
+      className="focus-ring w-28 rounded-md border border-accent bg-surface px-1 font-semibold"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={(e) => go(e.currentTarget.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') setDraft(null);
+      }}
+    />
+  );
+}
+
+function useViewportHeight() {
+  const [h, setH] = useState(() => (typeof window === 'undefined' ? 900 : window.innerHeight));
+  useEffect(() => {
+    const on = () => setH(window.innerHeight);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
+  return h;
 }
 
 function HintLabel({ tip, children }: { tip: string; children: React.ReactNode }) {
@@ -257,6 +322,9 @@ function useOverlays(): () => Overlays {
 function WaveArea() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const waveHeight = useApp((s) => s.waveHeight);
+  const viewportH = useViewportHeight();
+  // never let the waveform take more than ~1/4 of the window on small screens
+  const effectiveHeight = Math.max(WAVE_HEIGHT.min, Math.min(waveHeight, Math.round(viewportH * 0.25)));
   const pid = useApp((s) => s.pid);
   const originalId = useApp((s) => s.pv?.project.audio.find((a) => a.role === 'original')?.id ?? null);
   const getOverlays = useOverlays();
@@ -320,7 +388,7 @@ function WaveArea() {
   return (
     <div className="relative px-4 pb-3">
       <div className="relative overflow-hidden rounded-xl ring-1 ring-line">
-        <canvas ref={canvasRef} className="block w-full" style={{ height: waveHeight }} />
+        <canvas ref={canvasRef} className="block w-full" style={{ height: effectiveHeight }} />
         <div className="absolute top-7 right-2 flex flex-col gap-1 rounded-lg bg-black/45 p-1 backdrop-blur">
           <WaveBtn label="放大" onClick={zoom.in}><Plus className="size-3.5" /></WaveBtn>
           <WaveBtn label="缩小" onClick={zoom.out}><Minus className="size-3.5" /></WaveBtn>
@@ -328,7 +396,7 @@ function WaveArea() {
         </div>
       </div>
       <ScrollBar state={scroll} />
-      <div className="mt-1 flex flex-wrap gap-x-4 text-[11px] text-subtle">
+      <div className="mt-1 hidden flex-wrap gap-x-4 text-[11px] text-subtle lg:flex">
         <span>点击定位 · 拖动选择循环区间 · 滚轮缩放 · Shift+滚轮平移 · 拖动上边缘调整高度</span>
         <span>在“人工检查”中选中单元后可拖动两端修改起止</span>
       </div>
