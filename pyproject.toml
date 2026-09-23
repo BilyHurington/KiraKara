@@ -26,7 +26,8 @@ ml = [
 ]
 # optional vocal separation (BS-RoFormer / MelBand RoFormer presets)
 separation = [
-    "audio-separator>=0.30",
+    "audio-separator[cpu]>=0.30",
+    "audioread>=3.0",
 ]
 dev = [
     "pytest>=8",
