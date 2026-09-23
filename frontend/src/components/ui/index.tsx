@@ -251,6 +251,78 @@ export function Slider({ value, onChange, onCommit, min = 0, max = 100, step = 1
   );
 }
 
+/**
+ * Long slider plus a number that can be clicked and typed into.
+ * `onChange` fires while dragging/typing (live preview); `onCommit` when the
+ * user releases the thumb or confirms the typed value (persist here).
+ */
+export function SliderField({
+  label, value, onChange, onCommit, min = 0, max = 100, step = 1, unit = '%', disabled, hint, className, trackClassName,
+}: {
+  label?: ReactNode; value: number; onChange: (v: number) => void; onCommit?: (v: number) => void;
+  min?: number; max?: number; step?: number; unit?: string; disabled?: boolean; hint?: ReactNode;
+  className?: string; trackClassName?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const decimals = step < 1 ? Math.min(3, String(step).split('.')[1]?.length ?? 2) : 0;
+  const shown = draft ?? value.toFixed(decimals);
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  const commitDraft = (raw: string) => {
+    if (draft === null && raw === value.toFixed(decimals)) return;
+    const n = Number(raw.replace('%', '').trim());
+    setDraft(null);
+    if (raw.trim() === '' || !Number.isFinite(n)) return;
+    const v = clamp(Number((Math.round(n / step) * step).toFixed(decimals)));
+    onChange(v);
+    onCommit?.(v);
+  };
+  return (
+    <div className={cn('flex min-w-0 items-center gap-3', disabled && 'opacity-50', className)}>
+      {label && (
+        <span className="shrink-0 text-[13px] font-medium whitespace-nowrap text-muted">
+          {label}
+          {hint && <span className="ml-1 font-normal text-subtle">{hint}</span>}
+        </span>
+      )}
+      <Slider
+        className={cn('min-w-40 flex-1', trackClassName)}
+        value={value} min={min} max={max} step={step} disabled={disabled}
+        onChange={onChange} onCommit={onCommit}
+        label={typeof label === 'string' ? label : undefined}
+      />
+      <div className="relative shrink-0">
+        <input
+          type="text"
+          inputMode="decimal"
+          disabled={disabled}
+          aria-label={typeof label === 'string' ? `${label}（输入数值）` : '输入数值'}
+          title="点击直接输入数值，回车确认"
+          className={cn(
+            'focus-ring tabular h-8 w-[4.75rem] rounded-lg border border-line bg-surface pr-6 pl-2 text-right font-mono text-[13px] font-semibold',
+            'cursor-text transition hover:border-line-strong focus:border-accent',
+          )}
+          value={shown}
+          onFocus={(e) => { setDraft(value.toFixed(decimals)); requestAnimationFrame(() => e.target.select()); }}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commitDraft(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur(); }
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+              e.preventDefault();
+              const d = (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+              const v = clamp(Number(((draft !== null ? Number(draft) || value : value) + d).toFixed(decimals)));
+              setDraft(v.toFixed(decimals));
+              onChange(v);
+            }
+          }}
+        />
+        <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-xs text-subtle">{unit}</span>
+      </div>
+    </div>
+  );
+}
+
 export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode; disabled?: boolean }) {
   return (
     <label className={cn('inline-flex cursor-pointer items-center gap-2 text-[13px]', disabled && 'cursor-not-allowed opacity-50')}>

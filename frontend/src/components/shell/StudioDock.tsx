@@ -13,7 +13,7 @@ import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
 import { waveformRef } from '@/audio/waveformRef';
 import { ppath, resultFrom, run, toast, useApp } from '@/store/app';
 import { setUnitTimes } from '@/store/edits';
-import { Badge, IconButton, Kbd, Segmented, Slider, Tip } from '@/components/ui';
+import { Badge, IconButton, Kbd, Segmented, SliderField, Tip } from '@/components/ui';
 
 export function StudioDock() {
   const pv = useApp((s) => s.pv);
@@ -83,6 +83,7 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
   }));
 
   return (
+    <>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
       <div className="flex items-center gap-1">
         <IconButton label="回到开头" onClick={() => player.seek(0)} disabled={!sources.length}><SkipBack className="size-4" /></IconButton>
@@ -138,48 +139,58 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
 
       {loading.length > 0 && <Badge tone="info">加载 {loading.map((r) => ROLE_LABEL[r]).join('、')}…</Badge>}
 
-      <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
-        {canMix ? (
-          <>
-            <MiniSlider label="人声保留" value={p.mix.p} suffix="%" onChange={(v) => player.setMix({ p: v })} onCommit={persistMix}
-              tip="线性幅度 ×p/100（不是“降低 p%”）；试听与导出同一规则" />
-            <MiniSlider label="伴奏" value={p.mix.q} suffix="%" onChange={(v) => player.setMix({ q: v })} onCommit={persistMix}
-              tip="0% 人声时伴奏中仍可能残留人声" />
-            {bus && (
-              <Tip content={`共同母线增益（防削波，保持两轨比例）；混音峰值 ${bus.peak_before.toFixed(3)}`}>
-                <span className="tabular text-xs whitespace-nowrap text-muted">母线 ×{bus.bus_gain.toFixed(3)}</span>
-              </Tip>
-            )}
-          </>
-        ) : (
-          sources.length > 0 && (
-            <Tip content="人声保留比例需要人声与伴奏两条分轨；只有原曲时无法单独降低人声">
-              <span className="text-xs whitespace-nowrap text-subtle">人声比例：需要分轨</span>
-            </Tip>
-          )
-        )}
-        <div className="flex shrink-0 items-center gap-2">
-          <Volume2 className="size-4 text-muted" />
-          <Slider className="w-20" value={Math.round(p.monitorVolume * 100)} onChange={(v) => player.setMonitorVolume(v / 100)} label="监听音量（不写入导出）" />
-        </div>
+      <div className="ml-auto">
         <IconButton label={open ? '收起波形' : '展开波形'} onClick={() => useApp.setState({ dockOpen: !open })}>
           {open ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
         </IconButton>
       </div>
-    </div>
+      </div>
+
+      {/* mix row: long sliders with typeable values */}
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 border-t border-line/70 px-4 py-2">
+        {canMix ? (
+          <>
+            <div className="min-w-[320px] flex-1 basis-80">
+              <SliderField
+                label={<HintLabel tip="线性幅度 ×p/100（“保留 p%”，不是“降低 p%”）；试听与导出使用同一规则">人声保留</HintLabel>}
+                value={p.mix.p} onChange={(v) => player.setMix({ p: v })} onCommit={persistMix}
+              />
+            </div>
+            <div className="min-w-[320px] flex-1 basis-80">
+              <SliderField
+                label={<HintLabel tip="伴奏线性幅度 ×q/100；人声 0% 时伴奏中仍可能残留人声">伴奏</HintLabel>}
+                value={p.mix.q} onChange={(v) => player.setMix({ q: v })} onCommit={persistMix}
+              />
+            </div>
+            {bus && (
+              <Tip content={`共同母线增益（防削波，保持两轨比例）；混音峰值 ${bus.peak_before.toFixed(3)}`}>
+                <span className="tabular shrink-0 text-xs whitespace-nowrap text-muted">母线 ×{bus.bus_gain.toFixed(3)}</span>
+              </Tip>
+            )}
+          </>
+        ) : (
+          <span className="min-w-[320px] flex-1 text-xs text-subtle">
+            {sources.length > 0
+              ? '人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声'
+              : '上传音频后可在此试听'}
+          </span>
+        )}
+        <div className="w-72 shrink-0">
+          <SliderField
+            label={<HintLabel tip="监听音量：仅影响本机试听，不写入导出"><Volume2 className="inline size-4 align-[-3px]" /></HintLabel>}
+            value={Math.round(p.monitorVolume * 100)}
+            onChange={(v) => player.setMonitorVolume(v / 100)}
+          />
+        </div>
+      </div>
+    </>
   );
 }
 
-function MiniSlider({ label, value, suffix, onChange, onCommit, tip }: {
-  label: string; value: number; suffix: string; onChange: (v: number) => void; onCommit: () => void; tip: string;
-}) {
+function HintLabel({ tip, children }: { tip: string; children: React.ReactNode }) {
   return (
     <Tip content={tip}>
-      <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-        <span className="text-xs font-medium text-muted">{label}</span>
-        <Slider className="w-24" value={value} onChange={onChange} onCommit={onCommit} label={label} />
-        <span className="tabular w-9 text-right text-xs font-semibold">{Math.round(value)}{suffix}</span>
-      </div>
+      <span className="cursor-help underline decoration-line-strong decoration-dotted underline-offset-4">{children}</span>
     </Tip>
   );
 }
