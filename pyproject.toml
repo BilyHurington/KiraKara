@@ -26,7 +26,8 @@ ml = [
 ]
 # optional vocal separation (BS-RoFormer / MelBand RoFormer presets)
 separation = [
-    "audio-separator[cpu]>=0.30",
+    # pinned: 0.47 runs RoFormer models ~2.5x slower on Apple MPS than 0.30.2
+    "audio-separator[cpu]>=0.30.2,<0.31",
     "audioread>=3.0",
 ]
 dev = [

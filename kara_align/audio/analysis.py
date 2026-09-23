@@ -54,7 +54,7 @@ def peaks_json(path_or_array: Union[str, np.ndarray], sr: Optional[int] = None,
     """JSON-able waveform summary for the WebUI."""
     if isinstance(path_or_array, np.ndarray):
         if sr is None:
-            raise ValueError("sr required with an array")
+            raise ValueError("传入数组时必须提供采样率 sr")
         x = path_or_array
     else:
         from .io import load_audio

@@ -34,7 +34,7 @@ def resample(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
     if sr_from == sr_to:
         return x.copy()
     if sr_from <= 0 or sr_to <= 0:
-        raise ValueError("sample rates must be positive")
+        raise ValueError("采样率必须为正数")
     frac = Fraction(sr_to, sr_from)
     up, down = frac.numerator, frac.denominator
     n = x.shape[-1]

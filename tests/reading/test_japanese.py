@@ -81,3 +81,16 @@ def test_profile_other_langs_and_version():
     assert p.unit_texts(["love", "nv"], ["en", "zh"], [[], []]) == ["love", "nv"]
     with pytest.raises(KeyError):
         get_profile("nope")
+
+
+def test_middle_dot_is_punctuation_not_kana():
+    """・・・ (katakana middle dot) is common in lyrics and must not become units."""
+    from kara_align.reading.japanese import is_kana, rule_segments
+
+    assert not is_kana("・")
+    segs = rule_segments("君に・・・")
+    assert "".join(s.surface for s in segs) == "君に・・・"
+    units = [u.reading for s in segs for u in s.units]
+    assert "・" not in "".join(units)
+    dots = [s for s in segs if "・" in s.surface]
+    assert dots and all(not s.units for s in dots)

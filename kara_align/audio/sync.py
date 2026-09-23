@@ -83,18 +83,18 @@ def check_stem_sync(original: np.ndarray, stem: np.ndarray, sr: int, role: str,
     ok = abs(lag_ms) <= tolerance_ms and corr >= min_corr
     msgs = []
     if length_diff:
-        msgs.append(f"length differs from original by {length_diff} samples")
+        msgs.append(f"长度与原曲相差 {length_diff} 个样本")
     if abs(lag_ms) > tolerance_ms:
-        msgs.append(f"{role} appears {'late' if lag_ms > 0 else 'early'} by {abs(lag_ms):.1f} ms")
+        msgs.append(f"{role} 比原曲{'晚' if lag_ms > 0 else '早'} {abs(lag_ms):.1f} ms")
     if corr < min_corr:
-        msgs.append(f"low correlation with original ({corr:.2f}); sync could not be verified")
+        msgs.append(f"与原曲相关性低（{corr:.2f}），无法确认同步")
     report = {
         "role": role,
         "lag_ms": round(float(lag_ms), 3),
         "correlation": round(float(corr), 4),
         "length_diff_samples": length_diff,
         "ok": bool(ok),
-        "message": "; ".join(msgs) if msgs else "in sync with original (lag within tolerance)",
+        "message": "; ".join(msgs) if msgs else "与原曲同步（延迟在容差内）",
     }
     if other_stem is not None:
         t = to_mono(other_stem)
@@ -116,11 +116,11 @@ def derive_instrumental(original: np.ndarray, vocals: np.ndarray, sr: int, *, mi
     o = np.asarray(original, dtype=np.float32)
     v = np.asarray(vocals, dtype=np.float32)
     if o.shape != v.shape:
-        raise SyncError(f"shape mismatch {o.shape} vs {v.shape}; refusing to derive instrumental")
+        raise SyncError(f"形状不一致 {o.shape} vs {v.shape}，拒绝推导伴奏")
     max_lag = int(sr * 0.05)
     lag, corr = estimate_lag_samples(o, v, max_lag)
     if abs(lag) > 1:
-        raise SyncError(f"vocals lag original by {lag} samples; refusing to subtract")
+        raise SyncError(f"人声相对原曲有 {lag} 个样本延迟，拒绝相减")
     if corr < min_corr:
-        raise SyncError(f"vocals/original correlation {corr:.2f} too low to verify alignment")
+        raise SyncError(f"人声与原曲相关性 {corr:.2f} 过低，无法确认对齐")
     return (o - v).astype(np.float32)

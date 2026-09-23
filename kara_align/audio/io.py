@@ -47,7 +47,7 @@ def ffmpeg_path() -> str:
         for cand in ("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
             if os.path.exists(cand):
                 return cand
-        raise AudioError("ffmpeg not found; install ffmpeg or set KARA_ALIGN_FFMPEG")
+        raise AudioError("找不到 ffmpeg；请安装 ffmpeg 或设置 KARA_ALIGN_FFMPEG")
     return exe
 
 
@@ -81,7 +81,7 @@ def _sf_readable(path: PathLike) -> bool:
 def _ffprobe_stream(path: PathLike) -> dict:
     probe = ffprobe_path()
     if not probe:
-        raise AudioError("ffprobe not found")
+        raise AudioError("找不到 ffprobe")
     import json
 
     out = subprocess.run(
@@ -90,10 +90,10 @@ def _ffprobe_stream(path: PathLike) -> dict:
         capture_output=True, text=True,
     )
     if out.returncode != 0:
-        raise AudioError(f"cannot probe audio: {out.stderr.strip()[:300]}")
+        raise AudioError(f"无法读取音频信息：{out.stderr.strip()[:300]}")
     streams = json.loads(out.stdout or "{}").get("streams") or []
     if not streams:
-        raise AudioError("no audio stream found")
+        raise AudioError("文件中没有音频流")
     return {"sample_rate": int(streams[0]["sample_rate"]), "channels": int(streams[0]["channels"])}
 
 
@@ -104,7 +104,7 @@ def _ffmpeg_decode(path: PathLike) -> tuple[np.ndarray, int]:
            "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(ch), "-ar", str(sr), "pipe:1"]
     out = subprocess.run(cmd, capture_output=True)
     if out.returncode != 0:
-        raise AudioError(f"ffmpeg decode failed: {out.stderr.decode(errors='replace').strip()[:300]}")
+        raise AudioError(f"ffmpeg 解码失败：{out.stderr.decode(errors='replace').strip()[:300]}")
     data = np.frombuffer(out.stdout, dtype="<f4")
     n = len(data) // ch
     data = data[: n * ch].reshape(n, ch).T.copy()
@@ -119,11 +119,16 @@ def load_audio(path: PathLike, *, target_sr: Optional[int] = None, mono: bool = 
     """
     path = Path(path)
     if not path.exists():
-        raise AudioError(f"file not found: {path}")
+        raise AudioError(f"找不到文件：{path}")
+    x = None
     if _sf_readable(path) and path.suffix.lower() != ".mp3":
-        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
-        x = data.T.copy()
-    else:
+        try:
+            data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+            x = data.T.copy()
+        except (RuntimeError, sf.LibsndfileError):
+            # some FLAC files have a valid header but trip libsndfile's decoder
+            x = None
+    if x is None:
         x, sr = _ffmpeg_decode(path)
     if mono:
         x = to_mono(x)[None, :]
@@ -148,7 +153,7 @@ def probe_audio(path: PathLike) -> dict:
 def write_wav(path: PathLike, data: np.ndarray, sr: int, subtype: str = "PCM_16") -> Path:
     """Write ``[channels, n]`` (or 1-D) float audio as WAV."""
     if subtype not in ("PCM_16", "PCM_24", "FLOAT"):
-        raise ValueError(f"unsupported subtype {subtype}")
+        raise ValueError(f"不支持的 WAV 格式 {subtype}")
     x = np.asarray(data, dtype=np.float32)
     if x.ndim == 1:
         x = x[None, :]
@@ -193,13 +198,13 @@ def validate_upload(filename: str, head: bytes, size: int, max_bytes: int = DEFA
     name = os.path.basename(filename or "")
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise AudioError(f"unsupported audio extension: {ext or '(none)'}")
+        raise AudioError(f"不支持的音频扩展名：{ext or '（无）'}")
     if size <= 0:
-        raise AudioError("empty upload")
+        raise AudioError("上传的文件为空")
     if size > max_bytes:
-        raise AudioError(f"upload too large ({size} bytes > {max_bytes})")
+        raise AudioError(f"上传文件过大（{size} 字节 > {max_bytes}）")
     if sniff_audio_format(head[:64]) is None:
-        raise AudioError("file content does not look like a supported audio format")
+        raise AudioError("文件内容不像受支持的音频格式")
     return ext
 
 
@@ -229,7 +234,7 @@ def import_asset(
     sha = file_sha256(src)
     ext = src.suffix.lower() or ".bin"
     if ext not in ALLOWED_EXTENSIONS:
-        raise AudioError(f"unsupported audio extension: {ext}")
+        raise AudioError(f"不支持的音频扩展名：{ext}")
     dest = assets / f"{sha}{ext}"
     if not dest.exists():
         tmp = dest.with_suffix(dest.suffix + ".part")

@@ -247,3 +247,60 @@ def test_presets():
     names = {p.name for p in separation.PRESETS}
     assert {"bs-roformer", "melband-roformer"} <= names
     assert separation.get_preset("model_bs_roformer_ep_317_sdr_12.9755.ckpt").name == "bs-roformer"
+
+
+def test_separator_reads_our_decoded_wav(tmp_path, monkeypatch):
+    """The child process must get a WAV from our loader, never the source file
+    (some FLACs break libsndfile, and the decode must match alignment's)."""
+    import json as _json
+    import subprocess as _sp
+
+    import soundfile as _sf
+
+    from kara_align.audio import separation as S
+
+    src = tmp_path / "song.wav"
+    _sf.write(src, np.zeros((4410, 2), dtype=np.float32), 44100)
+    monkeypatch.setattr(S, "ensure_available", lambda: "test")
+    seen = {}
+
+    class FakeProc:
+        returncode = 1
+
+        def __init__(self, cmd, **kw):
+            seen["args"] = _json.loads(cmd[-1])
+
+        def poll(self):
+            return 1
+
+        def communicate(self):
+            return "", "boom"
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(S.subprocess, "Popen", FakeProc)
+    with pytest.raises(S.SeparationError):
+        S.separate(src, tmp_path / "out", "mdx-fast")
+    assert seen["args"]["input"].endswith("input.wav")
+    data, sr = _sf.read(seen["args"]["input"])
+    assert sr == 44100 and data.shape == (4410, 2)
+
+
+def test_separator_pipes_are_drained_and_progress_parsed(tmp_path, monkeypatch):
+    """A child that floods stderr (tqdm) must not deadlock; its % is reported."""
+    import soundfile as _sf
+
+    from kara_align.audio import separation as S
+
+    src = tmp_path / "song.wav"
+    _sf.write(src, np.zeros((4410, 2), dtype=np.float32), 44100)
+    monkeypatch.setattr(S, "ensure_available", lambda: "test")
+    # a fake child: 400 KB of tqdm-like stderr, then an error exit
+    fake = ("import sys\nfor i in range(101):\n    sys.stderr.write(f'\\r{i:3d}%|' + '#' * 4000 + '|')\n"
+            "sys.stderr.flush()\nsys.exit(3)\n")
+    monkeypatch.setattr(S, "_CHILD_SCRIPT", fake)
+    seen = []
+    with pytest.raises(S.SeparationError):
+        S.separate(src, tmp_path / "out", "mdx-fast", progress=lambda f, m: seen.append((f, m)), timeout_s=60)
+    assert any("%" in m for _, m in seen) or seen  # progress reported, no deadlock

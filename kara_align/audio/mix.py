@@ -80,7 +80,7 @@ def _match_channels(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarra
         return np.repeat(a, b.shape[0], axis=0), b
     if b.shape[0] == 1:
         return a, np.repeat(b, a.shape[0], axis=0)
-    raise MixError(f"incompatible channel counts {a.shape[0]} and {b.shape[0]}")
+    raise MixError(f"声道数不兼容：{a.shape[0]} 与 {b.shape[0]}")
 
 
 def pad_end(x: np.ndarray, n: int) -> np.ndarray:
@@ -95,20 +95,20 @@ def mix_stems(vocals: Optional[np.ndarray], instrumental: Optional[np.ndarray], 
               ceiling_dbfs: float = -0.3, length: Optional[int] = None) -> tuple[np.ndarray, MixReport]:
     """Mix two stems that share the original timeline. Returns ``([ch, n], report)``."""
     if vocals is None or instrumental is None:
-        raise MixError("vocal-keep mixing needs both a vocals stem and an instrumental stem; "
-                       "the vocals inside a full mix cannot be reduced independently")
+        raise MixError("人声保留混音需要人声和伴奏两条分轨；"
+                       "完整混音中的人声无法单独降低")
     p = _check_pct("vocal keep %", p)
     q = _check_pct("instrumental %", q)
     master = float(master)
     if not np.isfinite(master) or master < 0:
-        raise MixError("master must be a non-negative number")
+        raise MixError("master 必须是非负数")
     if limiter not in ("none", "normalize_peak"):
-        raise MixError(f"unknown limiter {limiter}")
+        raise MixError(f"未知的防削波方式 {limiter}")
     v, i = _match_channels(_as2d(vocals), _as2d(instrumental))
     notes = []
     n = max(v.shape[1], i.shape[1]) if length is None else int(length)
     if v.shape[1] != i.shape[1]:
-        notes.append(f"stem lengths differ ({v.shape[1]} vs {i.shape[1]} samples); shorter one zero-padded at end")
+        notes.append(f"分轨长度不同（{v.shape[1]} vs {i.shape[1]} 个样本），较短的一条在末尾补零")
     v = pad_end(v, n)[:, :n]
     i = pad_end(i, n)[:, :n]
     mix = master * ((p / 100.0) * v.astype(np.float64) + (q / 100.0) * i.astype(np.float64))
@@ -121,7 +121,7 @@ def mix_stems(vocals: Optional[np.ndarray], instrumental: Optional[np.ndarray], 
     peak_after = float(np.max(np.abs(mix))) if mix.size else 0.0
     clipped = int(np.count_nonzero(np.abs(mix) > 1.0))
     if clipped:
-        notes.append(f"{clipped} samples exceed full scale (limiter={limiter})")
+        notes.append(f"{clipped} 个样本超出满幅（防削波={limiter}）")
     report = MixReport(p=p, q=q, master=master, limiter=limiter, ceiling_dbfs=ceiling_dbfs,
                        bus_gain=float(bus_gain), peak_before=peak_before, peak_after=peak_after,
                        clipped_samples=clipped, num_samples=n, sample_rate=int(sr), notes=notes)
@@ -137,11 +137,11 @@ def export_mix_wav(vocals_path, instrumental_path, out_path, p: float, q: float 
     the original's; otherwise the longer stem's length is used.
     """
     if vocals_path is None or instrumental_path is None:
-        raise MixError("vocal-keep export needs both vocals and instrumental stems")
+        raise MixError("导出人声保留混音需要人声和伴奏两条分轨")
     v, sr_v = load_audio(vocals_path)
     i, sr_i = load_audio(instrumental_path)
     if sr_v != sr_i:
-        raise MixError(f"stem sample rates differ ({sr_v} vs {sr_i}); resample explicitly before mixing")
+        raise MixError(f"分轨采样率不同（{sr_v} vs {sr_i}），请先统一采样率")
     mix, report = mix_stems(v, i, sr_v, p, q, master, limiter, ceiling_dbfs, length=original_num_samples)
     write_wav(out_path, mix, sr_v, subtype=subtype)
     report.tracks = {

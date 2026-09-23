@@ -44,8 +44,16 @@ def to_hiragana(s: str) -> str:
     return "".join(out)
 
 
+# characters inside the kana Unicode blocks that are punctuation / marks,
+# not pronounced: ゠ (double hyphen), ・ (middle dot, e.g. "・・・"),
+# standalone ゛ ゜
+_NON_KANA = {"\u30a0", "\u30fb", "\u309b", "\u309c"}
+
+
 def is_kana(ch: str) -> bool:
     code = ord(ch)
+    if ch in _NON_KANA:
+        return False
     return 0x3041 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF or ch in LONG_MARKS
 
 
@@ -107,7 +115,8 @@ def _kks():
 
 
 _CLASS_RE = re.compile(
-    r"(?P<kana>[ぁ-ゟ゠-ヿー〜～]+)"
+    # kana without the marks in _NON_KANA (゛゜゠・ are punctuation)
+    r"(?P<kana>[\u3041-\u3096\u3099\u309a\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ffー〜～]+)"
     r"|(?P<kanji>[一-鿿㐀-䶿豈-﫿々〆ヶ]+)"
     r"|(?P<latin>[A-Za-zＡ-Ｚａ-ｚ']+)"
     r"|(?P<digit>[0-9０-９]+)"
@@ -170,7 +179,7 @@ def rule_segments(text: str) -> list[Segment]:
                                 reading_source="rule" if r else "none"))
         elif kind == "digit":
             segs.append(Segment(surface=run, reading=None, lang="ja", units=[], uncertain=True,
-                                reading_source="none", note="number: reading needs manual/AI input"))
+                                reading_source="none", note="数字：读音需要人工或 AI 补充"))
         else:
             if segs and not segs[-1].units and segs[-1].reading_source == "none" and not segs[-1].uncertain:
                 segs[-1].surface += run  # merge consecutive punctuation / spaces
