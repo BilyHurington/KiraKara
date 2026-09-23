@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { cn, fmtMs, ROLE_LABEL } from '@/lib/format';
 import type { AudioAsset, Job } from '@/lib/types';
 import { cancelJob, ppath, refreshProject, run, trackJob, useApp, useJob, useProject } from '@/store/app';
-import { Badge, Button, Callout, Card, CardBody, CardHeader, Progress } from '@/components/ui';
+import { Badge, Button, Callout, Card, CardBody, CardHeader, Progress, Segmented } from '@/components/ui';
 
 export function SeparationCard() {
   const project = useProject()!;
@@ -15,13 +15,14 @@ export function SeparationCard() {
   const job = useJob('separate');
   const running = job && (job.status === 'queued' || job.status === 'running');
   const presets = info?.separation_presets ?? [];
-  const [preset, setPreset] = useState(presets[0]?.name ?? 'bs-roformer');
+  const [preset, setPreset] = useState(presets[0]?.name ?? 'melband-roformer');
+  const [device, setDevice] = useState<'auto' | 'cpu'>('auto');
   const hasOriginal = project.audio.some((a) => a.role === 'original');
   const stems = project.audio.filter((a) => a.role === 'vocals' || a.role === 'instrumental');
   const available = info?.separation_available ?? false;
 
   const start = () => run(async () => {
-    const j = await api.post<Job>(ppath('/separate'), { preset });
+    const j = await api.post<Job>(ppath('/separate'), { preset, device });
     trackJob(j, { label: '人声分离', onDone: refreshProject });
   }, '无法开始分离');
 
@@ -46,6 +47,19 @@ export function SeparationCard() {
           </Callout>
         )}
         {!hasOriginal && <Callout tone="info">请先在“音频与歌词”中上传原曲。</Callout>}
+
+        <div className="flex flex-wrap items-center gap-3 text-[13px]">
+          <span className="font-medium text-muted">运行设备</span>
+          <Segmented<'auto' | 'cpu'>
+            size="sm"
+            value={device}
+            onChange={setDevice}
+            options={[
+              { value: 'auto', label: '自动（GPU / MPS）', title: '有 GPU 或 Apple 芯片时使用它，速度最快' },
+              { value: 'cpu', label: '仅 CPU', title: '更慢，但可避开个别环境下的 GPU 问题' },
+            ]}
+          />
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           {presets.map((p) => {

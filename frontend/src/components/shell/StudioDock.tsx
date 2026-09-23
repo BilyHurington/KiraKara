@@ -47,7 +47,7 @@ export function StudioDock() {
 
   return (
     <footer className="relative z-20 shrink-0 border-t border-line bg-surface/95 backdrop-blur">
-      {open && (
+      {open && hasAudio && (
         <ResizeHandle
           axis="y" invert label="调整波形高度"
           value={waveHeight} onChange={(v) => setLayoutSize('waveHeight', v)}
@@ -56,7 +56,8 @@ export function StudioDock() {
         />
       )}
       <Transport hasAudio={hasAudio} />
-      <div className={cn('grid transition-[grid-template-rows] duration-200', open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+      {/* the waveform only takes space once there is audio to show */}
+      <div className={cn('grid transition-[grid-template-rows] duration-200', open && hasAudio ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
         <div className="min-h-0 overflow-hidden">
           <WaveArea />
         </div>

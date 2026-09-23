@@ -366,8 +366,13 @@ export class Waveform {
     }
     ctx.globalAlpha = 1;
 
-    // line starts (effective LRC anchors) with label pills
-    for (const ls of ov.lineStarts) {
+    // line starts (effective LRC anchors) with label pills; labels that would
+    // collide with the previous one are skipped (the marker line is kept),
+    // the selected line's label always wins
+    let labelEnd = -Infinity;
+    const starts = [...ov.lineStarts].sort((a, b) => a.ms - b.ms);
+    const selectedStart = starts.find((l) => l.selected);
+    for (const ls of starts) {
       const x = this.xOf(ls.ms);
       if (x < -240 || x > W + 5) continue;
       const color = ls.selected ? '#fb923c' : ls.kind === 'hard' ? '#34d399' : 'rgba(251, 146, 60, 0.6)';
@@ -383,6 +388,10 @@ export class Waveform {
       ctx.font = font(11, ls.selected ? 600 : 500);
       const label = ls.label.length > 22 ? `${ls.label.slice(0, 21)}…` : ls.label;
       const tw = ctx.measureText(label).width;
+      const selX = selectedStart && !ls.selected ? this.xOf(selectedStart.ms) : null;
+      const hitsSelected = selX !== null && x < selX && x + tw + 16 > selX;
+      if (!ls.selected && (x + 3 < labelEnd || hitsSelected)) continue;
+      labelEnd = x + tw + 16;
       ctx.fillStyle = ls.selected ? 'rgba(251,146,60,0.95)' : 'rgba(15,17,28,0.72)';
       roundRect(ctx, x + 3, RULER_H + 4, tw + 10, 17, 5);
       ctx.fill();

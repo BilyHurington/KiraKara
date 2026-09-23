@@ -167,6 +167,8 @@ export function setPV(pv: ProjectView | null | undefined) {
     rid = pv.project.active_result_id ?? (results.length ? results[results.length - 1].id : null);
   }
   set({ pv, pid: pv.project.id, resultId: rid });
+  // remember the open project across reloads (also for newly created ones)
+  try { localStorage.setItem('kara.pid', pv.project.id); } catch { /* ignore */ }
 }
 
 export async function openProject(pid: string) {
