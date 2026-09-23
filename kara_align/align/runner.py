@@ -91,8 +91,8 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
     role = cfg.audio_role
     if role not in inp.available_roles or role not in inp.audio_assets:
         raise AlignmentInputError([Issue(code="audio_role_missing", severity="error",
-                                         message=f"alignment input '{role}' is not available; "
-                                                 f"available: {inp.available_roles}")])
+                                         message=f"对齐输入音轨「{role}」不可用；"
+                                                 f"可用：{inp.available_roles}")])
     issues: list[Issue] = []
     if inp.mode == "lrc":
         v = validate_anchors(doc, cal, inp.audio_duration_ms)
@@ -102,7 +102,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
         issues += v + check_issues(cal)
         if not cal.confirmed:
             issues.append(Issue(code="calibration_unconfirmed", severity="info",
-                                message="global offset not confirmed; LRC times used as imported"))
+                                message="全局偏移尚未确认；按导入的 LRC 时间使用"))
 
     prog(0.02, "准备 token")
     prep = prepare(doc, inp.profile, inp.tokenize, inp.supports_language)
@@ -111,7 +111,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
         unknown = [x for x in inp.line_ids if x not in prep.lines]
         if unknown:
             raise AlignmentInputError([Issue(code="unknown_lines", severity="error",
-                                             message=f"lines not sung / unknown: {unknown}")])
+                                             message=f"这些行不参与演唱或不存在：{unknown}")])
     selected = [lid for lid in prep.order if inp.line_ids is None or lid in inp.line_ids]
     voices = {lid: prep.lines[lid].voice for lid in prep.order}
 
@@ -183,8 +183,8 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             skip.add(conflict)
             unresolved.append(conflict)
             issues.append(Issue(code="boundary_conflict", severity="warning", line_id=b,
-                                message=f"lines {a} and {b} overlap and a joint re-decode failed ({o.reason}); "
-                                        "kept unclipped for manual review"))
+                                message=f"{a} 与 {b} 两行重叠且联合重解码失败（{o.reason}）；"
+                                        "未裁剪，保留供人工检查"))
 
     # --- build, check, stability
     def build(outs: dict[str, tuple[Task, TaskOutcome]]) -> tuple[list[UnitTiming], list[LineTiming], list[Issue]]:
@@ -207,12 +207,12 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
                 if o.label != "base":
                     lt.candidate = o.label
             elif uts and all(u.status == "unaligned" for u in uts):
-                lt.status, lt.reason = "unaligned", "no tokenizable units"
+                lt.status, lt.reason = "unaligned", "没有可转为 token 的单元"
             else:
                 lt.status = "failed"
-                lt.reason = (o.reason if o is not None else None) or "not decoded"
+                lt.reason = (o.reason if o is not None else None) or "未解码"
                 extra.append(Issue(code="decode_failed", severity="error", line_id=lid,
-                                   message=f"no alignment: {lt.reason}"))
+                                   message=f"未得到对齐：{lt.reason}"))
             lines.append(lt)
         return units, lines, extra
 
@@ -398,7 +398,7 @@ def _carry_manual(units: list[UnitTiming], prev: Optional[AlignmentResult]) -> l
         if p.reading != u.reading and u.manual is not None:
             issues.append(Issue(code="manual_reading_changed", severity="warning", line_id=u.line_id,
                                 unit_id=u.unit_id,
-                                message=f"manual time kept although reading changed '{p.reading}' -> '{u.reading}'"))
+                                message=f"读音已从「{p.reading}」改为「{u.reading}」，人工时间仍保留"))
         if u.manual is not None and u.manual.locked:
             u.start_ms, u.end_ms = u.manual.start_ms, u.manual.end_ms
             if "manual" not in u.flags:

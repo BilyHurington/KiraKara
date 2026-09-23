@@ -133,7 +133,7 @@ def test_registry_lists_and_builds_scripted():
     assert mms["default_revision"] and mms["license"]
     be = B.get_backend(AlignConfig(backend="scripted"))
     assert isinstance(be, ScriptedBackend)
-    with pytest.raises(ValueError, match="unknown backend"):
+    with pytest.raises(ValueError, match="未知的对齐后端"):
         B.get_backend(AlignConfig(backend="nope"))
 
 

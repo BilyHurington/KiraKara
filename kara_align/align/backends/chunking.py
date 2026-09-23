@@ -90,8 +90,8 @@ def chunked_forward(audio: np.ndarray, forward: Forward, *, hop: int, rf: int,
         j0, j1 = f0 - base, f1 - base
         if seg_out.shape[0] < j1:
             raise RuntimeError(
-                f"model returned {seg_out.shape[0]} frames for a {s1 - s0}-sample chunk; "
-                f"needed {j1} (frame arithmetic mismatch)")
+                f"模型对 {s1 - s0} 个样本的分块返回了 {seg_out.shape[0]} 帧，"
+                f"需要 {j1} 帧（帧数计算不一致）")
         if out is None:
             out = np.empty((total, seg_out.shape[1]), dtype=np.float32)
         out[f0:f1] = seg_out[j0:j1]

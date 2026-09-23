@@ -710,7 +710,7 @@ def peaks(h: ProjectHandle, asset: AudioAsset, per_second: int = 200) -> dict:
 
 
 def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] = None,
-                   progress: Optional[Callable[[float, str], None]] = None) -> dict:
+                   progress: Optional[Callable[[float, str], None]] = None, device: str = "auto") -> dict:
     """Separate the original; failure raises (never a silent fallback)."""
     from .audio.io import import_asset
     from .audio.separation import separate
@@ -723,7 +723,7 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
     if out_dir.exists():
         shutil.rmtree(out_dir)  # never trust a possibly partial earlier run
     out_dir.mkdir(parents=True)
-    result = separate(src, out_dir, preset, cancel=cancel, progress=progress)
+    result = separate(src, out_dir, preset, cancel=cancel, progress=progress, device=device)
     if cancel is not None:
         cancel.check()
     report = _jsonable(result.report)
@@ -731,7 +731,7 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
     for role, path in (("vocals", result.vocals_path), ("instrumental", result.instrumental_path)):
         source = AudioSource(kind="separation", filename=Path(path).name, model=report.get("model_filename"),
                              model_version=report.get("audio_separator_version"),
-                             config={"preset": preset}, parent_sha256=orig.sha256)
+                             config={"preset": preset, "device": device}, parent_sha256=orig.sha256)
         assets.append(import_asset(path, role, h.assets_dir, source, project_dir=h.dir))  # type: ignore[arg-type]
     with h.lock:
         h.project.audio = [a for a in h.project.audio if a.role not in ("vocals", "instrumental")]

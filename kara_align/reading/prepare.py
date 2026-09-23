@@ -122,7 +122,7 @@ def units_from_spec(reading: str, units: Optional[Sequence[str]], lang: str) -> 
             return japanese.reading_units(to_hiragana(reading))
         return [Unit(reading=reading)]
     if "".join(units) != reading:
-        raise ValueError(f"units {list(units)!r} do not join to reading {reading!r}")
+        raise ValueError(f"单元 {list(units)!r} 拼接后与读音 {reading!r} 不一致")
     out = []
     for u in units:
         flags = []
@@ -179,7 +179,7 @@ def resegment_line(line: Line, segments_spec: Sequence[dict]) -> Line:
     """
     surfaces = [str(s.get("surface", "")) for s in segments_spec]
     if "".join(surfaces) != line.text:
-        raise ValueError("segment surfaces do not concatenate to the line text")
+        raise ValueError("各片段原文拼接后与该行文字不一致")
     new: list[Segment] = []
     for spec in segments_spec:
         surface = spec["surface"]

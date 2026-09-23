@@ -74,7 +74,7 @@ matches the current lyrics text / readings / calibration / mode / audio get
 | POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`) |
 | GET | `/api/projects/{pid}/audio/{asset_id}/playback.wav` | – | decoded PCM WAV (same decoder as alignment → identical time origin). Supports Range. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/peaks?per_second=200` | – | `{sample_rate, duration_ms, per_second, mins: [float], maxs: [float]}` (mono, first peak at 0 ms) |
-| POST | `/api/projects/{pid}/separate` | `{preset}` | `Job` (on success adds vocals + instrumental assets) |
+| POST | `/api/projects/{pid}/separate` | `{preset, device?: "auto"\|"cpu"}` | `Job` (on success adds vocals + instrumental assets) |
 | POST | `/api/projects/{pid}/mix/export` | `MixSettings` | `Job`; output `{filename, url, report}`; `url` downloads the WAV |
 
 Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; bus gain `min(1, 10^(-0.3/20)/peak)` when `limiter = normalize_peak`. Browser playback computes it with GainNodes; only the export applies a precomputed bus gain from the full-file peak (the UI shows the same number from `/mix/preview-gain`).

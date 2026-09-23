@@ -57,12 +57,12 @@ def prepare(
         warned: set[str] = set()
         if not ln.segments or not ln.units():
             issues.append(Issue(code="no_units", severity="error", line_id=lid,
-                                message="line has no pronunciation units; prepare readings first"))
+                                message="该行没有发音单元，请先准备读音"))
         for seg in ln.segments:
             if supports_language is not None and not supports_language(seg.lang) and seg.lang not in warned:
                 warned.add(seg.lang)
                 issues.append(Issue(code="model_language_mismatch", severity="warning", line_id=lid,
-                                    message=f"backend model is not trained for language '{seg.lang}'",
+                                    message=f"后端模型未针对语言「{seg.lang}」训练",
                                     data={"lang": seg.lang}))
             for u in seg.units:
                 units[u.id] = UnitInfo(u.id, lid, seg.id, u.reading, seg.lang)
@@ -81,11 +81,11 @@ def prepare(
             i.unknown = list(t.unknown)
         if not i.token_ids:
             issues.append(Issue(code="untokenizable_unit", severity="warning", line_id=i.line_id, unit_id=i.unit_id,
-                                message=f"unit '{i.reading}' has no model tokens (text '{text}'); left unaligned",
+                                message=f"单元「{i.reading}」没有模型 token（转写「{text}」），保持未对齐",
                                 data={"unknown": i.unknown}))
         elif i.unknown:
             issues.append(Issue(code="partial_tokens", severity="warning", line_id=i.line_id, unit_id=i.unit_id,
-                                message=f"characters {i.unknown} of unit '{i.reading}' are not in the model vocabulary",
+                                message=f"单元「{i.reading}」中的字符 {i.unknown} 不在模型词表中",
                                 data={"unknown": i.unknown}))
     return Prepared(lines, order, units, line_units, issues)
 
@@ -162,10 +162,10 @@ def decode_task(
             targets.extend(int(t) for t in toks)
             pos_unit.extend([uid] * len(toks))
     if not targets:
-        out.reason = "no tokenizable units in task"
+        out.reason = "该任务中没有可转为 token 的单元"
         return out
     if em.num_frames == 0:
-        out.reason = "empty decode window"
+        out.reason = "解码窗口为空"
         return out
     frame_ms = fm.frame_ms
     anchors: list[AnchorSpec] = []
@@ -221,13 +221,13 @@ def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_i
         ut = UnitTiming(unit_id=uid, line_id=line_id, segment_id=info.segment_id, reading=info.reading)
         if not info.token_ids:
             ut.status = "unaligned"
-            ut.reason = "no model tokens for this unit" + (f" (unknown {info.unknown})" if info.unknown else "")
+            ut.reason = "该单元没有模型 token" + (f"（未知字符 {info.unknown}）" if info.unknown else "")
         elif outcome is None or not outcome.feasible:
             ut.status = "failed"
-            ut.reason = (outcome.reason if outcome is not None else None) or "not decoded"
+            ut.reason = (outcome.reason if outcome is not None else None) or "未解码"
         elif uid not in outcome.units:
             ut.status = "failed"
-            ut.reason = "unit missing from decoded path"
+            ut.reason = "解码路径中缺少该单元"
         else:
             sp = outcome.units[uid]
             ut.start_ms = ut.model_start_ms = sp.start_ms

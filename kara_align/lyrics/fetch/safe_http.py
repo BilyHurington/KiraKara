@@ -50,7 +50,7 @@ def system_resolver(host: str) -> list[str]:
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
-        raise FetchError(f"Cannot resolve {host}: {exc}") from exc
+        raise FetchError(f"无法解析域名 {host}：{exc}") from exc
     return sorted({info[4][0] for info in infos})
 
 
@@ -66,22 +66,22 @@ def validate_url(url: str, resolver: Resolver) -> None:
     """Raise :class:`FetchError` unless ``url`` is an allowed public target."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
-        raise FetchError(f"Unsupported URL scheme: {parts.scheme or '(none)'}")
+        raise FetchError(f"不支持的 URL 协议：{parts.scheme or '（无）'}")
     if parts.username or parts.password:
-        raise FetchError("URLs with credentials are not allowed")
+        raise FetchError("不允许包含账号密码的 URL")
     host = parts.hostname
     if not is_allowed_host(host):
-        raise FetchError(f"Host not supported for lyric lookup: {host}")
+        raise FetchError(f"不支持从该域名获取歌词：{host}")
     if parts.port not in (None, 80, 443):
-        raise FetchError(f"Non-standard port not allowed: {parts.port}")
+        raise FetchError(f"不允许非标准端口：{parts.port}")
     try:
         ipaddress.ip_address(host)  # literal IPs are never on the allowlist anyway
-        raise FetchError("IP literal hosts are not allowed")
+        raise FetchError("不允许直接使用 IP 地址")
     except ValueError:
         pass
     addrs = resolver(host)
     if not addrs:
-        raise FetchError(f"Cannot resolve {host}")
+        raise FetchError(f"无法解析域名 {host}")
     for a in addrs:
         if not is_public_ip(a):
             raise FetchError(f"{host} resolves to a non-public address; refused")
@@ -107,7 +107,7 @@ class SafeResponse:
         try:
             return json.loads(body)
         except ValueError as exc:
-            raise FetchError(f"Unexpected non-JSON answer from {urlsplit(self.url).hostname}") from exc
+            raise FetchError(f"{urlsplit(self.url).hostname} 返回的不是 JSON") from exc
 
 
 class SafeClient:
@@ -153,12 +153,12 @@ class SafeClient:
                     for chunk in resp.iter_bytes():
                         size += len(chunk)
                         if size > self.max_bytes:
-                            raise FetchError("Response too large; refused")
+                            raise FetchError("响应过大，已拒绝")
                         chunks.append(chunk)
                     body = b"".join(chunks)
                 return resp, body
         except httpx.HTTPError as exc:
-            raise FetchError(f"Network error contacting {urlsplit(url).hostname}: {exc}") from exc
+            raise FetchError(f"连接 {urlsplit(url).hostname} 时网络错误：{exc}") from exc
 
     def request(self, method: str, url: str, **kw: Any) -> SafeResponse:
         """Send a request, following redirects hop by hop with re-validation."""
@@ -168,7 +168,7 @@ class SafeClient:
             if resp.is_redirect:
                 loc = resp.headers.get("location")
                 if not loc:
-                    raise FetchError("Redirect without location")
+                    raise FetchError("重定向缺少目标地址")
                 current = urljoin(current, loc)
                 method = "GET" if method != "HEAD" else method
                 kw.pop("content", None)
@@ -178,7 +178,7 @@ class SafeClient:
             if resp.status_code >= 400:
                 raise FetchError(f"{urlsplit(current).hostname} answered HTTP {resp.status_code}")
             return SafeResponse(current, resp.status_code, resp.headers, body)
-        raise FetchError("Too many redirects")
+        raise FetchError("重定向次数过多")
 
     def get(self, url: str, **kw: Any) -> SafeResponse:
         return self.request("GET", url, **kw)
@@ -200,6 +200,6 @@ class SafeClient:
                 return current
             loc = resp.headers.get("location")
             if not loc:
-                raise FetchError("Redirect without location")
+                raise FetchError("重定向缺少目标地址")
             current = urljoin(current, loc)
-        raise FetchError("Too many redirects")
+        raise FetchError("重定向次数过多")

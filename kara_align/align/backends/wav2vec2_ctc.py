@@ -45,7 +45,7 @@ DEFAULT_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
 DEFAULT_REVISION = "2ab2b5f46539ee284703c281f286b01d2410ee12"
 # from the model card metadata of that revision
 DEFAULT_LICENSE = "cc-by-nc-sa-4.0"
-ML_HINT = "the CTC backend needs torch and transformers: pip install 'kara-align[ml]'"
+ML_HINT = "CTC 对齐后端需要 torch 和 transformers：pip install 'kara-align[ml]'"
 
 _MODEL_CACHE: dict[tuple[str, Optional[str], str], dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -119,7 +119,7 @@ class Wav2Vec2CTCBackend:
                  delimiter_as_blank: bool = True, name: Optional[str] = None) -> None:
         self.model_id = model_id or self.default_model_id
         if not self.model_id:
-            raise ValueError("backend 'wav2vec2-ctc' needs an explicit model_id (HF repo or local path)")
+            raise ValueError("后端 wav2vec2-ctc 需要指定 model_id（HF 仓库或本地路径）")
         if revision is None and self.model_id == DEFAULT_MODEL_ID:
             revision = DEFAULT_REVISION
         self.revision = revision
@@ -178,7 +178,7 @@ class Wav2Vec2CTCBackend:
         torch, _ = _import_ml()
         x = np.asarray(audio, dtype=np.float32)
         if x.ndim != 1:
-            raise ValueError("emissions() expects mono audio")
+            raise ValueError("emissions() 需要单声道音频")
         if e["do_normalize"] and x.size:
             x = (x - x.mean()) / np.sqrt(x.var() + 1e-7)
         kernels, strides = e["kernels"], e["strides"]
@@ -194,7 +194,7 @@ class Wav2Vec2CTCBackend:
                 except (RuntimeError, NotImplementedError) as exc:
                     if self.device != "mps":
                         raise
-                    self.notes.append(f"mps failed ({type(exc).__name__}); fell back to cpu")
+                    self.notes.append(f"MPS 运行失败（{type(exc).__name__}），已改用 CPU")
                     self.device = "cpu"
                     self._entry = load_model(self.model_id, self.revision, "cpu")
                     e["model"] = self._entry["model"]

@@ -22,25 +22,25 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
         if u.start_ms is None or u.end_ms is None:
             if (u.start_ms is None) != (u.end_ms is None):
                 issues.append(Issue(code="illegal_interval", severity="error", line_id=u.line_id, unit_id=u.unit_id,
-                                    message="unit has only one of start/end"))
+                                    message="单元只有起点或终点之一"))
             continue
         d = u.end_ms - u.start_ms
         if d <= 0:
             _flag(u, "illegal_interval")
             issues.append(Issue(code="illegal_interval", severity="error", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"end {u.end_ms} <= start {u.start_ms}"))
+                                message=f"终点 {u.end_ms} ≤ 起点 {u.start_ms}"))
         elif d < cfg.min_unit_ms:
             _flag(u, "short_unit")
             issues.append(Issue(code="short_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"unit '{u.reading}' lasts only {d} ms", data={"duration_ms": d}))
+                                message=f"单元「{u.reading}」只有 {d} ms", data={"duration_ms": d}))
         elif "token_gap" in u.flags:
             issues.append(Issue(code="token_gap", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"unit '{u.reading}' tokens are split by a long pause ({d} ms total); "
-                                        "the reading may not match the singing", data={"duration_ms": d}))
+                                message=f"单元「{u.reading}」的 token 之间有长停顿（共 {d} ms）；"
+                                        "读音可能与演唱不符", data={"duration_ms": d}))
         elif d > cfg.max_unit_ms:
             _flag(u, "long_unit")
             issues.append(Issue(code="long_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"unit '{u.reading}' lasts {d} ms", data={"duration_ms": d}))
+                                message=f"单元「{u.reading}」持续 {d} ms", data={"duration_ms": d}))
     return issues
 
 
@@ -63,7 +63,7 @@ def check_coverage(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckC
                                 data={"unit_ids": [u.unit_id for u in missing]}))
     if cov < cfg.min_coverage:
         issues.append(Issue(code="low_coverage", severity="warning",
-                            message=f"only {timed}/{total} units are aligned", data={"coverage": cov}))
+                            message=f"只有 {timed}/{total} 个单元得到时间", data={"coverage": cov}))
     return issues, cov
 
 
@@ -74,21 +74,21 @@ def check_lines(lines: list[LineTiming], cfg: CheckConfig, voices: Optional[dict
         if lt.anchor_residual_ms is not None and abs(lt.anchor_residual_ms) > cfg.anchor_deviation_ms:
             _flag(lt, "anchor_deviation")
             issues.append(Issue(code="anchor_deviation", severity="warning", line_id=lt.line_id,
-                                message=f"line start deviates {lt.anchor_residual_ms:+d} ms from its LRC anchor",
+                                message=f"句首与 LRC 锚点相差 {lt.anchor_residual_ms:+d} ms",
                                 data={"residual_ms": lt.anchor_residual_ms}))
         if lt.window_ms is not None and lt.start_ms is not None and lt.end_ms is not None:
             w0, w1 = lt.window_ms
             if w0 > 0 and lt.start_ms - w0 < cfg.edge_crowd_ms:
                 _flag(lt, "window_edge")
                 issues.append(Issue(code="window_edge", severity="warning", line_id=lt.line_id,
-                                    message="line starts at the left edge of its decode window",
+                                    message="句首贴在解码窗口左边缘",
                                     data={"window_ms": [w0, w1]}))
             # the right edge is next anchor + margin, only a search bound: touching it
             # means the line ran into audio that belongs to later lines
             if lt.end_ms >= w1 - cfg.edge_crowd_ms:
                 _flag(lt, "window_edge")
                 issues.append(Issue(code="window_edge", severity="warning", line_id=lt.line_id,
-                                    message="line ends at the right edge of its decode window",
+                                    message="句尾贴在解码窗口右边缘",
                                     data={"window_ms": [w0, w1]}))
         v = (voices or {}).get(lt.line_id, "main")
         prev = last.get(v)
@@ -96,12 +96,12 @@ def check_lines(lines: list[LineTiming], cfg: CheckConfig, voices: Optional[dict
             if lt.start_ms < prev.start_ms:  # type: ignore[operator]
                 _flag(lt, "order_conflict")
                 issues.append(Issue(code="order_conflict", severity="error", line_id=lt.line_id,
-                                    message=f"line starts before previous line {prev.line_id}",
+                                    message=f"句首早于上一行 {prev.line_id}",
                                     data={"previous_line_id": prev.line_id}))
             elif lt.start_ms < prev.end_ms:
                 _flag(lt, "line_overlap")
                 issues.append(Issue(code="line_overlap", severity="warning", line_id=lt.line_id,
-                                    message=f"overlaps previous line {prev.line_id} by {prev.end_ms - lt.start_ms} ms",
+                                    message=f"与上一行 {prev.line_id} 重叠 {prev.end_ms - lt.start_ms} ms",
                                     data={"previous_line_id": prev.line_id, "overlap_ms": prev.end_ms - lt.start_ms}))
         if lt.start_ms is not None:
             last[v] = lt
@@ -119,7 +119,7 @@ def check_unit_order(units: list[UnitTiming], voices: Optional[dict[str, str]] =
         if p is not None and p.end_ms is not None and u.start_ms < p.end_ms and p.line_id == u.line_id:
             _flag(u, "unit_overlap")
             issues.append(Issue(code="unit_overlap", severity="error", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"unit starts before previous unit ends ({u.start_ms} < {p.end_ms})"))
+                                message=f"单元在前一单元结束前开始（{u.start_ms} < {p.end_ms}）"))
         last[v] = u
     return issues
 
@@ -137,7 +137,7 @@ def stability_issues(base: dict[str, Optional[int]], alt: dict[str, Optional[int
             if lid in by_id:
                 _flag(by_id[lid], "unstable")
             issues.append(Issue(code="unstable_boundary", severity="warning", line_id=lid,
-                                message=f"line start moves {a - b:+d} ms when the decoding context changes",
+                                message=f"改变解码上下文后句首移动 {a - b:+d} ms",
                                 data={"base_ms": b, "alt_ms": a}))
     return issues
 

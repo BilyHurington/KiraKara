@@ -82,7 +82,7 @@ def test_redirect_to_other_host_refused_in_request():
     def handler(req):
         return httpx.Response(302, headers={"location": "https://evil.example.com/x"})
 
-    with pytest.raises(FetchError, match="not supported"):
+    with pytest.raises(FetchError, match="不支持"):
         client(handler).get("https://music.163.com/api/x")
 
 
@@ -106,13 +106,13 @@ def test_scheme_port_and_credentials_refused():
 def test_size_cap():
     c = SafeClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"x" * 2000)),
                    resolver=PUBLIC, max_bytes=1000)
-    with pytest.raises(FetchError, match="too large"):
+    with pytest.raises(FetchError, match="过大"):
         c.get("https://music.163.com/api/x")
 
 
 def test_too_many_redirects():
     c = client(lambda r: httpx.Response(302, headers={"location": "https://music.163.com/loop"}))
-    with pytest.raises(FetchError, match="redirects"):
+    with pytest.raises(FetchError, match="重定向"):
         c.get("https://music.163.com/start")
 
 

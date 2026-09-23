@@ -176,10 +176,10 @@ def parse_lyrics_text(
     detected = detect_format(norm, filename)
     if detected.startswith("json") or (detected == "unknown" and norm.strip()):
         raise LyricsFormatError(
-            f"Input looks like {detected}, not lyrics text; import it through the matching project/patch entry."
+            f"输入看起来是 {detected}，不是歌词文本；请通过对应的项目 / 补丁入口导入。"
         )
     if not norm.strip():
-        raise LyricsFormatError("Lyrics text is empty.")
+        raise LyricsFormatError("歌词文本为空。")
 
     snapshot = SourceSnapshot(
         origin=origin, kind="lrc" if detected == "lrc" else "lyrics", filename=filename, text=norm,
@@ -201,25 +201,25 @@ def parse_lyrics_text(
         if mode == "lrc":
             if not has_valid_times(parsed):
                 raise LyricsModeError(
-                    "LRC enhanced mode needs line times, but none were found. "
-                    "Supply timed LRC or switch to plain mode."
+                    "LRC 增强模式需要行时间，但输入中没有找到任何时间。"
+                    "请提供带时间的 LRC，或切换到普通模式。"
                 )
             doc.lines = _lines_from_lrc(parsed, True, origin, snapshot.id)
             if parsed.untimed:
                 n = sum(1 for u in parsed.untimed if u.text)
                 if n:
-                    warnings.append(f"{n} line(s) without a time tag kept without an anchor.")
+                    warnings.append(f"{n} 行没有时间标签，已保留但不作为锚点。")
         else:
             doc.lines = _lines_from_lrc(parsed, False, origin, snapshot.id)
             warnings.append(
-                "Plain mode: LRC time tags were ignored; only the lyric text is used "
-                "(no external time anchors)."
+                "普通模式：已忽略 LRC 时间标签，只使用歌词正文"
+                "（不使用外部时间锚点）。"
             )
     else:
         if mode == "lrc":
             raise LyricsModeError(
-                "LRC enhanced mode needs timed lyrics, but the input has no time tags. "
-                "Supply timed LRC or switch to plain mode."
+                "LRC 增强模式需要带时间的歌词，但输入没有时间标签。"
+                "请提供带时间的 LRC，或切换到普通模式。"
             )
         items = []
         for idx, raw in enumerate(norm.split("\n")):
@@ -233,6 +233,6 @@ def parse_lyrics_text(
 
     n_meta = sum(1 for ln in doc.lines if ln.kind == "meta")
     if n_meta:
-        warnings.append(f"{n_meta} credit/meta line(s) excluded from alignment (can be re-included).")
+        warnings.append(f"{n_meta} 行作者 / 制作信息已排除在对齐之外（可重新加入）。")
     doc.language = detect_language([ln.text for ln in doc.lines if ln.kind == "lyric"])  # type: ignore[assignment]
     return ParseResult(doc=doc, warnings=warnings, detected=detected, snapshot=snapshot)

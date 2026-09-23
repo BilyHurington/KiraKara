@@ -50,11 +50,11 @@ def _energy_boundary(u: UnitTiming, next_start: Optional[int], env: np.ndarray, 
     assert s is not None and e is not None
     i0, i1 = _idx(s, hop_ms, n), _idx(e, hop_ms, n)
     if i1 <= i0:
-        return None, "unit shorter than one envelope frame"
+        return None, "单元短于一个能量包络帧"
     peak = float(np.max(env[i0:i1]))
     thr = max(cfg.energy_floor_db, peak - REL_DROP_DB)
     if peak <= cfg.energy_floor_db:
-        return None, "no vocal energy above the floor inside the unit"
+        return None, "单元内没有高于底噪阈值的人声能量"
     above_at_end = env[min(i1, n - 1)] > thr if i1 < n else False
     if above_at_end and allow_extend:
         limit_ms = e + cfg.max_extend_ms
@@ -65,20 +65,20 @@ def _energy_boundary(u: UnitTiming, next_start: Optional[int], env: np.ndarray, 
         while j < lim and env[j] > thr:
             j += 1
         if j >= lim:
-            return None, "voicing continues up to the search limit; boundary not reliable"
-        return int(round(j * hop_ms)), f"energy stays above {thr:.1f} dB until here"
+            return None, "发声一直持续到搜索上限，边界不可靠"
+        return int(round(j * hop_ms)), f"能量在此之前保持高于 {thr:.1f} dB"
     if above_at_end:
-        return None, "energy continues past the model end (trim-only strategy)"
+        return None, "能量持续超过模型终点（仅裁短策略）"
     lo = _idx(max(s + min_unit_ms, e - cfg.max_trim_ms), hop_ms, n)
     j = i1 - 1
     while j >= lo and env[j] <= thr:
         j -= 1
     if j < lo:
-        return None, "energy already below threshold across the whole trim range"
+        return None, "整个裁短范围内能量都已低于阈值"
     new_end = int(round((j + 1) * hop_ms))
     if new_end >= e:
-        return None, "model end already matches the energy drop"
-    return new_end, f"energy falls below {thr:.1f} dB here"
+        return None, "模型终点已与能量下降处一致"
+    return new_end, f"能量在此处降到 {thr:.1f} dB 以下"
 
 
 def apply_tail(units: list[UnitTiming], cfg: TailConfig, envelope: Optional[tuple[np.ndarray, float]],
@@ -108,15 +108,15 @@ def apply_tail(units: list[UnitTiming], cfg: TailConfig, envelope: Optional[tupl
             cur = u.end_ms - u.start_ms  # type: ignore[operator]
             if cur > cap:
                 new = u.start_ms + max(cap, cur - cfg.max_trim_ms)  # type: ignore[operator]
-                reason = f"line-final unit {cur} ms > 3x line median ({med} ms)"
+                reason = f"行末单元 {cur} ms 超过该行中位数的 3 倍（{med} ms）"
                 method = "trim:duration_cap"
         else:
-            reason = "no energy envelope available"
+            reason = "没有可用的能量包络"
         if new is None:
             if "tail_unresolved" not in u.flags:
                 u.flags.append("tail_unresolved")
             issues.append(Issue(code="tail_unresolved", severity="info", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"tail kept at model boundary: {reason}"))
+                                message=f"尾音保留模型边界：{reason}"))
             continue
         if new == orig:
             continue

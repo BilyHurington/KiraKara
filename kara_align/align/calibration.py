@@ -72,7 +72,7 @@ def mark_first_onset(cal: Calibration, doc: LyricsDoc, line_id: str, marked_ms: 
     line = doc.line(line_id)
     b = base_ms(doc, line)
     if b is None:
-        raise ValueError(f"line {line_id} has no imported LRC time; choose another line or add an anchor")
+        raise ValueError(f"行 {line_id} 没有导入的 LRC 时间；请选择其他行或添加锚点")
     new = _with_history(cal, "mark")
     new.user_shift_ms = int(marked_ms) - b
     new.reference_line_id = line_id
@@ -130,7 +130,7 @@ def add_check(
     line = doc.line(line_id)
     eff = effective_ms(doc, cal, line)
     if eff is None:
-        raise ValueError(f"line {line_id} has no time to check against")
+        raise ValueError(f"行 {line_id} 没有可用于检查的时间")
     new = cal.model_copy(deep=True)
     new.checks = [c for c in new.checks if c.line_id != line_id]
     new.checks.append(CalibrationCheck(line_id=line_id, marked_ms=int(marked_ms), residual_ms=int(marked_ms) - eff))
@@ -143,9 +143,9 @@ def check_issues(cal: Calibration, threshold_ms: int = MISMATCH_THRESHOLD_MS) ->
         if abs(c.residual_ms) > threshold_ms:
             issues.append(Issue(
                 code="calibration_mismatch", severity="warning", line_id=c.line_id,
-                message=(f"marked onset differs from calibrated LRC time by {c.residual_ms:+d} ms; "
-                         "the lyrics may belong to another version or tempo. Add per-line anchors "
-                         "instead of stretching the timeline."),
+                message=(f"标记的首音与校准后的 LRC 时间相差 {c.residual_ms:+d} ms；"
+                         "歌词可能对应其他版本或速度。请添加单行锚点，"
+                         "程序不会拉伸时间轴。"),
                 data={"residual_ms": c.residual_ms},
             ))
     return issues
@@ -158,7 +158,7 @@ def validate_anchors(doc: LyricsDoc, cal: Calibration, audio_duration_ms: Option
     starts = effective_line_starts(doc, cal)
     if sung and not starts:
         issues.append(Issue(code="lrc_no_times", severity="error",
-                            message="LRC enhanced mode needs line times; add them or switch to plain mode"))
+                            message="LRC 增强模式需要行时间；请补充时间或切换到普通模式"))
         return issues
     last: dict[str, tuple[str, int]] = {}
     for ln in sung:
@@ -167,15 +167,15 @@ def validate_anchors(doc: LyricsDoc, cal: Calibration, audio_duration_ms: Option
         ms, _ = starts[ln.id]
         if ms < 0:
             issues.append(Issue(code="anchor_negative", severity="error", line_id=ln.id,
-                                message=f"effective start {ms} ms is before the audio start", data={"ms": ms}))
+                                message=f"有效句首 {ms} ms 早于音频开头", data={"ms": ms}))
         if audio_duration_ms is not None and ms >= audio_duration_ms:
             issues.append(Issue(code="anchor_out_of_range", severity="error", line_id=ln.id,
-                                message=f"effective start {ms} ms is beyond the audio end ({audio_duration_ms} ms)",
+                                message=f"有效句首 {ms} ms 超出音频结尾（{audio_duration_ms} ms）",
                                 data={"ms": ms, "duration_ms": audio_duration_ms}))
         prev = last.get(ln.voice)
         if prev is not None and ms < prev[1]:
             issues.append(Issue(code="anchor_order_conflict", severity="error", line_id=ln.id,
-                                message=f"starts at {ms} ms, before the previous line {prev[0]} ({prev[1]} ms)",
+                                message=f"起点 {ms} ms 早于上一行 {prev[0]}（{prev[1]} ms）",
                                 data={"ms": ms, "previous_line_id": prev[0], "previous_ms": prev[1]}))
         last[ln.voice] = (ln.id, ms)
     return issues

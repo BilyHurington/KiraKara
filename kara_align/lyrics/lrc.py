@@ -113,7 +113,7 @@ def parse_lrc(text: str, keep_word_tags: bool = True) -> ParsedLrc:
                 try:
                     out.offset_ms = int(float(value))
                 except ValueError:
-                    out.warnings.append(f"Invalid [offset:{value}] ignored")
+                    out.warnings.append(f"无效的 [offset:{value}]，已忽略")
                     out.offset_ms = 0
             continue
         body, _ = _strip_word_tags(line)
@@ -142,13 +142,13 @@ def format_lrc_time(ms: int, precision: str = "cs") -> str:
     error; callers must fix them rather than clamp silently.
     """
     if ms is None or ms < 0:
-        raise ValueError(f"cannot write negative/missing LRC time: {ms!r}")
+        raise ValueError(f"无法写入负的或缺失的 LRC 时间：{ms!r}")
     if precision == "ms":
         m, rest = divmod(int(ms), 60_000)
         s, frac = divmod(rest, 1000)
         return f"{m:02d}:{s:02d}.{frac:03d}"
     if precision != "cs":
-        raise ValueError(f"unknown precision {precision!r}")
+        raise ValueError(f"未知的时间精度 {precision!r}")
     cs = (int(ms) + 5) // 10
     m, rest = divmod(cs, 6000)
     s, frac = divmod(rest, 100)

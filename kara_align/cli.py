@@ -178,7 +178,7 @@ def cmd_audio(a) -> None:
 
 def cmd_separate(a) -> None:
     h = S.open_dir(Path(a.project))
-    out = S.run_separation(h, a.preset, progress=_progress)
+    out = S.run_separation(h, a.preset, progress=_progress, device=a.device)
     print(file=sys.stderr)
     _print(out)
 
@@ -449,7 +449,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role", choices=["original", "vocals", "instrumental"], default="original")
 
     p = add("separate", cmd_separate, "人声分离（需要 kara-align[separation]）")
-    p.add_argument("--preset", default="bs-roformer")
+    p.add_argument("--preset", default="melband-roformer")
+    p.add_argument("--device", choices=["auto", "cpu"], default="auto",
+                   help="auto 使用 GPU/MPS（若可用）；cpu 更慢但可避开部分环境下的 MPS 卡死")
 
     p = add("calibrate", cmd_calibrate, "LRC 首音校准")
     g = p.add_mutually_exclusive_group()

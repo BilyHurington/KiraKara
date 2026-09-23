@@ -139,7 +139,7 @@ def test_hard_anchor_window_and_infeasible():
     bad = AnchorSpec(token_index=0, kind="hard", lo_frame=50, hi_frame=60)
     with pytest.raises(NoFeasiblePath) as e:
         ctc_align(logp, [1], 0, [bad])
-    assert "hard" in e.value.reason
+    assert "硬锚点" in e.value.reason
 
 
 def test_band_matches_unbanded_for_wide_band():

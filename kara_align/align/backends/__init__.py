@@ -66,7 +66,7 @@ def register_backend(name: str, factory: Callable[[AlignConfig], Any], **meta: A
 def get_backend(config: AlignConfig):
     entry = BACKENDS.get(config.backend)
     if entry is None:
-        raise ValueError(f"unknown backend {config.backend!r}; available: {', '.join(sorted(BACKENDS))}")
+        raise ValueError(f"未知的对齐后端 {config.backend!r}；可用：{', '.join(sorted(BACKENDS))}")
     return entry["factory"](config)
 
 

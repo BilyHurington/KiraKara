@@ -83,7 +83,7 @@ class EmissionCache:
     def put(self, key: str, emission: Emission, backend_info: Optional[BackendInfo] = None, *,
             complete: bool) -> None:
         if not complete:
-            raise ValueError("refusing to cache a partial / cancelled emission")
+            raise ValueError("拒绝缓存不完整或已取消的声学分数")
         npz, meta = self._paths(key)
         npz.parent.mkdir(parents=True, exist_ok=True)
         fm = emission.frame_map

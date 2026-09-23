@@ -118,7 +118,7 @@ def _timings_from_override(outcome: TaskOutcome, line_id: str, seq, readings: di
         ut = UnitTiming(unit_id=uid, line_id=line_id, segment_id=seg_id, reading=reading)
         sp = outcome.units.get(uid)
         if sp is None:
-            ut.status, ut.reason = "failed", outcome.reason or "not decoded"
+            ut.status, ut.reason = "failed", outcome.reason or "未解码"
         else:
             ut.start_ms = ut.model_start_ms = sp.start_ms
             ut.end_ms = ut.model_end_ms = sp.end_ms

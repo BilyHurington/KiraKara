@@ -145,7 +145,7 @@ def get_profile(name: str = "ja-hepburn"):
     try:
         return _PROFILES[name]()
     except KeyError:
-        raise KeyError(f"unknown transliteration profile: {name!r} (available: {sorted(_PROFILES)})") from None
+        raise KeyError(f"未知的转写 profile：{name!r}（可用：{sorted(_PROFILES)}）") from None
 
 
 def available_profiles() -> list[str]:

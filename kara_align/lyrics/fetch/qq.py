@@ -24,7 +24,7 @@ def _musicu(client: SafeClient, module: str, method: str, param: dict) -> dict:
     data = client.post(MUSICU, content=json.dumps(payload), headers={**HEADERS, "Content-Type": "application/json"}).json()
     req = (data or {}).get("req") or {}
     if req.get("code", 0) != 0:
-        raise FetchError(f"QQ Music: {method} failed (code {req.get('code')})")
+        raise FetchError(f"QQ 音乐：{method} 失败（code {req.get('code')}）")
     return req.get("data") or {}
 
 
@@ -62,7 +62,7 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
         data = _musicu(client, "music.pf_song_detail_svr", "get_song_detail_yqq", param)
         info = data.get("track_info") or {}
         if not info:
-            raise FetchError(f"QQ Music: song {song_id} not found")
+            raise FetchError(f"QQ 音乐：找不到歌曲 {song_id}")
         ref = _ref(info)
         lyr = client.get(LYRIC, params={"songmid": ref.song_id, "format": "json", "nobase64": 1, "g_tk": 5381},
                          headers=HEADERS).json()
@@ -70,7 +70,7 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
         if own:
             client.close()
     if not isinstance(lyr, dict) or lyr.get("retcode", lyr.get("code", 0)) not in (0, None):
-        raise FetchError("QQ Music: lyric lookup failed")
+        raise FetchError("QQ 音乐：歌词获取失败")
     song = FetchedSong("qq", ref.song_id, ref.title, ref.artists, ref.album, ref.duration_ms,
                        url=f"https://y.qq.com/n/ryqq/songDetail/{ref.song_id}")
     for key, name in (("lyric", "original"), ("trans", "translation")):
@@ -97,7 +97,7 @@ def list_collection(kind: str, cid: str, client: Optional[SafeClient] = None) ->
             title = cd.get("dissname")
             songs = [_ref(s) for s in cd.get("songlist") or []]
         else:
-            raise FetchError(f"Unsupported collection kind {kind}")
+            raise FetchError(f"不支持的合集类型 {kind}")
     finally:
         if own:
             client.close()

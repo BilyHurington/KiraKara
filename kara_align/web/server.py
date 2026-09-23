@@ -102,7 +102,8 @@ class ReportApplyBody(BaseModel):
 
 
 class SeparateBody(BaseModel):
-    preset: str = "bs-roformer"
+    preset: str = "melband-roformer"
+    device: str = "auto"
 
 
 class MarkBody(BaseModel):
@@ -403,7 +404,8 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             raise HTTPException(400, "请先上传原曲")
 
         def run(job: Job):
-            return S.run_separation(h, body.preset, cancel=job.cancel_token, progress=progress_setter(job))
+            return S.run_separation(h, body.preset, cancel=job.cancel_token, progress=progress_setter(job),
+                                    device=body.device)
 
         return jm.submit("separate", run, project_id=pid).to_dict()
 

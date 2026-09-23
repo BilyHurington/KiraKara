@@ -111,21 +111,21 @@ def min_frames_needed(targets: Sequence[int]) -> int:
 
 def _validate(logp: np.ndarray, targets: Sequence[int], blank: int, anchors: Sequence[AnchorSpec]) -> None:
     if logp.ndim != 2:
-        raise ValueError("logp must be [T, V]")
+        raise ValueError("logp 必须是 [T, V] 矩阵")
     if len(targets) == 0:
         raise NoFeasiblePath("empty target sequence")
     V = logp.shape[1]
     for tok in targets:
         if tok == blank:
-            raise ValueError("targets must not contain the blank token")
+            raise ValueError("目标序列不能包含 blank token")
         if not 0 <= tok < V:
-            raise ValueError(f"token id {tok} outside vocabulary of size {V}")
+            raise ValueError(f"token id {tok} 超出词表大小 {V}")
     for a in anchors:
         if not 0 <= a.token_index < len(targets):
-            raise ValueError(f"anchor token_index {a.token_index} out of range")
+            raise ValueError(f"锚点 token_index {a.token_index} 越界")
     if logp.shape[0] < min_frames_needed(targets):
         raise NoFeasiblePath(
-            f"too few frames: {logp.shape[0]} < {min_frames_needed(targets)} required for {len(targets)} tokens"
+            f"帧数不足：{logp.shape[0]} < {len(targets)} 个 token 所需的 {min_frames_needed(targets)} 帧"
         )
 
 
@@ -236,7 +236,7 @@ def ctc_align(
 
     end_state = S - 1 if D[S - 1] >= D[S - 2] else S - 2
     if not np.isfinite(D[end_state]):
-        reason = "no path satisfies the hard anchor constraints" if any(a.kind == "hard" for a in anchors) else "no feasible CTC path"
+        reason = "没有满足硬锚点约束的路径" if any(a.kind == "hard" for a in anchors) else "没有可行的 CTC 路径"
         if band is not None:
             reason += f" (band={band})"
         raise NoFeasiblePath(reason)
@@ -282,6 +282,6 @@ def ctc_align_reference(
             bp[t, s] = arg
     end_state = S - 1 if D[T - 1][S - 1] >= D[T - 1][S - 2] else S - 2
     if not math.isfinite(D[T - 1][end_state]):
-        raise NoFeasiblePath("no feasible CTC path")
+        raise NoFeasiblePath("没有可行的 CTC 路径")
     states = _backtrack(bp, end_state)
     return _path_from_states(logp, z, states, entry, U)

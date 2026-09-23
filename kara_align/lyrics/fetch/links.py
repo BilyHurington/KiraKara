@@ -83,7 +83,7 @@ def parse_target(text: str) -> Optional[LinkTarget]:
         kind = (m.group(2) or "song").lower()
         sid = m.group(3)
         if plat == "netease" and not sid.isdigit():
-            raise FetchError("NetEase ids are numeric")
+            raise FetchError("网易云歌曲 ID 必须是数字")
         return LinkTarget(plat, kind, sid)  # type: ignore[arg-type]
     for url in extract_urls(text):
         target = parse_url(url)
@@ -96,9 +96,9 @@ def resolve_link(text: str, client: Optional[SafeClient] = None) -> LinkTarget:
     """Resolve pasted text (URL, share text, short link, ``netease:ID``) to a target."""
     text = text.strip()
     if not text:
-        raise FetchError("Empty link")
+        raise FetchError("链接为空")
     if text.isdigit():
-        raise FetchError("A bare song id is ambiguous; write it as netease:ID or qq:ID")
+        raise FetchError("单独的歌曲 ID 无法判断平台，请写成 netease:ID 或 qq:ID")
     target = parse_target(text)
     if target:
         return target
@@ -106,8 +106,8 @@ def resolve_link(text: str, client: Optional[SafeClient] = None) -> LinkTarget:
     shorts = [u for u in urls if (urlsplit(u).hostname or "").lower() in SHORT_HOSTS]
     if not shorts:
         if urls:
-            raise FetchError("Unsupported link; only NetEase Cloud Music and QQ Music song/album/playlist links work")
-        raise FetchError("No music link found in the text")
+            raise FetchError("不支持的链接：仅支持网易云音乐和 QQ 音乐的单曲 / 专辑 / 歌单链接")
+        raise FetchError("文本中没有找到音乐链接")
     own = client is None
     client = client or SafeClient()
     try:
@@ -117,6 +117,6 @@ def resolve_link(text: str, client: Optional[SafeClient] = None) -> LinkTarget:
             client.close()
     target = parse_url(final)
     if not target:
-        raise FetchError("Short link did not lead to a supported song, album or playlist page")
+        raise FetchError("短链没有指向受支持的单曲、专辑或歌单页面")
     target.source_url = shorts[0]
     return target

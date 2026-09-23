@@ -18,7 +18,7 @@ _ADAPTERS = {"netease": netease, "qq": qq}
 
 def fetch_song(platform: str, song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
     if platform not in _ADAPTERS:
-        raise FetchError(f"Unsupported platform {platform}")
+        raise FetchError(f"不支持的平台 {platform}")
     return _ADAPTERS[platform].get_song(song_id, client)
 
 

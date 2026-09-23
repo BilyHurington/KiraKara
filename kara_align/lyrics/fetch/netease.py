@@ -15,10 +15,10 @@ HEADERS = {"Referer": "https://music.163.com/"}
 
 def _check(data: Any, what: str) -> dict:
     if not isinstance(data, dict):
-        raise FetchError(f"NetEase: unexpected {what} answer")
+        raise FetchError(f"网易云：{what} 返回了无法识别的数据")
     code = data.get("code", 200)
     if code != 200:
-        raise FetchError(f"NetEase: {what} failed (code {code}: {data.get('message') or data.get('msg') or ''})")
+        raise FetchError(f"网易云：{what} 失败（code {code}：{data.get('message') or data.get('msg') or ''}）")
     return data
 
 
@@ -60,7 +60,7 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
     try:
         songs = _detail(client, [song_id])
         if not songs:
-            raise FetchError(f"NetEase: song {song_id} not found")
+            raise FetchError(f"网易云：找不到歌曲 {song_id}")
         ref = _song_ref(songs[0])
         lyr = _check(client.get(f"{BASE}/api/song/lyric",
                                 params={"id": song_id, "lv": -1, "tv": -1, "rv": -1},
@@ -77,9 +77,9 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
             song.tracks[name] = text
             song.has_timestamps[name] = has_valid_times(parse_lrc(text))
     if lyr.get("nolyric"):
-        song.notes.append("Marked as instrumental / no lyrics by the platform.")
+        song.notes.append("平台标记为纯音乐 / 无歌词。")
     if lyr.get("uncollected"):
-        song.notes.append("The platform has not collected lyrics for this song.")
+        song.notes.append("平台尚未收录这首歌的歌词。")
     return song
 
 
@@ -102,7 +102,7 @@ def list_collection(kind: str, cid: str, client: Optional[SafeClient] = None) ->
             for i in range(0, len(missing), 200):
                 songs += [_song_ref(s) for s in _detail(client, missing[i:i + 200])]
         else:
-            raise FetchError(f"Unsupported collection kind {kind}")
+            raise FetchError(f"不支持的合集类型 {kind}")
     finally:
         if own:
             client.close()

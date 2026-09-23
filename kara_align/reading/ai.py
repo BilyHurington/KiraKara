@@ -138,9 +138,9 @@ class PatchParseError(ValueError):
 def extract_json(text: str) -> Any:
     """Extract the first JSON object from a chat reply.  Never evaluates code."""
     if text is None:
-        raise PatchParseError("empty reply")
+        raise PatchParseError("回传内容为空")
     if len(text) > MAX_REPLY_CHARS:
-        raise PatchParseError(f"reply too large ({len(text)} chars > {MAX_REPLY_CHARS})")
+        raise PatchParseError(f"回传内容过大（{len(text)} 字符 > {MAX_REPLY_CHARS}）")
     t = text.strip().lstrip("﻿")
     candidates: list[str] = []
     for m in re.finditer(r"```(?:json|JSON)?\s*\n?(.*?)```", t, re.S):
@@ -161,7 +161,7 @@ def extract_json(text: str) -> Any:
                     return obj
             except ValueError as e:
                 last_err = e
-    raise PatchParseError(f"no JSON object found in reply: {last_err}")
+    raise PatchParseError(f"回传中没有找到 JSON 对象：{last_err}")
 
 
 @dataclass

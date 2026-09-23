@@ -80,7 +80,7 @@ def test_plain_mode_drops_times_with_warning():
     res = parse_lyrics_text(LRC, mode="plain")
     assert all(ln.imported_start_ms is None for ln in res.doc.lines)
     assert not any(ln.kind == "blank" for ln in res.doc.lines)
-    assert any("ignored" in w for w in res.warnings)
+    assert any("忽略" in w for w in res.warnings)
     # repeated chorus still kept (3 instances)
     assert sum(1 for ln in res.doc.lines if ln.text == "サビの歌詞") == 3
 
@@ -95,7 +95,7 @@ def test_lrc_mode_requires_times():
 def test_untimed_line_in_lrc_kept_in_raw_position():
     res = parse_lyrics_text("[00:01.00]a\nb\n[00:03.00]c", mode="lrc")
     assert [(ln.text, ln.imported_start_ms) for ln in res.doc.lines] == [("a", 1000), ("b", None), ("c", 3000)]
-    assert any("without a time" in w for w in res.warnings)
+    assert any("没有时间标签" in w for w in res.warnings)
 
 
 def test_plain_text_and_credits():

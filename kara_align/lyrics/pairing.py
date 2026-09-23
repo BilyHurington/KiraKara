@@ -114,7 +114,7 @@ def apply_pairs(doc: LyricsDoc, pairs: Iterable[tuple[str, str]], kind: TrackKin
     by_id = {ln.id: ln for ln in new.lines}
     for line_id, text in pairs:
         if line_id not in by_id:
-            raise KeyError(f"unknown line id {line_id}")
+            raise KeyError(f"没有歌词行 {line_id}")
         setattr(by_id[line_id], kind, text)
     return new
 
@@ -126,10 +126,10 @@ def _joiner(a: str, b: str) -> str:
 def merge_lines(doc: LyricsDoc, ids: list[str]) -> LyricsDoc:
     """Merge consecutive lines into one; the first start is kept, provenance recorded."""
     if len(ids) < 2:
-        raise ValueError("need at least two lines to merge")
+        raise ValueError("至少选择两行才能合并")
     positions = [next(i for i, ln in enumerate(doc.lines) if ln.id == lid) for lid in ids]
     if positions != list(range(positions[0], positions[0] + len(ids))):
-        raise ValueError("only consecutive lines in document order can be merged")
+        raise ValueError("只能合并按顺序相邻的行")
     new = doc.model_copy(deep=True)
     parts = new.lines[positions[0]: positions[-1] + 1]
     first = parts[0]
@@ -172,7 +172,7 @@ def split_line(doc: LyricsDoc, line_id: str, at_char: int) -> LyricsDoc:
     new = doc.model_copy(deep=True)
     line = new.lines[idx]
     if not 0 < at_char < len(line.text):
-        raise ValueError("split position must be inside the line text")
+        raise ValueError("拆分位置必须在该行文字内部")
     left_text, right_text = line.text[:at_char], line.text[at_char:]
     left_segs, right_segs, pos = [], [], 0
     boundary_ok = False
