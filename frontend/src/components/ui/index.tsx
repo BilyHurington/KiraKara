@@ -199,10 +199,13 @@ export function NumberInput({ value, onCommit, suffix, className, step = 1, min,
   step?: number; min?: number; max?: number; disabled?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const cancelled = useRef(false);
   const shown = draft ?? (value === null || value === undefined ? '' : String(value));
-  const commit = () => {
-    if (draft === null) return;
-    const t = draft.trim();
+  // read the element's value: the draft in this closure may be one render old
+  const commit = (raw: string) => {
+    if (cancelled.current) { cancelled.current = false; setDraft(null); return; }
+    if (draft === null && raw === shown) return;
+    const t = raw.trim();
     setDraft(null);
     if (t === '') return onCommit(null);
     const n = Number(t);
@@ -220,10 +223,10 @@ export function NumberInput({ value, onCommit, suffix, className, step = 1, min,
         max={max}
         disabled={disabled}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.currentTarget.blur(); }
-          if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur(); }
+          if (e.key === 'Escape') { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
         }}
       />
       {suffix && <span className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-xs text-subtle">{suffix}</span>}
@@ -264,10 +267,12 @@ export function SliderField({
   className?: string; trackClassName?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const cancelled = useRef(false);
   const decimals = step < 1 ? Math.min(3, String(step).split('.')[1]?.length ?? 2) : 0;
   const shown = draft ?? value.toFixed(decimals);
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
   const commitDraft = (raw: string) => {
+    if (cancelled.current) { cancelled.current = false; setDraft(null); return; }
     if (draft === null && raw === value.toFixed(decimals)) return;
     const n = Number(raw.replace('%', '').trim());
     setDraft(null);
@@ -307,7 +312,7 @@ export function SliderField({
           onBlur={(e) => commitDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur(); }
+            if (e.key === 'Escape') { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
               e.preventDefault();
               const d = (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
@@ -572,4 +577,73 @@ export function Th({ children, className }: { children?: ReactNode; className?: 
 }
 export function Td({ children, className, ...rest }: { children?: ReactNode; className?: string } & React.TdHTMLAttributes<HTMLTableCellElement>) {
   return <td className={cn('border-b border-line px-3 py-2 align-middle', className)} {...rest}>{children}</td>;
+}
+
+/**
+ * Draggable divider. `axis="y"` resizes a height (drag up/down),
+ * `axis="x"` a width. `invert` flips the direction (e.g. a panel below the
+ * handle grows when dragging up). Double-click resets to `defaultValue`.
+ */
+export function ResizeHandle({ axis, value, onChange, min, max, invert, defaultValue, label, className }: {
+  axis: 'x' | 'y'; value: number; onChange: (v: number) => void; min: number; max: number;
+  invert?: boolean; defaultValue?: number; label: string; className?: string;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const clamp = (v: number) => Math.round(Math.min(max, Math.max(min, v)));
+  const start = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const origin = axis === 'y' ? e.clientY : e.clientX;
+    const base = value;
+    setDragging(true);
+    const move = (ev: PointerEvent) => {
+      const d = (axis === 'y' ? ev.clientY : ev.clientX) - origin;
+      onChange(clamp(base + (invert ? -d : d)));
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = axis === 'y' ? 'row-resize' : 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const step = (e: React.KeyboardEvent) => {
+    const k = axis === 'y' ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
+    if (!k.includes(e.key)) return;
+    e.preventDefault();
+    const dir = e.key === k[0] ? -1 : 1;
+    onChange(clamp(value + (invert ? -dir : dir) * (e.shiftKey ? 50 : 10)));
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation={axis === 'y' ? 'horizontal' : 'vertical'}
+      aria-label={label}
+      aria-valuenow={value}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      title={`${label}（拖动调整，双击恢复默认）`}
+      onPointerDown={start}
+      onKeyDown={step}
+      onDoubleClick={() => defaultValue !== undefined && onChange(clamp(defaultValue))}
+      className={cn(
+        'focus-ring group relative z-10 flex shrink-0 touch-none items-center justify-center',
+        axis === 'y' ? 'h-2 w-full cursor-row-resize' : 'w-3 cursor-col-resize self-stretch',
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          'rounded-full bg-line-strong transition group-hover:bg-accent',
+          axis === 'y' ? 'h-1 w-12' : 'h-12 w-1',
+          dragging && 'bg-accent',
+        )}
+      />
+    </div>
+  );
 }

@@ -11,14 +11,15 @@ import type { Source } from '@/lib/types';
 import { player, usePlayer, usePlayhead } from '@/audio/player';
 import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
 import { waveformRef } from '@/audio/waveformRef';
-import { ppath, resultFrom, run, toast, useApp } from '@/store/app';
+import { ppath, resultFrom, run, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
 import { setUnitTimes } from '@/store/edits';
-import { Badge, IconButton, Kbd, Segmented, SliderField, Tip } from '@/components/ui';
+import { Badge, IconButton, Kbd, ResizeHandle, Segmented, SliderField, Tip } from '@/components/ui';
 
 export function StudioDock() {
   const pv = useApp((s) => s.pv);
   const pid = useApp((s) => s.pid);
   const open = useApp((s) => s.dockOpen);
+  const waveHeight = useApp((s) => s.waveHeight);
   const p = usePlayer();
 
   // keep decoded buffers in sync with the project's audio assets
@@ -45,7 +46,15 @@ export function StudioDock() {
   const hasAudio = !!pv.project.audio.find((a) => a.role === 'original');
 
   return (
-    <footer className="z-20 shrink-0 border-t border-line bg-surface/95 backdrop-blur">
+    <footer className="relative z-20 shrink-0 border-t border-line bg-surface/95 backdrop-blur">
+      {open && (
+        <ResizeHandle
+          axis="y" invert label="调整波形高度"
+          value={waveHeight} onChange={(v) => setLayoutSize('waveHeight', v)}
+          min={WAVE_HEIGHT.min} max={WAVE_HEIGHT.max} defaultValue={WAVE_HEIGHT.default}
+          className="absolute -top-1 left-0"
+        />
+      )}
       <Transport hasAudio={hasAudio} />
       <div className={cn('grid transition-[grid-template-rows] duration-200', open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
         <div className="min-h-0 overflow-hidden">
@@ -246,6 +255,7 @@ function useOverlays(): () => Overlays {
 
 function WaveArea() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const waveHeight = useApp((s) => s.waveHeight);
   const pid = useApp((s) => s.pid);
   const originalId = useApp((s) => s.pv?.project.audio.find((a) => a.role === 'original')?.id ?? null);
   const getOverlays = useOverlays();
@@ -309,7 +319,7 @@ function WaveArea() {
   return (
     <div className="relative px-4 pb-3">
       <div className="relative overflow-hidden rounded-xl ring-1 ring-line">
-        <canvas ref={canvasRef} className="block h-[188px] w-full" />
+        <canvas ref={canvasRef} className="block w-full" style={{ height: waveHeight }} />
         <div className="absolute top-7 right-2 flex flex-col gap-1 rounded-lg bg-black/45 p-1 backdrop-blur">
           <WaveBtn label="放大" onClick={zoom.in}><Plus className="size-3.5" /></WaveBtn>
           <WaveBtn label="缩小" onClick={zoom.out}><Minus className="size-3.5" /></WaveBtn>
@@ -318,7 +328,7 @@ function WaveArea() {
       </div>
       <ScrollBar state={scroll} />
       <div className="mt-1 flex flex-wrap gap-x-4 text-[11px] text-subtle">
-        <span>点击定位 · 拖动选择循环区间 · 滚轮缩放 · Shift+滚轮平移</span>
+        <span>点击定位 · 拖动选择循环区间 · 滚轮缩放 · Shift+滚轮平移 · 拖动上边缘调整高度</span>
         <span>在“人工检查”中选中单元后可拖动两端修改起止</span>
       </div>
     </div>

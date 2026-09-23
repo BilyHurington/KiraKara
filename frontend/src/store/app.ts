@@ -40,6 +40,26 @@ interface State {
   toasts: Toast[];
   theme: 'light' | 'dark';
   dockOpen: boolean;
+  waveHeight: number;
+  reviewListWidth: number;
+}
+
+export const WAVE_HEIGHT = { min: 96, max: 520, default: 188 };
+export const REVIEW_LIST_WIDTH = { min: 220, max: 560, default: 320 };
+
+function storedNumber(key: string, d: number, min: number, max: number) {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return Number.isFinite(v) && v >= min && v <= max ? v : d;
+  } catch {
+    return d;
+  }
+}
+
+/** Resizable layout sizes, remembered per browser. */
+export function setLayoutSize(key: 'waveHeight' | 'reviewListWidth', v: number) {
+  set({ [key]: v } as Partial<State>);
+  try { localStorage.setItem(`kara.${key}`, String(v)); } catch { /* ignore */ }
 }
 
 const initialTheme = (): 'light' | 'dark' =>
@@ -63,6 +83,8 @@ export const useApp = create<State>(() => ({
   toasts: [],
   theme: initialTheme(),
   dockOpen: true,
+  waveHeight: storedNumber('kara.waveHeight', WAVE_HEIGHT.default, WAVE_HEIGHT.min, WAVE_HEIGHT.max),
+  reviewListWidth: storedNumber('kara.reviewListWidth', REVIEW_LIST_WIDTH.default, REVIEW_LIST_WIDTH.min, REVIEW_LIST_WIDTH.max),
 }));
 
 const set = useApp.setState;

@@ -77,3 +77,16 @@ kara-align eval --ref ref.json --hyp base=a.json --hyp lrc=b.json   # 与人工�
 ```
 
 HTTP 接口见 [`docs/api.md`](docs/api.md)。
+
+### WebUI 前端
+
+源码在 `frontend/`（Vite + React + TypeScript + Tailwind），构建产物提交在 `kara_align/web/static/`，因此只使用 Python 时不需要 Node。修改前端后：
+
+```bash
+cd frontend
+npm install
+npm run dev        # 开发：http://localhost:5173，/api 代理到 127.0.0.1:8799（KARA_API_PORT 可改）
+npm run build      # 类型检查并输出到 kara_align/web/static
+```
+
+开发时另开一个终端运行 `kara-align serve --port 8799`。

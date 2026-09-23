@@ -1,29 +1,22 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kara Align</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <header id="topbar">
-    <div class="brand">Kara Align <small>已知歌词时间戳对齐</small></div>
-    <div id="project-bar"></div>
-    <div id="jobs-bar"></div>
-  </header>
-  <nav id="stepbar"></nav>
-  <main id="main">
-    <section id="panel"></section>
-  </main>
-  <footer id="dock" hidden>
-    <div id="player-controls"></div>
-    <div id="wave-wrap">
-      <canvas id="wave"></canvas>
-      <input id="wave-scroll" type="range" min="0" max="1000" value="0" step="1" aria-label="波形水平滚动">
-    </div>
-  </footer>
-  <div id="toasts"></div>
-  <script type="module" src="js/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Kara Align</title>
+    <script>
+      // apply the stored theme before first paint
+      try {
+        const t = localStorage.getItem('kara.theme');
+        const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.classList.toggle('dark', dark);
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="./assets/index-C8Jy3Wik.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BDsqYDmg.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>
