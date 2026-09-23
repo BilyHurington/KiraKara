@@ -19,7 +19,7 @@ from ..project.store import ProjectError
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_TEXT_BYTES = 5 * 1024 * 1024
-MAX_AUDIO_BYTES = 1024 * 1024 * 1024
+MAX_AUDIO_BYTES = 8 * 1024 * 1024 * 1024  # videos can be large
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +380,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             try:
                 with open(tmp, "rb") as f:
                     validate_upload(name, f.read(64), size, MAX_AUDIO_BYTES)
-                S.add_audio(h, tmp, role, filename=name, source_kind="upload" if role == "original" else "import")
+                S.add_media(h, tmp, role, filename=name, source_kind="upload" if role == "original" else "import")
             except AudioError as e:
                 raise HTTPException(400, str(e)) from e
         return view(h)
@@ -425,6 +425,22 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                     "url": f"/api/projects/{pid}/exports/{out['filename']}"}
 
         return jm.submit("mix", run, project_id=pid, heavy=False).to_dict()
+
+    @app.post("/api/projects/{pid}/video/export")
+    def video_export(pid: str, body: dict):
+        h = handle(pid)
+        if h.project.video is None:
+            raise HTTPException(400, "项目中没有视频：请在“音频与歌词”中上传视频作为原曲")
+        if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
+            raise HTTPException(400, "降低人声需要人声和伴奏两条分轨，请先进行人声分离")
+
+        def run(job: Job):
+            job.message = "混音并合成视频"
+            out = S.export_video(h, body or {})
+            return {"filename": out["filename"], "report": out["report"],
+                    "url": f"/api/projects/{pid}/exports/{out['filename']}"}
+
+        return jm.submit("video", run, project_id=pid, heavy=False).to_dict()
 
     @app.get("/api/projects/{pid}/exports/{filename}")
     def exported_file(pid: str, filename: str):

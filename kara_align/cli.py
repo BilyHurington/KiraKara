@@ -170,7 +170,7 @@ def cmd_ai_apply(a) -> None:
 
 def cmd_audio(a) -> None:
     h = S.open_dir(Path(a.project))
-    asset = S.add_audio(h, Path(a.file), a.role, filename=Path(a.file).name,
+    asset = S.add_media(h, Path(a.file), a.role, filename=Path(a.file).name,
                         source_kind="upload" if a.role == "original" else "import")
     _print({"id": asset.id, "role": asset.role, "duration_ms": asset.duration_ms, "sample_rate": asset.sample_rate,
             "sync_report": asset.sync_report})
@@ -324,6 +324,12 @@ def cmd_mix(a) -> None:
     _print(out)
 
 
+def cmd_video(a) -> None:
+    h = S.open_dir(Path(a.project))
+    out = S.export_video(h, {"vocal_keep_pct": a.vocal, "instrumental_pct": a.inst, "master": a.master})
+    _print({"file": str(h.dir / "exports" / out["filename"]), "report": out["report"]})
+
+
 def cmd_package(a) -> None:
     from .project import store
 
@@ -444,7 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lines", nargs="*")
     p.add_argument("--dry-run", action="store_true")
 
-    p = add("audio", cmd_audio, "添加原曲或已有分轨")
+    p = add("audio", cmd_audio, "添加原曲或已有分轨（也可以是视频，会提取音轨）")
     p.add_argument("file")
     p.add_argument("--role", choices=["original", "vocals", "instrumental"], default="original")
 
@@ -512,6 +518,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--master", type=float, default=1.0)
     p.add_argument("--limiter", choices=["normalize_peak", "none"], default="normalize_peak")
     p.add_argument("--out")
+
+    p = add("video", cmd_video, "导出降低人声的视频（需要以视频作为原曲并完成分离）")
+    p.add_argument("--vocal", type=float, default=20.0, help="人声保留 p%%")
+    p.add_argument("--inst", type=float, default=100.0, help="伴奏 q%%")
+    p.add_argument("--master", type=float, default=1.0)
 
     p = add("package", cmd_package, "导出便携项目包")
     p.add_argument("out")

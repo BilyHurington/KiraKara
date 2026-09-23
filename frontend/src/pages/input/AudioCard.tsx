@@ -1,6 +1,6 @@
 // Audio assets: original upload, stem import (with sync check report).
 
-import { AlertTriangle, FileAudio, Mic, Music2, Music4 } from 'lucide-react';
+import { AlertTriangle, FileAudio, Film, Mic, Music2, Music4 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, ROLE_LABEL } from '@/lib/format';
@@ -9,6 +9,8 @@ import { ppath, run, setPV, toast, useProject, useView } from '@/store/app';
 import { Badge, Card, CardBody, CardHeader, DropZone, Tip } from '@/components/ui';
 
 const AUDIO_ACCEPT = 'audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif';
+// the original may also be a video: its audio track is extracted and used
+const MEDIA_ACCEPT = `${AUDIO_ACCEPT},video/*,.mp4,.mov,.m4v,.mkv,.webm,.avi,.flv,.ts,.mts,.m2ts,.wmv,.mpg,.mpeg,.3gp`;
 
 const ROLE_ICON: Record<Role, typeof Music2> = { original: Music2, vocals: Mic, instrumental: Music4 };
 
@@ -50,8 +52,8 @@ export function AudioCard() {
           available={!!view.audio.original?.available}
           busy={busy === 'original'}
           onFile={(f) => upload('original', f)}
-          emptyTitle="拖入或点击选择原曲"
-          emptyHint="wav / flac / mp3 / m4a 等；时间以原音频起点为 0"
+          emptyTitle="拖入或点击选择原曲（音频或视频）"
+          emptyHint="wav / flac / mp3 / m4a 或 mp4 / mov / mkv 等视频（自动提取音轨）；时间以音轨起点为 0"
         />
         <div className="grid gap-4 md:grid-cols-2">
           {(['vocals', 'instrumental'] as Role[]).map((role) => (
@@ -78,11 +80,13 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
   emptyTitle: string; emptyHint: string; compact?: boolean;
 }) {
   const Icon = ROLE_ICON[role];
+  const accept = role === 'original' ? MEDIA_ACCEPT : AUDIO_ACCEPT;
+  const video = useProject()?.video;
   if (!asset) {
     return (
       <div>
         <div className="mb-2 text-[13px] font-medium">{ROLE_LABEL[role]}</div>
-        <DropZone accept={AUDIO_ACCEPT} onFile={onFile} title={emptyTitle} hint={emptyHint} compact={compact} busy={busy} />
+        <DropZone accept={accept} onFile={onFile} title={emptyTitle} hint={emptyHint} compact={compact} busy={busy} />
       </div>
     );
   }
@@ -107,6 +111,16 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
             <Tip content={asset.sha256}><span className="font-mono">sha256 {asset.sha256.slice(0, 12)}…</span></Tip>
             {src.model && <span>模型 {src.model}</span>}
           </div>
+          {role === 'original' && video && video.audio_sha256 === asset.sha256 && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg bg-info-soft px-2.5 py-1.5 text-xs text-fg">
+              <Film className="size-3.5 text-info" />
+              <span className="font-medium">来自视频 {video.filename}</span>
+              <span className="tabular text-muted">
+                {video.width}×{video.height}{video.fps ? ` · ${video.fps} fps` : ''} · {video.video_codec} · {fmtMs(video.duration_ms)}
+              </span>
+              <span className="text-muted">可在“导出”中生成降低人声的视频</span>
+            </div>
+          )}
           {src.notes?.length > 0 && (
             <ul className="mt-2 space-y-0.5 text-xs text-warn">
               {src.notes.map((n) => <li key={n} className="flex gap-1.5"><AlertTriangle className="mt-0.5 size-3 shrink-0" />{n}</li>)}
@@ -122,12 +136,12 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
       {asset.sync_report && <SyncReport report={asset.sync_report} />}
       <div className="mt-3">
         <DropZone
-          accept={AUDIO_ACCEPT}
+          accept={accept}
           onFile={onFile}
           compact
           busy={busy}
           title={available ? `替换${ROLE_LABEL[role]}` : `重新上传${ROLE_LABEL[role]}`}
-          hint={role === 'original' ? '更换原曲后，基于旧原曲的分轨与结果会被标记' : undefined}
+          hint={role === 'original' ? '可选音频或视频；更换原曲后，基于旧原曲的分轨与结果会被标记' : undefined}
         />
       </div>
     </div>

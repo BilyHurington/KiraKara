@@ -33,7 +33,9 @@ from .resample import to_mono
 
 PathLike = Union[str, os.PathLike]
 
-ALLOWED_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".aif", ".aiff", ".wma", ".webm", ".mp4"}
+ALLOWED_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".aif", ".aiff", ".wma", ".webm", ".mp4",
+                      # video containers: the audio track is extracted
+                      ".mov", ".m4v", ".mkv", ".avi", ".flv", ".ts", ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg", ".3gp"}
 DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 
 
@@ -203,6 +205,14 @@ def sniff_audio_format(head: bytes) -> Optional[str]:
         return "mp4"
     if head.startswith(b"\x30\x26\xb2\x75"):
         return "wma"
+    if head.startswith(b"FLV"):
+        return "flv"
+    if head.startswith(b"\x00\x00\x01\xba") or head.startswith(b"\x00\x00\x01\xb3"):
+        return "mpeg-ps"
+    if head[:1] == b"\x47" and (len(head) < 189 or head[188:189] == b"\x47"):
+        return "mpeg-ts"
+    if len(head) >= 12 and head[4:8] in (b"moov", b"mdat", b"wide", b"free", b"skip"):
+        return "quicktime"
     return None
 
 
@@ -215,13 +225,13 @@ def validate_upload(filename: str, head: bytes, size: int, max_bytes: int = DEFA
     name = os.path.basename(filename or "")
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise AudioError(f"不支持的音频扩展名：{ext or '（无）'}")
+        raise AudioError(f"不支持的音频 / 视频扩展名：{ext or '（无）'}")
     if size <= 0:
         raise AudioError("上传的文件为空")
     if size > max_bytes:
         raise AudioError(f"上传文件过大（{size} 字节 > {max_bytes}）")
     if sniff_audio_format(head[:64]) is None:
-        raise AudioError("文件内容不像受支持的音频格式")
+        raise AudioError("文件内容不像受支持的音频或视频格式")
     return ext
 
 

@@ -465,6 +465,26 @@ class MixSettings(_Base):
     limiter: Literal["none", "normalize_peak"] = "normalize_peak"
 
 
+class VideoAsset(_Base):
+    """A video uploaded as the original; its audio track became the original asset."""
+
+    id: str = Field(default_factory=lambda: new_id("v"))
+    sha256: str
+    path: Optional[str] = None  # relative to the project directory, None when missing
+    filename: Optional[str] = None
+    container: str  # file extension, e.g. ".mp4"
+    duration_ms: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+    video_codec: Optional[str] = None
+    audio_codec: Optional[str] = None
+    # original audio stream start relative to the file start (restored when muxing)
+    audio_offset_s: float = 0.0
+    # sha256 of the audio extracted from it (= the original asset it produced)
+    audio_sha256: str
+
+
 class Project(_Base):
     format: str = FMT_PROJECT
     version: int = SCHEMA_VERSION
@@ -482,6 +502,7 @@ class Project(_Base):
     results: list[AlignmentResult] = Field(default_factory=list)
     active_result_id: Optional[str] = None
     mix: MixSettings = Field(default_factory=MixSettings)
+    video: Optional[VideoAsset] = None
 
     def asset(self, role: str) -> Optional[AudioAsset]:
         for a in self.audio:

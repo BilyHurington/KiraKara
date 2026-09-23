@@ -18,7 +18,7 @@ import numpy as np
 from .interfaces import CancelToken, Emission
 from .models import (
     AiRoundtrip, AlignConfig, AlignmentResult, AudioAsset, AudioSource, Issue, LineAnchor, LyricsDoc,
-    MixSettings, Project, SourceSnapshot, new_id, stable_hash,
+    MixSettings, Project, SourceSnapshot, VideoAsset, new_id, stable_hash,
 )
 from .project import store
 from .project.store import ProjectError
@@ -632,6 +632,80 @@ def add_audio(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
         p.audio.append(asset)
         h.save()
     return asset
+
+
+def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[str] = None,
+              source_kind: str = "upload") -> AudioAsset:
+    """Add audio, or a video whose first audio track is extracted and used.
+
+    A video uploaded as the original is kept (content-addressed) so a
+    reduced-vocal version can be muxed later; any other upload clears it.
+    """
+    import hashlib
+    import tempfile
+
+    from .audio.io import file_sha256
+    from .audio.video import audio_offset_s, extract_audio, is_video, probe_media
+
+    src_path = Path(src_path)
+    name = filename or src_path.name
+    if not is_video(src_path):
+        asset = add_audio(h, src_path, role, filename=name, source_kind=source_kind)
+        if role == "original" and h.project.video is not None:
+            with h.lock:
+                h.project.video = None
+                h.save()
+        return asset
+
+    info = probe_media(src_path)
+    with tempfile.TemporaryDirectory() as td:
+        flac = extract_audio(src_path, Path(td) / (Path(name).stem or "audio"))
+        asset = add_audio(h, flac, role, filename=f"{Path(name).stem}（视频音轨）.flac", source_kind=source_kind)
+    asset.source.notes.append(f"从视频 {name} 提取的音轨（{info.get('audio_codec')}）")
+    video = None
+    if role == "original":
+        sha = file_sha256(src_path)
+        ext = src_path.suffix.lower() or ".mp4"
+        dest = h.assets_dir / f"{sha}{ext}"
+        if not dest.exists():
+            h.assets_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_path, dest)
+        video = VideoAsset(
+            sha256=sha, path=str(Path("assets") / dest.name), filename=name, container=ext,
+            duration_ms=info["duration_ms"], width=info.get("width"), height=info.get("height"),
+            fps=info.get("fps"), video_codec=info.get("video_codec"), audio_codec=info.get("audio_codec"),
+            audio_offset_s=audio_offset_s(info), audio_sha256=asset.sha256,
+        )
+    with h.lock:
+        if role == "original":
+            h.project.video = video
+        h.save()
+    return asset
+
+
+def export_video(h: ProjectHandle, settings: dict) -> dict:
+    """Mux the reduced-vocal mix under the original video's picture."""
+    import tempfile
+
+    from .audio.video import mux_audio
+
+    video = h.project.video
+    orig = h.project.asset("original")
+    if video is None:
+        raise ServiceError("项目中没有视频：请在“音频与歌词”中上传视频作为原曲")
+    if orig is None or orig.sha256 != video.audio_sha256:
+        raise ServiceError("当前原曲不是从该视频提取的，无法合成视频")
+    vpath = store.asset_abspath(h.dir, video.path)
+    if vpath is None or not vpath.exists():
+        raise ServiceError("视频文件缺失，请重新上传视频")
+    with tempfile.TemporaryDirectory() as td:
+        mix = export_mix(h, settings, Path(td) / "mix.wav")
+        s = h.project.mix
+        stem = Path(video.filename or "video").stem
+        base = h.dir / "exports" / f"{stem}-vocal{int(round(s.vocal_keep_pct))}"
+        out = mux_audio(vpath, Path(mix["path"]), base, offset_s=video.audio_offset_s, container=video.container)
+    return {"filename": out.name, "report": {**mix["report"], "video": {"container": out.suffix,
+            "audio_offset_s": video.audio_offset_s, "video_codec": video.video_codec, "copied_video": True}}}
 
 
 def _sync_report(h: ProjectHandle, orig: AudioAsset, stem: AudioAsset) -> dict:

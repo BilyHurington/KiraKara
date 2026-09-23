@@ -71,7 +71,7 @@ matches the current lyrics text / readings / calibration / mode / audio get
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`) |
+| POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`). The file may be a **video**: its first audio track is extracted losslessly (FLAC) and used; a video uploaded as the original is kept as `project.video` (with `audio_offset_s`) for re-muxing. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/playback.wav` | – | decoded PCM WAV (same decoder as alignment → identical time origin). Supports Range. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/peaks?per_second=200` | – | `{sample_rate, duration_ms, per_second, mins: [float], maxs: [float]}` (mono, first peak at 0 ms) |
 | POST | `/api/projects/{pid}/separate` | `{preset, device?: "auto"\|"cpu"}` | `Job` (on success adds vocals + instrumental assets) |
@@ -79,6 +79,7 @@ matches the current lyrics text / readings / calibration / mode / audio get
 
 Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; bus gain `min(1, 10^(-0.3/20)/peak)` when `limiter = normalize_peak`. Browser playback computes it with GainNodes; only the export applies a precomputed bus gain from the full-file peak (the UI shows the same number from `/mix/preview-gain`).
 
+| POST | `/api/projects/{pid}/video/export` | `MixSettings` | `Job` (kind `video`); output `{filename, url, report}`: the original video's picture copied unchanged, the mix as its only soundtrack, at the original audio offset. Needs `project.video` and both stems. |
 | POST | `/api/projects/{pid}/mix/preview-gain` | `MixSettings` | `{bus_gain, peak_before}` |
 
 ## Calibration (LRC mode)

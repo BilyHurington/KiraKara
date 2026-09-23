@@ -11,7 +11,7 @@ import type { Source } from '@/lib/types';
 import { player, usePlayer, usePlayhead } from '@/audio/player';
 import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
 import { waveformRef } from '@/audio/waveformRef';
-import { ppath, resultFrom, run, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
+import { ppath, resultFrom, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
 import { setUnitTimes } from '@/store/edits';
 import { Badge, IconButton, Kbd, ResizeHandle, Segmented, SliderField, Tip } from '@/components/ui';
 
@@ -74,23 +74,19 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
   const sources = p.availableSources();
   const loading = Object.keys(p.loading);
   const canMix = sources.includes('mix');
-  const [bus, setBus] = useState<{ bus_gain: number; peak_before: number } | null>(null);
 
-  // bus gain for the current mix (only when both stems exist)
+  // “自定义混音” plays the project's mix settings (set on the Export page);
+  // keep the anti-clipping bus gain in sync so it sounds like the export
   const mix = pv.project.mix;
   useEffect(() => {
-    if (!canMix) { setBus(null); return; }
+    if (!canMix) return;
     const t = setTimeout(() => {
-      api.post<{ bus_gain: number; peak_before: number }>(ppath('/mix/preview-gain'), {
+      api.post<{ bus_gain: number }>(ppath('/mix/preview-gain'), {
         vocal_keep_pct: p.mix.p, instrumental_pct: p.mix.q, master: p.mix.master, limiter: mix.limiter,
-      }).then((r) => { setBus(r); player.setMix({ bus: r.bus_gain }); }).catch(() => setBus(null));
+      }).then((r) => player.setMix({ bus: r.bus_gain })).catch(() => {});
     }, 250);
     return () => clearTimeout(t);
   }, [canMix, p.mix.p, p.mix.q, p.mix.master, mix.limiter]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const persistMix = () => run(() => api.patch(ppath(''), {
-    mix: { vocal_keep_pct: player.mix.p, instrumental_pct: player.mix.q, master: player.mix.master },
-  }));
 
   return (
     <>
@@ -133,7 +129,7 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
           onChange={(v) => player.setSource(v)}
           options={(['original', 'vocals', 'instrumental', 'mix'] as Source[]).map((s) => ({
             value: s, label: ROLE_LABEL[s], disabled: !sources.includes(s),
-            title: s === 'mix' ? '人声 + 伴奏按下方比例混合（与导出同一规则）' : undefined,
+            title: s === 'mix' ? '人声 + 伴奏按“导出”页设置的比例混合（与导出同一规则）' : undefined,
           }))}
         />
       ) : (
@@ -147,6 +143,16 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
         options={[{ value: '1', label: '1×' }, { value: '0.75', label: '0.75×' }, { value: '0.5', label: '0.5×' }]}
       />
 
+      <div className="w-56 shrink-0">
+        <SliderField
+          name="音量"
+          label={<HintLabel tip="音量：仅影响本机试听，不写入导出"><Volume2 className="inline size-4 align-[-3px]" /></HintLabel>}
+          value={Math.round(p.monitorVolume * 100)}
+          onChange={(v) => player.setMonitorVolume(v / 100)}
+          trackClassName="min-w-20"
+        />
+      </div>
+
       {loading.length > 0 && <Badge tone="info">加载 {loading.map((r) => ROLE_LABEL[r]).join('、')}…</Badge>}
 
       <div className="ml-auto">
@@ -156,53 +162,6 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
       </div>
       </div>
 
-      {/* mix row: long sliders with typeable values */}
-      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 border-t border-line/70 px-4 py-2">
-        {canMix ? (
-          <>
-            <div className="min-w-[320px] flex-1 basis-80">
-              <SliderField
-                name="人声保留"
-                label={<HintLabel tip="线性幅度 ×p/100（“保留 p%”，不是“降低 p%”）；试听与导出使用同一规则">人声保留</HintLabel>}
-                value={p.mix.p} onChange={(v) => player.setMix({ p: v })} onCommit={persistMix}
-              />
-            </div>
-            <div className="min-w-[320px] flex-1 basis-80">
-              <SliderField
-                name="伴奏"
-                label={<HintLabel tip="伴奏线性幅度 ×q/100；人声 0% 时伴奏中仍可能残留人声">伴奏</HintLabel>}
-                value={p.mix.q} onChange={(v) => player.setMix({ q: v })} onCommit={persistMix}
-              />
-            </div>
-            {bus && (
-              <Tip content={`共同母线增益（防削波，保持两轨比例）；混音峰值 ${bus.peak_before.toFixed(3)}`}>
-                <span className="tabular shrink-0 text-xs whitespace-nowrap text-muted">母线 ×{bus.bus_gain.toFixed(3)}</span>
-              </Tip>
-            )}
-          </>
-        ) : (
-          <>
-            <span className="hidden min-w-0 flex-1 text-xs text-subtle lg:inline">
-              {sources.length > 0
-                ? '人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声'
-                : '上传音频后可在此试听'}
-            </span>
-            {sources.length > 0 && (
-              <Tip content="人声保留比例需要人声与伴奏两条分轨（可在“注音与分离”中分离或导入）；只有原曲时无法单独降低人声">
-                <span className="flex-1 cursor-help text-xs text-subtle lg:hidden">人声比例：需要分轨 ⓘ</span>
-              </Tip>
-            )}
-          </>
-        )}
-        <div className="w-60 shrink-0 lg:w-72">
-          <SliderField
-            name="监听音量"
-            label={<HintLabel tip="监听音量：仅影响本机试听，不写入导出"><Volume2 className="inline size-4 align-[-3px]" /></HintLabel>}
-            value={Math.round(p.monitorVolume * 100)}
-            onChange={(v) => player.setMonitorVolume(v / 100)}
-          />
-        </div>
-      </div>
     </>
   );
 }

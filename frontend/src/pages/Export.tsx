@@ -1,13 +1,12 @@
 // Step 7: exports. alignment.json is the complete standard output; other
 // formats may lose information and show explicit loss warnings.
 
-import {
-  Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Music2, Package, Sparkles,
-} from 'lucide-react';
+import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Music2, Package, Sparkles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
 import type { ExportInline, Job } from '@/lib/types';
+import { player } from '@/audio/player';
 import { ppath, run, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, Dialog, EmptyState, Field, PageHeader, Segmented, Select, SliderField,
@@ -209,15 +208,31 @@ function MixCard() {
   const [limiter, setLimiter] = useState(project.mix.limiter);
   const [gain, setGain] = useState<{ bus_gain: number; peak_before: number } | null>(null);
   const [out, setOut] = useState<{ url: string; filename: string; report: Record<string, any> } | null>(null);
+  const videoJob = useJob('video');
+  const [videoOut, setVideoOut] = useState<{ url: string; filename: string } | null>(null);
+  const hasVideo = !!project.video;
+
+  // the player's “自定义混音” source previews exactly these settings
+  useEffect(() => { player.setMix({ p, q, master }); }, [p, q, master]);
 
   useEffect(() => {
     if (!canMix) return;
     const t = setTimeout(() => {
       api.post<{ bus_gain: number; peak_before: number }>(ppath('/mix/preview-gain'), { vocal_keep_pct: p, instrumental_pct: q, master, limiter })
-        .then(setGain).catch(() => setGain(null));
+        .then((g) => { setGain(g); player.setMix({ bus: g.bus_gain }); }).catch(() => setGain(null));
     }, 300);
     return () => clearTimeout(t);
   }, [canMix, p, q, master, limiter]);
+
+  const videoRunning = videoJob && (videoJob.status === 'queued' || videoJob.status === 'running');
+  const exportVideo = () => run(async () => {
+    setVideoOut(null);
+    const j = await api.post<Job>(ppath('/video/export'), { vocal_keep_pct: p, instrumental_pct: q, master, limiter });
+    trackJob(j, {
+      label: '视频导出',
+      onDone: (done) => { if (done.status === 'succeeded' && done.output) setVideoOut(done.output); },
+    });
+  }, '无法导出视频');
 
   const running = job && (job.status === 'queued' || job.status === 'running');
   const exportMix = () => run(async () => {
@@ -231,8 +246,8 @@ function MixCard() {
 
   return (
     <Card>
-      <CardHeader icon={<Music2 className="size-4" />} title="人声保留混音 WAV"
-        description="正常速度、原始时长与原点；与试听使用同一混音规则，监听音量不写入导出。" />
+      <CardHeader icon={<Music2 className="size-4" />} title={hasVideo ? '人声保留混音（WAV / 视频）' : '人声保留混音 WAV'}
+        description="正常速度、原始时长与原点；与播放器“自定义混音”试听使用同一规则，监听音量不写入导出。" />
       <CardBody className="space-y-5">
         {!canMix ? (
           <EmptyState
@@ -261,10 +276,22 @@ function MixCard() {
                 )}
               </div>
             </Field>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              {hasVideo && (
+                <Tip content="画面原样复制（不重新编码），声音换成当前比例的混音，并保持与画面同步">
+                  <Button onClick={exportVideo} loading={!!videoRunning} icon={<Film className="size-4" />}>导出降低人声的视频</Button>
+                </Tip>
+              )}
               <Button variant="primary" onClick={exportMix} loading={!!running} icon={<Download className="size-4" />}>导出混音 WAV</Button>
             </div>
             {job?.status === 'failed' && <Callout tone="danger" title="导出失败">{job.error ?? job.message}</Callout>}
+            {videoJob?.status === 'failed' && <Callout tone="danger" title="视频导出失败">{videoJob.error ?? videoJob.message}</Callout>}
+            {videoOut && (
+              <Callout tone="ok" title={videoOut.filename}
+                actions={<a href={videoOut.url} download><Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</Button></a>}>
+                人声保留 {Math.round(p)}% · 伴奏 {Math.round(q)}%；画面未重新编码。
+              </Callout>
+            )}
             {out && (
               <Callout tone="ok" title={out.filename}
                 actions={<a href={out.url} download><Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载 WAV</Button></a>}>

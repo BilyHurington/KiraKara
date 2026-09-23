@@ -26,7 +26,8 @@ kara-align serve            # http://127.0.0.1:8765
 
 - 歌词：粘贴或上传（同一解析与预览流程）；网易云／QQ 音乐单曲链接、分享文案、短链、`netease:ID` / `qq:MID`；专辑／歌单先列出歌曲再选择。翻译／音译轨单独配对，默认只对齐原文。
 - AI 注音：页面生成提示词（含行 ID、原文、已有读音、返回格式），复制到任意网页聊天，把返回的 JSON 粘贴回来；程序校验后预览再应用。不接入任何 LLM API。
-- 音频：原曲、人声、伴奏、自定义混音同步试听；“人声保留 p%” 实时调节（只改增益，不触发任何模型）；慢速试听时游标和标记仍是原音频时间。
+- 音频：原曲可以是音频，也可以是视频（mp4 / mov / mkv 等，自动无损提取第一条音轨继续后续流程）；原曲、人声、伴奏、自定义混音同步试听，慢速试听时游标和标记仍是原音频时间。
+- 导出：人声保留比例在“导出”页设置（播放器的“自定义混音”按同一设置试听）；以视频为原曲时可直接导出降低人声的视频（画面不重新编码，声音保持原有的音画偏移）。
 - 校准：波形缩放、定位、局部循环、慢速，标记所选歌词的首个发音 → `user_shift = marked − base`（每次重新计算，不叠加）；可数值微调、确认零偏移、中段／末段检查、撤销。
 - 检查：单元时间与异常提示，定位试听，数值或拖拽修改起止，锁定，撤销／重做，局部重跑（只生成候选结果，采用需手动确认）。
 
@@ -48,6 +49,7 @@ kara-align show work/song
 kara-align edit work/song <unit_id> --start 12950 --end 13120
 kara-align export work/song alignment           # alignment / prepared / project / csv / lrc-line / lrc-unit / lrc-calibrated
 kara-align mix work/song --vocal 20 --inst 100  # 人声保留 20% 的混音 WAV
+kara-align video work/song --vocal 20           # 以视频为原曲时：导出降低人声的视频
 kara-align package work/song song.kara.zip      # 便携项目包
 kara-align eval --ref ref.json --hyp base=a.json --hyp lrc=b.json   # 与人工标注比较
 ```

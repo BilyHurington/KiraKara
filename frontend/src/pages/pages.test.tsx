@@ -232,3 +232,58 @@ describe('studio dock', () => {
     expect(useApp.getState().waveHeight).toBe(WAVE_HEIGHT.default + 60);
   });
 });
+
+describe('video in / reduced-vocal video out', () => {
+  const withVideo = () => {
+    const pv = fixturePV();
+    const orig = pv.project.audio.find((a) => a.role === 'original')!;
+    pv.project.video = {
+      id: 'v1', sha256: 'abc', path: 'assets/abc.mp4', filename: 'clip.mp4', container: '.mp4', duration_ms: 16000,
+      width: 1920, height: 1080, fps: 29.97, video_codec: 'h264', audio_codec: 'aac', audio_offset_s: 0, audio_sha256: orig.sha256,
+    };
+    return pv;
+  };
+
+  it('the original upload accepts video files', async () => {
+    seedStore('input');
+    serverLike();
+    const { container } = renderUI(<InputPage />);
+    const inputs = [...container.querySelectorAll('input[type=file]')] as HTMLInputElement[];
+    expect(inputs.some((i) => i.accept.includes('.mp4') && i.accept.includes('video/*'))).toBe(true);
+  });
+
+  it('shows where the original audio came from', () => {
+    seedStore('input', withVideo());
+    serverLike();
+    renderUI(<InputPage />);
+    expect(screen.getByText(/来自视频 clip.mp4/)).toBeInTheDocument();
+  });
+
+  it('export offers the video button only with a video, and posts the mix settings', async () => {
+    seedStore('export');
+    serverLike();
+    const first = renderUI(<ExportPage />);
+    expect(screen.queryByRole('button', { name: /导出降低人声的视频/ })).toBeNull();
+    first.unmount();
+
+    const pv = withVideo();
+    pv.view.audio.vocals = { asset_id: 'x', available: true, duration_ms: 16000, sample_rate: 44100 };
+    pv.view.audio.instrumental = { asset_id: 'y', available: true, duration_ms: 16000, sample_rate: 44100 };
+    seedStore('export', pv);
+    const api = serverLike();
+    renderUI(<ExportPage />);
+    const btn = await screen.findByRole('button', { name: /导出降低人声的视频/ });
+    await userEvent.click(btn);
+    await waitFor(() => expect(api.find('POST', '/video/export')).toHaveLength(1));
+    expect(api.find('POST', '/video/export')[0].body).toMatchObject({ vocal_keep_pct: pv.project.mix.vocal_keep_pct });
+  });
+
+  it('the dock keeps only a volume control (no vocal / instrumental sliders)', () => {
+    seedStore('review');
+    serverLike();
+    renderUI(<StudioDock />);
+    expect(screen.queryByRole('textbox', { name: /人声保留/ })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /伴奏/ })).toBeNull();
+    expect(screen.getByRole('textbox', { name: /音量/ })).toBeInTheDocument();
+  });
+});

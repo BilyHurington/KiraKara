@@ -160,6 +160,22 @@ export interface MixSettings { vocal_keep_pct: number; instrumental_pct: number;
 
 export interface AiRoundtrip { id: string; created: string; snapshot_id: string; line_ids: string[]; status: string; applied_at: string | null }
 
+export interface VideoAsset {
+  id: string;
+  sha256: string;
+  path: string | null;
+  filename: string | null;
+  container: string;
+  duration_ms: number;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  video_codec: string | null;
+  audio_codec: string | null;
+  audio_offset_s: number;
+  audio_sha256: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -175,6 +191,7 @@ export interface Project {
   results: AlignmentResult[];
   active_result_id: string | null;
   mix: MixSettings;
+  video?: VideoAsset | null;
 }
 
 export interface ResultSummary {

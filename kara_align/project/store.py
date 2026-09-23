@@ -122,7 +122,7 @@ def load_project(project_dir: Path) -> Project:
 
 def refresh_asset_paths(project: Project, project_dir: Path) -> None:
     """Mark assets whose files are missing (path=None → UI asks for re-upload)."""
-    for a in project.audio:
+    for a in project.audio + ([project.video] if project.video else []):
         if a.path and not (project_dir / a.path).exists():
             a.path = None
         if a.path is None:
@@ -157,7 +157,7 @@ def export_package(project: Project, project_dir: Path, out_path: Path, include_
     with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(PROJECT_FILE, project_to_json(project))
         if include_audio:
-            for a in project.audio:
+            for a in project.audio + ([project.video] if project.video else []):
                 src = asset_abspath(project_dir, a.path)
                 if src and src.exists():
                     zf.write(src, arcname=str(PurePosixPath("assets") / src.name), compress_type=zipfile.ZIP_STORED)
