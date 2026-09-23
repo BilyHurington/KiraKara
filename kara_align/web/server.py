@@ -556,6 +556,14 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     # ------------------------------------------------------------------ static UI
 
+    @app.middleware("http")
+    async def _no_stale_ui(request: Request, call_next):
+        # UI files are small and local: always revalidate so an upgrade is picked up
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 

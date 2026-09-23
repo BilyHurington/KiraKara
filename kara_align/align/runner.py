@@ -104,7 +104,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             issues.append(Issue(code="calibration_unconfirmed", severity="info",
                                 message="global offset not confirmed; LRC times used as imported"))
 
-    prog(0.02, "preparing tokens")
+    prog(0.02, "准备 token")
     prep = prepare(doc, inp.profile, inp.tokenize, inp.supports_language)
     issues += prep.issues
     if inp.line_ids is not None:
@@ -115,7 +115,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
     selected = [lid for lid in prep.order if inp.line_ids is None or lid in inp.line_ids]
     voices = {lid: prep.lines[lid].voice for lid in prep.order}
 
-    prog(0.05, "acoustic scores")
+    prog(0.05, "读取声学分数")
     emissions: dict[str, Emission] = {role: inp.emission_for(role)}
     check_cancel()
     em = emissions[role]
@@ -141,13 +141,13 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
                         force_joint, extra_context)
 
     tasks = plan(line_ids=inp.line_ids)
-    prog(0.1, f"decoding {len(tasks)} task(s)")
+    prog(0.1, f"解码 {len(tasks)} 个任务")
     outcomes: dict[str, tuple[Task, TaskOutcome]] = {}
     for i, task in enumerate(tasks):
         o = decode(task, role)
         for lid in task.retained_line_ids:
             outcomes[lid] = (task, o)
-        prog(0.1 + 0.4 * (i + 1) / max(1, len(tasks)), f"decoded {i + 1}/{len(tasks)}")
+        prog(0.1 + 0.4 * (i + 1) / max(1, len(tasks)), f"已解码 {i + 1}/{len(tasks)}")
 
     # --- stitch: boundary / order conflicts between separately decoded tasks -> joint rerun
     resolved, unresolved = 0, []
@@ -220,7 +220,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
     check_issues_, coverage = chk.run_checks(units, lines, cfg.checks, voices)
     stab_issues: list[Issue] = []
     if inp.mode == "lrc" and tasks:
-        prog(0.55, "stability check")
+        prog(0.55, "稳定性检查")
         alt_cfg = cfg.decode.model_copy(update={"joint_context_lines": 0 if cfg.decode.joint_context_lines > 0 else 1})
         alt_tasks = plan(decode_cfg=alt_cfg, line_ids=inp.line_ids)[:MAX_STABILITY_TASKS]
         alt_starts: dict[str, Optional[int]] = {}
@@ -244,7 +244,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             flagged.append(lid)
     retry_report = None
     if flagged and cfg.retry.enabled:
-        prog(0.65, f"retrying {len(flagged)} line(s)")
+        prog(0.65, f"重试 {len(flagged)} 行")
         current = dict(outcomes)
 
         def evaluate(o: TaskOutcome, lid: str) -> tuple[list[Issue], float]:
@@ -336,7 +336,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
 
     all_issues = issues + dec_issues + check_issues_ + stab_issues + manual_issues + tail_issues
     all_issues = [i for i in all_issues if i.line_id is None or i.line_id in set(selected)]
-    prog(0.95, "assembling result")
+    prog(0.95, "汇总结果")
     asset = inp.audio_assets[role]
     snapshot = InputSnapshot(
         mode=inp.mode,

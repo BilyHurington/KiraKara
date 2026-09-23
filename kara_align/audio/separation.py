@@ -177,7 +177,7 @@ def separate(original_path, out_dir, preset: str = "bs-roformer", cancel=None,
     args = {"input": str(original_path), "out_dir": str(raw_dir), "model_filename": p.model_filename,
             "sample_rate": sr}
     if progress:
-        progress(0.05, f"loading separation model {p.model_filename}")
+        progress(0.05, f"加载分离模型 {p.model_filename}")
     proc = subprocess.Popen([python or sys.executable, "-c", _CHILD_SCRIPT, json.dumps(args)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     started = time.monotonic()
@@ -194,7 +194,7 @@ def separate(original_path, out_dir, preset: str = "bs-roformer", cancel=None,
                 proc.kill()
                 raise SeparationError(f"separation timed out after {timeout_s} s")
             if progress:
-                progress(min(0.9, 0.1 + (time.monotonic() - started) / 600.0), "separating")
+                progress(min(0.9, 0.1 + (time.monotonic() - started) / 600.0), "人声分离中")
             time.sleep(0.25)
         stdout, stderr = proc.communicate()
     finally:
@@ -214,7 +214,7 @@ def separate(original_path, out_dir, preset: str = "bs-roformer", cancel=None,
         "extra_outputs": [o.name for o in others],
     }
     if progress:
-        progress(0.92, "checking stem timeline")
+        progress(0.92, "检查分轨时间轴")
     outputs = {}
     stems = {}
     for role, raw in (("vocals", v_raw), ("instrumental", i_raw)):
@@ -234,7 +234,7 @@ def separate(original_path, out_dir, preset: str = "bs-roformer", cancel=None,
     }
     report["elapsed_s"] = round(time.monotonic() - started, 2)
     if progress:
-        progress(1.0, "done")
+        progress(1.0, "完成")
     return SeparationOutput(outputs["vocals"], outputs["instrumental"], report)
 
 

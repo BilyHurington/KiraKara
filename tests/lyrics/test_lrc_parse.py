@@ -47,7 +47,7 @@ def test_offset_sign_normalization():
     doc = parse_lyrics_text(LRC, mode="lrc").doc
     assert doc.embedded_offset_raw == "+500"
     assert doc.embedded_shift_ms == -500
-    assert "earlier" in doc.embedded_offset_note
+    assert "提前" in doc.embedded_offset_note
     neg = parse_lyrics_text("[offset:-250]\n[00:01.00]a", mode="lrc").doc
     assert neg.embedded_shift_ms == 250
 

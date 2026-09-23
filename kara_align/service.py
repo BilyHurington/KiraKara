@@ -67,7 +67,7 @@ class Workspace:
                 except ProjectError:
                     continue
                 p = h.project
-                out.append({"id": p.id, "name": p.name, "mode": p.mode, "updated": p.updated})
+                out.append({"id": d.name, "name": p.name, "mode": p.mode, "updated": p.updated})
         return sorted(out, key=lambda x: x["updated"], reverse=True)
 
     def create(self, name: str, mode: str = "plain") -> ProjectHandle:
@@ -86,6 +86,8 @@ class Workspace:
             if h is None:
                 d = self.root / pid
                 h = ProjectHandle(d, store.load_project(d))
+                # the directory name is the project's identity inside a workspace
+                h.project.id = pid
                 self._handles[pid] = h
             return h
 

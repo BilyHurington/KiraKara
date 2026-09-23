@@ -3,6 +3,15 @@
 const DEFERRED_PROPS = new Set(['value', 'checked', 'selected', 'disabled', 'indeterminate']);
 
 /** Create an element: h('div', {class: 'x', onclick: fn}, child, 'text', [more]) */
+// Native append() renders null/false as text; UI code passes optional
+// children as `cond ? node : null`, so skip empty children everywhere.
+for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+  const nativeAppend = proto.append;
+  proto.append = function (...nodes) {
+    return nativeAppend.apply(this, nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
+  };
+}
+
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   const deferred = [];

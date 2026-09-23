@@ -27,7 +27,7 @@ export function renderProjectBar() {
     sel,
     h('button', { onclick: () => { S.step = 'mode'; S.pid = null; S.pv = null; S.result = null; emit('project'); } }, '新建项目'),
     importBtn,
-    S.pid ? h('a', { class: 'button', href: ppath('/package?include_audio=1'), download: '', title: '下载项目包（含音频，便于迁移与分享）' }, '下载项目包') : null,
+    ...(S.pid ? [h('a', { class: 'button', href: ppath('/package?include_audio=1'), download: '', title: '下载项目包（含音频，便于迁移与分享）' }, '下载项目包')] : []),
   );
 }
 

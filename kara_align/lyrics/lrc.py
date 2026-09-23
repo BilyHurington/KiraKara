@@ -23,8 +23,8 @@ _META_TAG = re.compile(r"^\[([A-Za-z#][A-Za-z0-9_#-]*)\s*:(.*)\]\s*$")
 _LEADING_TAGS = re.compile(r"^(?:\s*\[\d{1,4}:\d{1,2}(?:[.:]\d{1,3})?\])+")
 
 OFFSET_NOTE = (
-    "[offset] follows the LRC convention: a positive value shows lyrics earlier. "
-    "Normalized once at import: embedded_shift_ms = -offset, added to each raw line start."
+    "[offset] 按 LRC 惯例解释：正值表示歌词提前显示。"
+    "导入时只规范化一次：embedded_shift_ms = -offset，加到每行原始句首上。"
 )
 
 
