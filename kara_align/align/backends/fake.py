@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 from ...interfaces import Emission, TokenizedUnit
-from ...models import BackendInfo
+from ...models import BackendInfo, stable_hash
 from ...timebase import FrameMap
 from .wav2vec2_ctc import tokenize_chars
 
@@ -44,7 +44,8 @@ class ScriptedBackend:
     def info(self) -> BackendInfo:
         return BackendInfo(name=self.name, model_id="scripted", model_revision="1", license="n/a",
                            profile=self.profile, sample_rate=self._sr, frame_hop_samples=self.hop,
-                           extra={"noise": self.noise, "seed": self.seed})
+                           extra={"noise": self.noise, "seed": self.seed,
+                                  "script": stable_hash(self.script)})
 
     def supports_language(self, lang: str) -> bool:
         return lang in self.languages
