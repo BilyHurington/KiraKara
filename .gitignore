@@ -1,0 +1,24 @@
+# design documents (kept local only)
+Karaoke-Aligner-high-level.md
+*.design.md
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# local data
+.kara_align/
+/work/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aiff
+!tests/data/**
+.DS_Store
