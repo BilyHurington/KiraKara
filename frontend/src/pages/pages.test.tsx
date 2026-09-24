@@ -187,6 +187,7 @@ describe('interactions', () => {
     const api = serverLike();
     Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => {}) } });
     renderUI(<EnhancePage />);
+    await userEvent.click(await screen.findByRole('tab', { name: /AI 注音/ }));
     await userEvent.click(await screen.findByRole('button', { name: /复制 AI 提示词/ }));
     await waitFor(() => expect(api.find('POST', '/ai/prompt')).toHaveLength(1));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('PROMPT TEXT');
@@ -194,6 +195,28 @@ describe('interactions', () => {
     fireEvent.change(reply, { target: { value: '{"format":"kara-align/reading-patch"}' } });
     await userEvent.click(screen.getByRole('button', { name: /^校验$/ }));
     await waitFor(() => expect(api.find('POST', '/ai/validate')).toHaveLength(1));
+  });
+
+  it('enhance: the three tasks are tabs with their status, and a draft survives switching', async () => {
+    localStorage.removeItem('kara.enhanceTab');
+    seedStore('enhance');
+    serverLike();
+    renderUI(<EnhancePage />);
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((t) => t.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
+    // separation is reachable without scrolling past the readings, and shows its state
+    const sep = screen.getByRole('tab', { name: /人声分离/ });
+    expect(sep).toHaveTextContent(/已有 人声 \+ 伴奏/);
+    expect(screen.queryByRole('button', { name: /开始分离/ })).toBeNull();
+    await userEvent.click(sep);
+    expect(screen.getByRole('button', { name: /开始分离/ })).toBeInTheDocument();
+    expect(localStorage.getItem('kara.enhanceTab')).toBe('separation');
+    // a pasted AI reply is still there after looking at the readings
+    await userEvent.click(screen.getByRole('tab', { name: /AI 注音/ }));
+    fireEvent.change(screen.getByPlaceholderText(/网页聊天的回复/), { target: { value: 'draft' } });
+    await userEvent.click(screen.getByRole('tab', { name: /读音与发音单元/ }));
+    await userEvent.click(screen.getByRole('tab', { name: /AI 注音/ }));
+    expect(screen.getByPlaceholderText(/网页聊天的回复/)).toHaveValue('draft');
   });
 
   it('mode: switching sends PATCH', async () => {
