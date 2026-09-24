@@ -308,3 +308,68 @@ describe('dock track switching', () => {
     act(() => player.setSource('original'));
   });
 });
+
+describe('karaoke subtitles page', () => {
+  const presets = () => ['classic', 'sakura'].map((name) => ({
+    name, label: name, description: '',
+    style: { ...structuredClone(DEFAULT_STYLE), preset: name, text: { ...DEFAULT_STYLE.text, color_sung: name === 'sakura' ? '#FF5C8A' : '#2F80ED' } },
+  }));
+  const DEFAULT_STYLE = {
+    version: 1, preset: 'classic',
+    layout: { position: 'bottom', lines: 2, arrangement: 'alternate', margin_v: 70, line_spacing: 26, margin_h: 140, alternate_indent: 240, shrink_long_lines: true, show_translation: false, translation_size_pct: 50 },
+    text: { font: '', size: 88, bold: true, color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 4.5, shadow: 2, shadow_color: '#000000', shadow_opacity: 45 },
+    ruby: { enabled: true, script: 'hiragana', target: 'kanji', size_pct: 45, gap: 2, fit: 'widen', follow_colors: true, font: '', color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 3 },
+    timing: { lead_in_ms: 1000, hold_ms: 500, highlight: 'sweep', early_show: true, early_max_ms: 4000 },
+  };
+
+  function karaokeServer() {
+    const api = serverLike();
+    const base = api.fn.getMockImplementation()!;
+    api.fn.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      const json = (x: unknown) => new Response(JSON.stringify(x), { status: 200 });
+      if (u === '/api/fonts') return json({ default: 'Hiragino Sans', families: [{ family: 'Hiragino Sans', names: ['Hiragino Sans'], bold: true }] });
+      if (u === '/api/karaoke/presets') return json(presets());
+      if (u.endsWith('/karaoke') && (!init || init.method === 'GET' || !init.method)) return json(DEFAULT_STYLE);
+      if (u.endsWith('/karaoke/preview')) {
+        api.calls.push({ method: 'POST', url: u, body: JSON.parse(String(init!.body)) });
+        return new Response(new Blob(['png']), { status: 200, headers: { 'Content-Type': 'image/png' } });
+      }
+      if (u.endsWith('/karaoke/burn')) {
+        api.calls.push({ method: 'POST', url: u, body: JSON.parse(String(init!.body)) });
+        return json({ id: 'jb', kind: 'burn', project_id: PID, status: 'queued', progress: 0, message: '', error: null, created: 'z', finished: null, output: null });
+      }
+      return base(url, init);
+    });
+    return api;
+  }
+
+  it('renders, previews the selected line and saves preset changes', async () => {
+    seedStore('karaoke');
+    const api = karaokeServer();
+    (URL as any).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = vi.fn();
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    expect(await screen.findByRole('heading', { level: 1, name: '卡拉OK字幕' })).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.some((c) => c.url.endsWith('/karaoke/preview'))).toBe(true), { timeout: 2000 });
+    const first = api.calls.find((c) => c.url.endsWith('/karaoke/preview'))!;
+    expect(first.body.style.text.size).toBe(88);
+    expect(first.body.t_ms).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole('button', { name: /sakura/ }));
+    await waitFor(() => expect(api.find('PUT', '/karaoke').length).toBeGreaterThan(0), { timeout: 2000 });
+    expect(api.find('PUT', '/karaoke').at(-1)!.body.text.color_sung).toBe('#FF5C8A');
+    expect(api.find('PUT', '/karaoke').at(-1)!.body.layout.lines).toBe(2); // layout kept
+  });
+
+  it('burn sends the chosen options', async () => {
+    seedStore('karaoke');
+    const api = karaokeServer();
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    await userEvent.click(await screen.findByRole('button', { name: /一键烧录/ }));
+    await waitFor(() => expect(api.calls.some((c) => c.url.endsWith('/karaoke/burn'))).toBe(true));
+    expect(api.calls.find((c) => c.url.endsWith('/karaoke/burn'))!.body).toEqual({ background: 'auto', audio: 'original', quality: 'standard' });
+  });
+});

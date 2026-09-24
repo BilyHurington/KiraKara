@@ -15,6 +15,7 @@ import { EnhancePage } from '@/pages/Enhance';
 import { CalibratePage } from '@/pages/Calibrate';
 import { AlignPage } from '@/pages/Align';
 import { ReviewPage } from '@/pages/Review';
+import { KaraokePage } from '@/pages/Karaoke';
 import { ExportPage } from '@/pages/Export';
 
 const PAGES = {
@@ -24,6 +25,7 @@ const PAGES = {
   calibrate: CalibratePage,
   align: AlignPage,
   review: ReviewPage,
+  karaoke: KaraokePage,
   export: ExportPage,
 };
 

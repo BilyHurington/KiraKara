@@ -6,7 +6,7 @@ import { create } from 'zustand';
 import { api } from '@/lib/api';
 import type { AlignmentResult, Info, Job, ManualEdit, ProjectListItem, ProjectView } from '@/lib/types';
 
-export type Step = 'mode' | 'input' | 'enhance' | 'calibrate' | 'align' | 'review' | 'export';
+export type Step = 'mode' | 'input' | 'enhance' | 'calibrate' | 'align' | 'review' | 'karaoke' | 'export';
 
 export const STEPS: { id: Step; label: string; hint: string; optional?: boolean; lrcOnly?: boolean }[] = [
   { id: 'mode', label: '选择模式', hint: '普通 / LRC 增强' },
@@ -15,6 +15,7 @@ export const STEPS: { id: Step; label: string; hint: string; optional?: boolean;
   { id: 'calibrate', label: '首音校准', hint: '全局偏移', lrcOnly: true },
   { id: 'align', label: '对齐', hint: '运行模型' },
   { id: 'review', label: '人工检查', hint: '修正与锁定' },
+  { id: 'karaoke', label: '卡拉OK字幕', hint: '样式 · 预览 · 烧录', optional: true },
   { id: 'export', label: '导出', hint: 'JSON · LRC · 混音' },
 ];
 
@@ -261,7 +262,7 @@ export function trackJob(job: Job, opts: { label: string; onDone?: (j: Job) => v
   return job;
 }
 
-const JOB_LABELS: Record<string, string> = { align: '对齐', separate: '人声分离', mix: '混音导出' };
+const JOB_LABELS: Record<string, string> = { align: '对齐', separate: '人声分离', mix: '混音导出', video: '视频导出', burn: '字幕烧录' };
 
 /** Re-attach to jobs still running on the server (e.g. after a page reload). */
 export async function resumeJobs(pid: string) {

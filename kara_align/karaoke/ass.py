@@ -251,6 +251,36 @@ def _karaoke(parts: list[Part], t0: int, tag: str) -> str:
     return "".join(out)
 
 
+def chunk_widths(chunks: list[Chunk], m_main, m_ruby, ruby_size: float, fit: str) -> list[float]:
+    """Width of each chunk on the line.
+
+    A ruby wider than its lyric may overhang a neighbour that has no ruby of
+    its own (usually kana) by up to one ruby character on each side, as in
+    normal Japanese typesetting. With ``fit == "widen"`` the lyric is spaced
+    out only by what is still needed, so a reading never sits over another
+    kanji's reading; ``"overflow"`` never widens.
+    """
+    base = [m_main.width(c.base_text) for c in chunks]
+    if fit != "widen" or m_ruby is None:
+        return base
+    out = []
+    for i, (c, bw) in enumerate(zip(chunks, base)):
+        if not c.ruby:
+            out.append(bw)
+            continue
+        need = m_ruby.width(c.ruby_text) + ruby_size * 0.1 - bw
+        if need <= 0:
+            out.append(bw)
+            continue
+        # line edges are free too: nothing to collide with there
+        left_free = i == 0 or not chunks[i - 1].ruby
+        right_free = i == len(chunks) - 1 or not chunks[i + 1].ruby
+        # the ruby is centred, so the overhang is symmetric: limited by the tighter side
+        allowance = ruby_size if (left_free and right_free) else 0.0
+        out.append(bw + max(0.0, need - 2 * allowance))
+    return out
+
+
 def _unit_times(result: AlignmentResult) -> dict[str, tuple[Optional[int], Optional[int]]]:
     return {u.unit_id: (u.start_ms, u.end_ms) for u in result.units}
 
@@ -329,11 +359,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     events: list[str] = []
     tag = "kf" if style.timing.highlight == "sweep" else "k"
     for ll in laid:
-        widths = []
-        for c in ll.chunks:
-            bw = m_main.width(c.base_text)
-            rw = (m_ruby.width(c.ruby_text) + ruby_size * 0.15) if (c.ruby and m_ruby) else 0.0
-            widths.append(max(bw, rw) if rb.fit == "widen" else bw)
+        widths = chunk_widths(ll.chunks, m_main, m_ruby, ruby_size, rb.fit)
         line_w = sum(widths) or 1.0
         avail = W - 2 * margin_h
         scale = min(1.0, avail / line_w) if lay.shrink_long_lines else 1.0
@@ -343,7 +369,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         align = "center"
         if lay.arrangement == "alternate" and n > 1:
             align = "left" if ll.slot == 0 else ("right" if ll.slot == n - 1 else "center")
-        x0 = {"left": margin_h, "right": W - margin_h - line_w, "center": (W - line_w) / 2}[align]
+        indent = lay.alternate_indent * k if align != "center" else 0.0
+        free = max(0.0, avail - line_w)  # room left inside the margins
+        inset = min(indent, free)  # a long line slides back toward its edge
+        x0 = {"left": margin_h + inset, "right": W - margin_h - inset - line_w, "center": (W - line_w) / 2}[align]
         slot_top = block_top + ll.slot * (slot_h + spacing)
         main_y = slot_top + ((ruby_size + gap) if has_ruby else 0) * 1.0 + main_size
         # shrunk lines keep their bottom edge where it was

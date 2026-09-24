@@ -30,6 +30,7 @@ kara-align serve            # http://127.0.0.1:8765
 - 导出：人声保留比例在“导出”页设置（播放器的“自定义混音”按同一设置试听）；以视频为原曲时可直接导出降低人声的视频（画面不重新编码，声音保持原有的音画偏移）。
 - 校准：波形缩放、定位、局部循环、慢速，标记所选歌词的首个发音 → `user_shift = marked − base`（每次重新计算，不叠加）；可数值微调、确认零偏移、中段／末段检查、撤销。
 - 检查：单元时间与异常提示，定位试听，数值或拖拽修改起止，锁定，撤销／重做，局部重跑（只生成候选结果，采用需手动确认）。
+- 卡拉OK字幕：4 个即用预设；布局（靠顶/靠底、1–3 行、左右交替/居中、边距、行距、交替行向中间缩进）、歌词样式（字体、字号、颜色、描边、阴影、扫光方式）、注音（平假名/片假名/罗马音，仅汉字/全部，送假名自动分开，过宽时加宽歌词或允许超出），可在歌词下方显示翻译；任意时刻预览完整画面（与烧录同一 libass 渲染器，无视频时纯黑）；导出 ASS 或一键烧录成 MP4（原视频或纯黑背景，原声 / 降低人声 / 无声）。设计见 [`docs/karaoke.md`](docs/karaoke.md)。
 
 ## CLI 示例
 
@@ -50,6 +51,8 @@ kara-align edit work/song <unit_id> --start 12950 --end 13120
 kara-align export work/song alignment           # alignment / prepared / project / csv / lrc-line / lrc-unit / lrc-calibrated
 kara-align mix work/song --vocal 20 --inst 100  # 人声保留 20% 的混音 WAV
 kara-align video work/song --vocal 20           # 以视频为原曲时：导出降低人声的视频
+kara-align export work/song karaoke-ass         # 卡拉OK字幕（样式在 WebUI 设置）
+kara-align burn work/song --audio mix           # 烧录卡拉OK字幕视频（无视频时纯黑背景）
 kara-align package work/song song.kara.zip      # 便携项目包
 kara-align eval --ref ref.json --hyp base=a.json --hyp lrc=b.json   # 与人工标注比较
 ```

@@ -525,7 +525,10 @@ class KaraokeLayout(_Base):
     arrangement: Literal["alternate", "center"] = "alternate"
     margin_v: int = 70  # px from the top / bottom edge
     line_spacing: int = 26  # px between stacked lines
-    margin_h: int = 140  # px left and right
+    margin_h: int = 140  # px left and right (the widest a line may get)
+    # alternating lines: extra inset toward the centre for lines that fit, so two
+    # short lines are not pinned to opposite edges (long lines use the full width)
+    alternate_indent: int = 240
     shrink_long_lines: bool = True  # scale down lines wider than the frame
     show_translation: bool = False
     translation_size_pct: int = 50

@@ -68,7 +68,7 @@ class JobManager:
                 if on_success is not None:
                     out = on_success(job, out)
                 job.output = out
-                self._finish(job, "succeeded", message=job.message or "完成")
+                self._finish(job, "succeeded", message="完成")
             except Cancelled:
                 self._finish(job, "cancelled", message="已取消")
             except Exception as e:  # report the real failure reason

@@ -229,3 +229,59 @@ def test_preview_and_burn(tmp_path):
     info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
                            "-show_entries", "format=duration", "-of", "json", str(path)], capture_output=True, text=True)
     assert '"video"' in info.stdout and '"audio"' in info.stdout and '"width": 1920' in info.stdout
+
+
+class _FixedMeasurer:
+    """1 lyric char = 100 px, 1 ruby char = 45 px."""
+
+    def __init__(self, per_char):
+        self.per_char = per_char
+
+    def width(self, text):
+        return len(text) * self.per_char
+
+
+def test_ruby_overhangs_kana_but_never_another_reading():
+    main, ruby = _FixedMeasurer(100), _FixedMeasurer(45)
+    mk = lambda base, rb="": A.Chunk([A.Part(base, 0, 1)], [A.Part(rb, 0, 1)] if rb else [])
+    # 新(あたら) between kana: 135 px of ruby over 100 px may overhang the kana
+    w = A.chunk_widths([mk("は"), mk("新", "あたら"), mk("しい")], main, ruby, 45, "widen")
+    assert w[1] == 100
+    # two kanji with readings side by side: widen so readings do not collide
+    w = A.chunk_widths([mk("新", "あたら"), mk("制", "せいふく")], main, ruby, 45, "widen")
+    assert w[0] > 100 and w[1] > 100
+    # at the start of a line the ruby may overhang into the margin
+    assert A.chunk_widths([mk("新", "あたら"), mk("しい")], main, ruby, 45, "widen")[0] == 100
+    # overflow never widens
+    assert A.chunk_widths([mk("制", "せいふく")], main, ruby, 45, "overflow") == [100]
+
+
+def _main_x(text):
+    xs = [float(re.search(r"\\pos\(([\d.]+),", l).group(1)) for l in text.splitlines()
+          if l.startswith("Dialogue") and ",KMain," in l]
+    return min(xs), max(xs)
+
+
+def test_alternate_indent_moves_short_lines_toward_centre(tmp_path):
+    h = _project(tmp_path)
+    st = h.project.karaoke.model_copy(deep=True)
+    st.layout.alternate_indent = 0
+    lo0, hi0 = _main_x(A.build_ass(h.project, h.project.result(), st)[0])
+    st.layout.alternate_indent = 240
+    lo1, hi1 = _main_x(A.build_ass(h.project, h.project.result(), st)[0])
+    assert lo1 - lo0 == pytest.approx(240, abs=0.2)  # upper (left) line moved right
+    assert hi0 - hi1 == pytest.approx(240, abs=0.2)  # lower (right) line moved left
+    st.layout.arrangement = "center"  # indent only applies to alternating lines
+    lo2, _ = _main_x(A.build_ass(h.project, h.project.result(), st)[0])
+    st.layout.alternate_indent = 0
+    assert _main_x(A.build_ass(h.project, h.project.result(), st)[0])[0] == lo2
+
+
+def test_long_line_slides_back_instead_of_shrinking(tmp_path):
+    h = _project(tmp_path)
+    st = h.project.karaoke.model_copy(deep=True)
+    st.layout.alternate_indent = 5000  # far more than any line has room for
+    text, warnings = A.build_ass(h.project, h.project.result(), st)
+    assert not any("缩小" in w for w in warnings)  # indent never causes shrinking
+    lo, hi = _main_x(text)
+    assert 140 < lo and hi < 1920 - 140  # still inside the margins

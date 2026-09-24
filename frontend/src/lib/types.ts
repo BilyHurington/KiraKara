@@ -176,6 +176,29 @@ export interface VideoAsset {
   audio_sha256: string;
 }
 
+export interface KaraokeStyle {
+  version: number;
+  preset: string;
+  layout: {
+    position: 'bottom' | 'top'; lines: number; arrangement: 'alternate' | 'center';
+    margin_v: number; line_spacing: number; margin_h: number; alternate_indent: number; shrink_long_lines: boolean;
+    show_translation: boolean; translation_size_pct: number;
+  };
+  text: {
+    font: string; size: number; bold: boolean; color_unsung: string; color_sung: string; outline_color: string;
+    outline: number; shadow: number; shadow_color: string; shadow_opacity: number;
+  };
+  ruby: {
+    enabled: boolean; script: 'hiragana' | 'katakana' | 'romaji'; target: 'kanji' | 'all'; size_pct: number; gap: number;
+    fit: 'widen' | 'overflow'; follow_colors: boolean; font: string; color_unsung: string; color_sung: string;
+    outline_color: string; outline: number;
+  };
+  timing: { lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number };
+}
+
+export interface KaraokePreset { name: string; label: string; description: string; style: KaraokeStyle }
+export interface FontFamily { family: string; names: string[]; bold: boolean }
+
 export interface Project {
   id: string;
   name: string;
@@ -192,6 +215,7 @@ export interface Project {
   active_result_id: string | null;
   mix: MixSettings;
   video?: VideoAsset | null;
+  karaoke?: KaraokeStyle;
 }
 
 export interface ResultSummary {

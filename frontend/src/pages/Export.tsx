@@ -1,7 +1,7 @@
 // Step 7: exports. alignment.json is the complete standard output; other
 // formats may lose information and show explicit loss warnings.
 
-import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, Music2, Package, Sparkles } from 'lucide-react';
+import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, Music2, Package, Sparkles, Subtitles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
@@ -18,6 +18,7 @@ const FORMAT_META: Record<string, { icon: typeof FileJson; group: 'result' | 'ly
   csv: { icon: FileSpreadsheet, group: 'result' },
   'lrc-line': { icon: FileText, group: 'result', note: '模型对齐后聚合的行级 LRC' },
   'lrc-unit': { icon: FileText, group: 'result', note: '模型对齐后的逐单元（增强）LRC' },
+  'karaoke-ass': { icon: Subtitles, group: 'result', note: '卡拉OK字幕：样式在“卡拉OK字幕”页设置；有视频时时间与原视频对齐' },
   prepared: { icon: FileJson, group: 'lyrics', note: '可编辑的歌词与读音，可重新导入' },
   'lrc-calibrated': { icon: FileText, group: 'lyrics', note: '仅校准原锚点（整体平移）的 LRC，不含模型结果；已清除 [offset]' },
   project: { icon: Package, group: 'project' },
@@ -37,7 +38,7 @@ export function ExportPage() {
   return (
     <>
       <PageHeader
-        eyebrow="第 7 步"
+        eyebrow="第 8 步"
         title="导出"
         description="对外时间统一为原音频起点起算的整数毫秒，导出不再叠加任何偏移。不能表达读音映射、终点、间隙或失败信息的格式会提示损失。"
       />
