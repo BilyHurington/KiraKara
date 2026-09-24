@@ -571,6 +571,64 @@ def ai_validate(h: ProjectHandle, text: str) -> dict:
         return {"report_id": report_id, "report": report.to_dict()}
 
 
+def ai_auto(h: ProjectHandle, line_ids: Optional[list[str]] = None, *, cfg=None,
+            cancel: Optional[CancelToken] = None,
+            progress: Optional[Callable[[float, str], None]] = None) -> dict:
+    """AI readings without copy/paste: the same prompt is sent as one message to
+    the configured CLI / API and the reply goes through the same validation.
+
+    Nothing is applied here; the caller previews and applies the report like a
+    pasted reply.  One retry is made when the reply is unusable, quoting the
+    problems found.
+    """
+    from . import settings as app_settings
+    from .reading.ai import PatchParseError, extract_json
+    from .reading.llm import LlmError, ask
+
+    cfg = cfg or app_settings.load().ai
+    prog = progress or (lambda f, m="": None)
+    out = ai_prompt(h, line_ids)
+    prompt = out["prompt"]
+    label = {"claude": "Claude Code", "codex": "Codex", "openai": "API"}.get(cfg.provider, cfg.provider)
+    attempts: list[dict] = []
+    result: Optional[dict] = None
+    for attempt in range(2):
+        prog(0.05 + 0.45 * attempt, f"等待 {label} 回复…")
+
+        def waiting(s: float, a=attempt) -> None:
+            prog(min(0.45 + 0.45 * a, 0.05 + 0.45 * a + s / 400), f"等待 {label} 回复 · {int(s)} 秒")
+
+        try:
+            reply = ask(cfg, prompt, cancel=cancel, on_wait=waiting)
+        except LlmError as e:
+            raise ServiceError(str(e)) from e
+        attempts.append({"provider": reply.provider, "model": reply.model, "elapsed_s": reply.elapsed_s,
+                         "cost_usd": reply.cost_usd})
+        problems: list[str] = []
+        try:
+            extract_json(reply.text)
+            result = ai_validate(h, reply.text)
+            rep = result["report"]
+            problems = list(rep.get("errors") or [])
+            bad = [lr for lr in rep.get("lines", []) if lr.get("status") in ("invalid", "unknown_line", "duplicate")]
+            problems += [f"{lr['line_id']}: {'; '.join(lr.get('reasons') or [])}" for lr in bad]
+            if rep.get("missing_line_ids"):
+                problems.append("缺少这些行：" + ", ".join(rep["missing_line_ids"]))
+        except (PatchParseError, ServiceError) as e:
+            problems = [f"回复不是可解析的 JSON：{e}"]
+        if not problems or attempt == 1:
+            break
+        prompt = (out["prompt"] + "\n\n上一次的回复有以下问题，请修正后重新输出完整的 JSON（所有行，不要省略）：\n"
+                  + "\n".join(f"- {p}" for p in problems[:30]))
+    if result is None:
+        raise ServiceError("AI 两次回复都无法解析为注音 JSON，请改用网页聊天或检查模型")
+    prog(1.0, "完成")
+    result["meta"] = {"provider": cfg.provider, "attempts": attempts,
+                      "cost_usd": round(sum(a["cost_usd"] or 0 for a in attempts), 4)
+                      if any(a["cost_usd"] is not None for a in attempts) else None}
+    return result
+
+
 def _roundtrip_for(p: Project, obj: Any) -> Optional[AiRoundtrip]:
     snap = obj.get("snapshot") if isinstance(obj, dict) else None
     for rt in reversed(p.ai_roundtrips):

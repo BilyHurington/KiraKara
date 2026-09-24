@@ -1,14 +1,16 @@
 // AI reading round trip through any web chat: copy prompt → paste reply →
 // validate → preview diff → apply selected lines. No LLM API, no key.
 
-import { ArrowRight, Bot, ClipboardCopy, ClipboardPaste, FileCheck2, History, RotateCcw } from 'lucide-react';
+import { ArrowRight, Bot, ClipboardCopy, ClipboardPaste, FileCheck2, History, RotateCcw, Settings2, Wand2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtRelative, readFileText } from '@/lib/format';
-import type { PatchLine, ProjectView } from '@/lib/types';
-import { ppath, run, setPV, toast, useProject } from '@/store/app';
+import type { Job, PatchLine, ProjectView } from '@/lib/types';
+import { cancelJob, ppath, run, setPV, toast, trackJob, useJob, useProject } from '@/store/app';
+import { loadSettings, useSimple } from '@/store/simple';
+import { AiSettingsForm } from '@/components/AiSettingsForm';
 import {
-  Badge, Button, Callout, Card, CardBody, CardHeader, DropZone, Segmented, Textarea,
+  Badge, Button, Callout, Card, CardBody, CardHeader, DropZone, Progress, Segmented, Textarea,
 } from '@/components/ui';
 
 interface Report {
@@ -83,9 +85,7 @@ export function AiRoundtripCard() {
   const validate = () => run(async () => {
     setBusyValidate(true);
     try {
-      const out = await api.post<{ report_id: string; report: Report }>(ppath('/ai/validate'), { text: reply });
-      setReport({ id: out.report_id, report: out.report });
-      setSelected(new Set(out.report.lines.filter((l) => l.status === 'ok').map((l) => l.line_id)));
+      showReport(await api.post<{ report_id: string; report: Report }>(ppath('/ai/validate'), { text: reply }));
     } finally {
       setBusyValidate(false);
     }
@@ -108,6 +108,11 @@ export function AiRoundtripCard() {
     }
   }, '应用失败');
 
+  const showReport = (out: { report_id: string; report: Report }) => {
+    setReport({ id: out.report_id, report: out.report });
+    setSelected(new Set(out.report.lines.filter((l) => l.status === 'ok').map((l) => l.line_id)));
+  };
+
   const lineText = (id: string) => project.lyrics.lines.find((l) => l.id === id)?.text ?? id;
   const lineIndex = (id: string) => project.lyrics.lines.findIndex((l) => l.id === id) + 1;
 
@@ -115,11 +120,15 @@ export function AiRoundtripCard() {
     <Card>
       <CardHeader
         icon={<Bot className="size-4" />}
-        title="AI 注音（网页聊天往返）"
-        description="程序生成包含行 ID、原文、已有读音和返回格式的提示词；你把它粘贴到任意网页聊天，再把得到的 JSON 贴回来。回传只作为注音补丁，校验并预览后才会应用。"
+        title="AI 注音"
+        description="让 AI 检查每个片段的读音。可以一键交给本机的 Claude Code / Codex 或 API，也可以复制提示词到任意网页聊天再贴回结果。AI 的回复只作为注音补丁：校验并预览后才会应用，不能修改时间、偏移或锁定的读音。"
       />
       <CardBody className="space-y-6">
-        <Callout tone="info">不接入任何 LLM API，也不需要密钥；程序不会自动操作第三方网页。AI 不能修改时间、偏移或锁定的读音。</Callout>
+        <AutoAi scope={scope} setScope={setScope} total={sung.length} uncertainIds={uncertainIds} onReport={showReport} />
+
+        <div className="flex items-center gap-3 text-xs font-medium text-subtle">
+          <span className="h-px flex-1 bg-line" />或者：网页聊天往返（复制提示词 → 粘贴回复）<span className="h-px flex-1 bg-line" />
+        </div>
 
         {/* step 1 */}
         <Step n={1} title="生成并复制提示词" done={!!prompt}>
@@ -217,6 +226,84 @@ export function AiRoundtripCard() {
         )}
       </CardBody>
     </Card>
+  );
+}
+
+const PROVIDER_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', openai: 'API' };
+
+/** One click: the server sends the prompt to the configured CLI / API and validates the reply. */
+function AutoAi({ scope, setScope, total, uncertainIds, onReport }: {
+  scope: 'all' | 'uncertain'; setScope: (s: 'all' | 'uncertain') => void; total: number; uncertainIds: string[];
+  onReport: (out: { report_id: string; report: Report }) => void;
+}) {
+  const settings = useSimple((s) => s.settings);
+  const job = useJob('ai');
+  const [editing, setEditing] = useState(false);
+  const [meta, setMeta] = useState<string | null>(null);
+  const running = !!job && (job.status === 'queued' || job.status === 'running');
+  useEffect(() => { if (!settings) void run(() => loadSettings()); }, [settings]);
+  if (!settings) return null;
+  const ai = settings.ai;
+  const configured = ai.provider !== 'none';
+
+  const start = () => run(async () => {
+    setMeta(null);
+    const body = scope === 'uncertain' ? { line_ids: uncertainIds } : {};
+    const j = await api.post<Job>(ppath('/ai/auto'), body);
+    trackJob(j, {
+      label: 'AI 注音',
+      onDone: (d) => {
+        const out = d.output as { report_id: string; report: Report; meta?: { attempts: { elapsed_s: number; model: string }[]; cost_usd: number | null } } | null;
+        if (d.status !== 'succeeded' || !out) return;
+        onReport(out);
+        const m = out.meta;
+        if (m) {
+          const secs = m.attempts.reduce((a, x) => a + x.elapsed_s, 0);
+          const model = m.attempts.at(-1)?.model;
+          setMeta(`${Math.round(secs)} 秒${model ? ` · ${model}` : ''}${m.cost_usd != null ? ` · $${m.cost_usd.toFixed(3)}` : ''}${m.attempts.length > 1 ? ' · 自动重试了一次' : ''}`);
+        }
+      },
+    });
+  }, '无法开始 AI 注音');
+
+  return (
+    <section className="rounded-xl border border-accent/30 bg-accent-soft/30 p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Wand2 className="size-4 text-accent" />
+        <span className="text-sm font-semibold">一键 AI 注音</span>
+        {configured && (
+          <Badge tone="accent">{PROVIDER_LABEL[ai.provider]}{ai.model ? ` · ${ai.model}` : ''}</Badge>
+        )}
+        <Button size="xs" variant="ghost" icon={editing ? <X className="size-3.5" /> : <Settings2 className="size-3.5" />}
+          onClick={() => setEditing(!editing)}>{editing ? '收起' : configured ? '更改' : '设置'}</Button>
+      </div>
+      {(editing || !configured) && (
+        <div className="mt-3 rounded-lg bg-surface p-3">
+          {!configured && <p className="mb-3 text-xs text-muted">选择一个 AI：本机已登录的 Claude Code / Codex 命令，或 OpenAI 兼容 API。设置对所有项目通用。</p>}
+          <AiSettingsForm compact />
+        </div>
+      )}
+      {configured && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Segmented<'all' | 'uncertain'> size="sm" value={scope} onChange={setScope} options={[
+            { value: 'all', label: `全部 ${total} 行` },
+            { value: 'uncertain', label: `仅待确认 ${uncertainIds.length} 行`, disabled: uncertainIds.length === 0 },
+          ]} />
+          <Button variant="primary" size="sm" icon={<Wand2 className="size-4" />} loading={running} disabled={total === 0} onClick={start}>
+            开始 AI 注音
+          </Button>
+          {running && (
+            <>
+              <Progress value={job!.progress} className="w-32" />
+              <span className="text-xs text-muted">{job!.message}</span>
+              <Button size="xs" variant="ghost" onClick={() => run(() => cancelJob(job!.id))}>取消</Button>
+            </>
+          )}
+          {!running && meta && <span className="text-xs text-muted">已收到回复：{meta}；在下方第 3 步预览并应用</span>}
+          {!running && job?.status === 'failed' && <span className="text-xs text-danger">{job.error}</span>}
+        </div>
+      )}
+    </section>
   );
 }
 

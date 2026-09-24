@@ -10,6 +10,7 @@ import { ArrowRight, Bot, Languages, Loader2, Scissors } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
 import { setStep, useApp, useJob, useProject } from '@/store/app';
+import { useSimple } from '@/store/simple';
 import { Button, PageHeader } from '@/components/ui';
 import { AiRoundtripCard } from './enhance/AiRoundtrip';
 import { ReadingsCard } from './enhance/Readings';
@@ -33,6 +34,8 @@ export function EnhancePage() {
   const project = useProject()!;
   const info = useApp((s) => s.info);
   const sepJob = useJob('separate');
+  const aiJob = useJob('ai');
+  const aiProvider = useSimple((s) => s.settings?.ai.provider ?? 'none');
   const [tab, setTabState] = useState<Task>(loadTab);
   const setTab = (t: Task) => {
     setTabState(t);
@@ -63,11 +66,14 @@ export function EnhancePage() {
             : { status: `${readings.lines} 行 · 读音已就绪`, tone: 'ok' as Tone }),
     },
     {
-      id: 'ai', icon: <Bot className="size-4" />, title: 'AI 注音（网页聊天）',
-      ...(lastRt ? {
+      id: 'ai', icon: <Bot className="size-4" />, title: 'AI 注音',
+      ...(aiJob && (aiJob.status === 'queued' || aiJob.status === 'running') ? {
+        status: <span className="flex items-center gap-1.5"><Loader2 className="size-3 animate-spin" />等待 AI 回复</span>,
+        tone: 'accent' as Tone,
+      } : lastRt ? {
         status: `上次${RT_STATUS[lastRt.status] ?? lastRt.status} · ${fmtRelative(lastRt.applied_at ?? lastRt.created)}`,
         tone: (lastRt.status === 'applied' ? 'ok' : 'accent') as Tone,
-      } : { status: '未使用 · 复制提示词到任意聊天', tone: 'neutral' as Tone }),
+      } : { status: aiProvider !== 'none' ? '未使用 · 可一键交给 AI' : '未使用', tone: 'neutral' as Tone }),
     },
     {
       id: 'separation', icon: <Scissors className="size-4" />, title: '人声分离',

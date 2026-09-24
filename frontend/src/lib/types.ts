@@ -312,3 +312,40 @@ export interface PatchLine {
 export interface PatchReport { ok: boolean; snapshot_match: boolean; warnings: string[]; errors: string[]; lines: PatchLine[]; missing_line_ids?: string[] }
 
 export interface ExportInline { filename: string; media_type: string; content: string; warnings: string[] }
+
+// ------------------------------------------------------------------ app settings / simple mode
+
+export type AiProviderId = 'none' | 'claude' | 'codex' | 'openai';
+
+export interface AppSettings {
+  version: number;
+  ai: {
+    provider: AiProviderId; model: string; base_url: string; api_key_env: string; timeout_s: number;
+    has_api_key: boolean; env_key_present: boolean;
+  };
+  simple: {
+    default_mode: Mode; ai_readings: boolean; separate: boolean; separation_preset: string;
+    separation_device: 'auto' | 'cpu'; karaoke_preset: string; ruby: boolean;
+    ruby_script: 'hiragana' | 'katakana' | 'romaji'; auto_export: boolean;
+    video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high';
+  };
+}
+
+/** Partial update for PUT /api/settings (api_key / clear_api_key are write-only). */
+export interface SettingsPatch {
+  ai?: Partial<AppSettings['ai']> & { api_key?: string; clear_api_key?: boolean };
+  simple?: Partial<AppSettings['simple']>;
+}
+
+export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }
+
+export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
+
+export interface PipelineStage { key: string; label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; progress: number; message: string }
+
+export interface PipelineTask {
+  id: string; created: string; finished: string | null; name: string; mode: Mode; media_filename: string;
+  lyrics_kind: 'link' | 'text'; lyrics_input: string; status: TaskStatus; project_id: string | null;
+  stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
+  warnings: string[]; outputs: { video?: { filename: string; url: string } };
+}

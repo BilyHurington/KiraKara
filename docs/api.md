@@ -116,3 +116,20 @@ A local rerun (`align` with `line_ids`) creates a new partial result with `paren
 | GET | `/api/projects/{pid}/export/{fmt}?result_id=` | `{filename, media_type, content, warnings}` |
 
 `fmt` ∈ `alignment, prepared, project, csv, lrc-line, lrc-unit, lrc-calibrated`; stems via `/audio/{asset_id}/playback.wav`, mix via `/mix/export`.
+
+## App settings, AI and the simple-mode task queue
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `/api/settings` | – | `AppSettings` (`ai.api_key` is never returned; `ai.has_api_key`, `ai.env_key_present` instead) |
+| PUT | `/api/settings` | partial `{ai?, simple?}`; `ai.api_key` replaces the key only when non-empty, `ai.clear_api_key: true` removes it | `AppSettings` |
+| GET | `/api/ai/providers?refresh=0` | – | `[{id: "claude"\|"codex"\|"openai", label, available, version, detail}]` |
+| POST | `/api/ai/test` | optional overrides of the AI settings | `{ok, reply?, model?, elapsed_s?, cost_usd?, error?}` |
+| POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = `/ai/validate` response + `meta {provider, attempts, cost_usd}`; nothing applied) |
+| GET | `/api/tasks` | – | `[PipelineTask]` newest first |
+| POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?` | `PipelineTask` |
+| POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
+| POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
+| DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
+
+`PipelineTask`: `{id, name, mode, status: queued|running|succeeded|failed|cancelled|interrupted, project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, readings, separate, calibrate, align, export`. See `docs/simple-mode.md`.

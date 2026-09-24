@@ -10,7 +10,7 @@ import { Badge, Card, CardBody, CardHeader, DropZone, Tip } from '@/components/u
 
 const AUDIO_ACCEPT = 'audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif';
 // the original may also be a video: its audio track is extracted and used
-const MEDIA_ACCEPT = `${AUDIO_ACCEPT},video/*,.mp4,.mov,.m4v,.mkv,.webm,.avi,.flv,.ts,.mts,.m2ts,.wmv,.mpg,.mpeg,.3gp`;
+export const MEDIA_ACCEPT = `${AUDIO_ACCEPT},video/*,.mp4,.mov,.m4v,.mkv,.webm,.avi,.flv,.ts,.mts,.m2ts,.wmv,.mpg,.mpeg,.3gp`;
 
 const ROLE_ICON: Record<Role, typeof Music2> = { original: Music2, vocals: Mic, instrumental: Music4 };
 

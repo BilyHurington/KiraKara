@@ -1,10 +1,11 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
-  AudioWaveform, Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Moon, Plus, Sun, TriangleAlert,
+  AudioWaveform, Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Moon, Plus, Sparkles, Sun, TriangleAlert,
 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/format';
 import { closeProject, openProject, run, setStep, setTheme, STEPS, useApp, type Step } from '@/store/app';
 import { stepStatus, type StepState } from '@/store/steps';
+import { setUi } from '@/store/simple';
 import { Badge } from '@/components/ui';
 
 export function Sidebar() {
@@ -60,7 +61,13 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className="flex items-center justify-center border-t border-line px-2 py-3 lg:justify-between lg:px-4">
+      <div className="border-t border-line px-2 pt-3 lg:px-3">
+        <button onClick={() => setUi('simple')} title="回到极简模式：放入视频和歌词，一键生成卡拉OK视频"
+          className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg px-2 py-2 text-[13px] font-medium text-muted transition hover:bg-surface-2 hover:text-fg lg:justify-start">
+          <Sparkles className="size-4 text-accent" /><span className="hidden lg:inline">极简模式 · 任务队列</span>
+        </button>
+      </div>
+      <div className="flex items-center justify-center px-2 py-3 lg:justify-between lg:px-4">
         <span className="hidden text-[11px] text-subtle lg:inline">v{version ?? '…'} · 本地运行</span>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

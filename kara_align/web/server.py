@@ -148,8 +148,12 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     app = FastAPI(title="Kara Align", version=__version__)
     ws = S.Workspace(root)
     jm = jobs or JobManager()
+    from ..pipeline import TaskQueue
+
+    tq = TaskQueue(ws)
     app.state.workspace = ws
     app.state.jobs = jm
+    app.state.tasks = tq
 
     @app.exception_handler(S.ServiceError)
     async def _service_error(_req: Request, exc: S.ServiceError):
@@ -201,6 +205,94 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             "separation_available": sep_ok,
             "export_formats": {k: {"filename": v[0], "description": v[2]} for k, v in EXPORT_FORMATS.items()},
         }
+
+    # ------------------------------------------------------------------ app settings / AI providers
+
+    @app.get("/api/settings")
+    def get_settings():
+        from .. import settings as app_settings
+
+        return app_settings.public(app_settings.load())
+
+    @app.put("/api/settings")
+    def put_settings(body: dict):
+        from .. import settings as app_settings
+
+        try:
+            return app_settings.public(app_settings.update(body or {}))
+        except ValueError as e:
+            raise HTTPException(400, f"设置无效：{e}") from e
+
+    @app.get("/api/ai/providers")
+    def ai_providers(refresh: int = 0):
+        from ..reading.llm import detect_all
+
+        return detect_all(refresh=bool(refresh))
+
+    @app.post("/api/ai/test")
+    def ai_test(body: dict):
+        """Send a tiny message with the given (or saved) AI settings."""
+        from .. import settings as app_settings
+        from ..reading.llm import LlmError, ask
+
+        saved = app_settings.load().ai
+        patch = {k: v for k, v in (body or {}).items() if k != "api_key" or v}
+        cfg = app_settings.AiSettings.model_validate({**saved.model_dump(), **patch, "timeout_s": 120})
+        try:
+            r = ask(cfg, "只回复两个字母：OK")
+        except LlmError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "reply": r.text.strip()[:200], "model": r.model, "elapsed_s": r.elapsed_s,
+                "cost_usd": r.cost_usd}
+
+    # ------------------------------------------------------------------ simple mode: task queue
+
+    def task_or_404(task_id: str):
+        try:
+            return tq.get(task_id)
+        except KeyError:
+            raise HTTPException(404, "没有该任务") from None
+
+    @app.get("/api/tasks")
+    def list_tasks():
+        return tq.list()
+
+    @app.post("/api/tasks")
+    async def add_task(file: UploadFile = File(...), lyrics: str = Form(...), mode: str = Form("lrc"),
+                       name: str = Form("")):
+        from ..audio.io import AudioError, validate_upload
+
+        _check_text(lyrics)
+        fname = Path(file.filename or "media").name
+        td = tempfile.mkdtemp(prefix="kara-task-")
+        try:
+            tmp = Path(td) / fname
+            size = await _save_upload(file, tmp, MAX_AUDIO_BYTES)
+            try:
+                with open(tmp, "rb") as f:
+                    validate_upload(fname, f.read(64), size, MAX_AUDIO_BYTES)
+            except AudioError as e:
+                raise HTTPException(400, str(e)) from e
+            t = tq.add(media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+        return t.model_dump(mode="json")
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    def cancel_task(task_id: str):
+        task_or_404(task_id)
+        return tq.cancel(task_id).model_dump(mode="json")
+
+    @app.post("/api/tasks/{task_id}/retry")
+    def retry_task(task_id: str):
+        task_or_404(task_id)
+        return tq.retry(task_id).model_dump(mode="json")
+
+    @app.delete("/api/tasks/{task_id}")
+    def delete_task(task_id: str):
+        task_or_404(task_id)
+        tq.remove(task_id)
+        return {"ok": True}
 
     def job_or_404(job_id: str) -> Job:
         job = jm.get(job_id)
@@ -359,6 +451,20 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     def ai_validate(pid: str, body: TextBody):
         _check_text(body.text)
         return S.ai_validate(handle(pid), body.text)
+
+    @app.post("/api/projects/{pid}/ai/auto")
+    def ai_auto(pid: str, body: LineIdsBody):
+        from .. import settings as app_settings
+
+        h = handle(pid)
+        cfg = app_settings.load().ai
+        if cfg.provider == "none":
+            raise HTTPException(400, "还没有设置 AI：请在“设置”中选择 Claude Code、Codex 或 API")
+
+        def run(job: Job):
+            return S.ai_auto(h, body.line_ids, cfg=cfg, cancel=job.cancel_token, progress=progress_setter(job))
+
+        return jm.submit("ai", run, project_id=pid, heavy=False).to_dict()
 
     @app.post("/api/projects/{pid}/ai/apply")
     def ai_apply(pid: str, body: ReportApplyBody):

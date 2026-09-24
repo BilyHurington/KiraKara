@@ -17,6 +17,8 @@ import { AlignPage } from '@/pages/Align';
 import { ReviewPage } from '@/pages/Review';
 import { KaraokePage } from '@/pages/Karaoke';
 import { ExportPage } from '@/pages/Export';
+import { SimpleApp } from '@/pages/simple/SimpleApp';
+import { useSimple } from '@/store/simple';
 
 const PAGES = {
   mode: ModePage,
@@ -32,6 +34,7 @@ const PAGES = {
 export default function App() {
   const pid = useApp((s) => s.pid);
   const step = useApp((s) => s.step);
+  const ui = useSimple((s) => s.ui);
 
   useEffect(() => {
     void run(async () => {
@@ -45,6 +48,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      if (useSimple.getState().ui === 'simple') return;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -64,6 +68,15 @@ export default function App() {
   }, []);
 
   const Page = pid ? PAGES[step] : HomePage;
+
+  if (ui === 'simple') {
+    return (
+      <TooltipProvider>
+        <SimpleApp />
+        <Toaster />
+      </TooltipProvider>
+    );
+  }
 
   return (
     <TooltipProvider>

@@ -17,6 +17,24 @@ from ..models import new_id, utcnow
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
+# model inference, separation and encoding: one at a time across the whole app
+# (heavy jobs here and the simple-mode task queue both take it)
+HEAVY_LOCK = threading.Lock()
+
+
+def run_heavy(fn: Callable[[], Any], wait_message: Optional[Callable[[str], None]] = None,
+              cancel: Optional[CancelToken] = None) -> Any:
+    """Run ``fn`` holding :data:`HEAVY_LOCK`, reporting while waiting for it."""
+    while not HEAVY_LOCK.acquire(timeout=0.5):
+        if wait_message is not None:
+            wait_message("等待其他任务完成…")
+        if cancel is not None:
+            cancel.check()
+    try:
+        return fn()
+    finally:
+        HEAVY_LOCK.release()
+
 
 @dataclass
 class Job:
@@ -63,7 +81,12 @@ class JobManager:
                 return
             job.status = "running"
             try:
-                out = fn(job)
+                if heavy:
+                    def wait(msg: str) -> None:
+                        job.message = msg
+                    out = run_heavy(lambda: fn(job), wait, job.cancel_token)
+                else:
+                    out = fn(job)
                 job.cancel_token.check()
                 if on_success is not None:
                     out = on_success(job, out)
