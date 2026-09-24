@@ -708,6 +708,106 @@ def export_video(h: ProjectHandle, settings: dict) -> dict:
             "audio_offset_s": video.audio_offset_s, "video_codec": video.video_codec, "copied_video": True}}}
 
 
+# ---------------------------------------------------------------------------
+# karaoke subtitles
+# ---------------------------------------------------------------------------
+
+
+def set_karaoke_style(h: ProjectHandle, style: dict) -> None:
+    from .models import KaraokeStyle
+
+    try:
+        k = KaraokeStyle.model_validate(style)
+    except Exception as e:
+        raise ServiceError(f"字幕样式无效：{e}") from e
+    with h.lock:
+        h.project.karaoke = k
+        h.save()
+
+
+def _karaoke_inputs(h: ProjectHandle, style: Optional[dict]):
+    from .models import KaraokeStyle
+
+    r = h.project.result()
+    if r is None:
+        raise ServiceError("还没有对齐结果：请先完成对齐")
+    try:
+        k = KaraokeStyle.model_validate(style) if style is not None else h.project.karaoke
+    except Exception as e:
+        raise ServiceError(f"字幕样式无效：{e}") from e
+    return r, k
+
+
+def _video_file(h: ProjectHandle) -> Optional[Path]:
+    v = h.project.video
+    orig = h.project.asset("original")
+    if v is None or orig is None or orig.sha256 != v.audio_sha256:
+        return None
+    p = store.asset_abspath(h.dir, v.path)
+    return p if p and p.exists() else None
+
+
+def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bool = True) -> tuple[str, list[str]]:
+    """ASS text; on the video's timeline when the project has a video."""
+    from .karaoke.ass import build_ass
+
+    r, k = _karaoke_inputs(h, style)
+    offset = h.project.video.audio_offset_s * 1000 if (for_video and _video_file(h)) else 0.0
+    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset)
+    if r.stale:
+        warnings.append(f"对齐结果已过期：{r.stale_reason}")
+    if offset:
+        warnings.append(f"时间已按视频中音轨的起点偏移 {offset:.0f} ms，可直接配合原视频使用")
+    return text, warnings
+
+
+def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, background: str = "auto") -> bytes:
+    from .karaoke.ass import build_ass, resolution
+    from .karaoke.render import preview_png
+
+    r, k = _karaoke_inputs(h, style)
+    text, _ = build_ass(h.project, r, k)  # audio timeline; the frame is taken at t (+offset)
+    video = _video_file(h) if background != "black" else None
+    off = h.project.video.audio_offset_s if video else 0.0
+    return preview_png(text, int(t_ms), resolution(h.project), video=video, audio_offset_s=off)
+
+
+def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
+                 cancel: Optional[CancelToken] = None, progress: Optional[Callable[[float, str], None]] = None) -> dict:
+    """Burn the karaoke subtitles into a video (the source video or black)."""
+    import tempfile
+
+    from .karaoke.ass import build_ass, resolution
+    from .karaoke.render import burn
+
+    r, k = _karaoke_inputs(h, None)
+    orig = h.project.asset("original")
+    if orig is None:
+        raise ServiceError("请先上传原曲")
+    video = _video_file(h) if background != "black" else None
+    offset_s = h.project.video.audio_offset_s if video else 0.0
+    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset_s * 1000)
+    size = resolution(h.project) if video else (resolution(h.project) if h.project.video else (1920, 1080))
+    stem = Path((h.project.video.filename if video else None) or h.project.name or "karaoke").stem
+    suffix = {"original": "", "mix": f"-vocal{int(round(h.project.mix.vocal_keep_pct))}", "none": "-noaudio"}[audio]
+    out = h.dir / "exports" / f"{stem}-karaoke{suffix}.mp4"
+    with tempfile.TemporaryDirectory() as td:
+        audio_file: Optional[Path] = None
+        use_video_audio = False
+        if audio == "mix":
+            if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
+                raise ServiceError("降低人声需要人声和伴奏两条分轨，请先进行人声分离")
+            audio_file = Path(export_mix(h, {}, Path(td) / "mix.wav")["path"])
+        elif audio == "original":
+            if video is not None:
+                use_video_audio = True
+            else:
+                audio_file = asset_path(h, orig)
+        burn(text, out, size, orig.duration_ms, video=video, audio=audio_file, audio_offset_s=offset_s,
+             use_video_audio=use_video_audio, quality=quality, cancel=cancel, progress=progress)
+    return {"filename": out.name, "warnings": warnings}
+
+
 def _sync_report(h: ProjectHandle, orig: AudioAsset, stem: AudioAsset) -> dict:
     from .audio.io import load_audio
     from .audio.sync import check_stem_sync
@@ -1103,6 +1203,11 @@ def export(h: ProjectHandle, fmt: str, result_id: Optional[str] = None):
     from .project.exports import export as _export
 
     refresh_staleness(h.project)
+    if fmt == "karaoke-ass":
+        from .project.exports import ExportOutput
+
+        text, warnings = karaoke_ass(h)
+        return ExportOutput("karaoke.ass", "text/plain", text, warnings)
     result = get_result(h, result_id) if result_id else h.project.result()
     try:
         return _export(h.project, fmt, result)

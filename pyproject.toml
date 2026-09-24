@@ -16,6 +16,9 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pykakasi>=2.3,<3",
     "pypinyin>=0.51",
+    # karaoke subtitles: text measurement for ASS layout
+    "pillow>=10",
+    "fonttools>=4.40",
 ]
 
 [project.optional-dependencies]

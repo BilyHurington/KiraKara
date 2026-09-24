@@ -26,6 +26,7 @@ EXPORT_FORMATS = {
     "lrc-line": ("aligned-line.lrc", "text/plain", "模型对齐后聚合的行级 LRC"),
     "lrc-unit": ("aligned-unit.lrc", "text/plain", "模型对齐后的逐单元（增强）LRC"),
     "lrc-calibrated": ("calibrated.lrc", "text/plain", "仅校准原锚点的 LRC（已清除 offset）"),
+    "karaoke-ass": ("karaoke.ass", "text/plain", "卡拉OK字幕 ASS（使用“卡拉OK字幕”页的样式）"),
 }
 
 

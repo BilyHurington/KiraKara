@@ -426,6 +426,59 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
         return jm.submit("mix", run, project_id=pid, heavy=False).to_dict()
 
+    # ------------------------------------------------------------------ karaoke subtitles
+
+    @app.get("/api/fonts")
+    def fonts():
+        from ..karaoke.fonts import default_family, families
+
+        return {"default": default_family(), "families": families()}
+
+    @app.get("/api/karaoke/presets")
+    def karaoke_presets():
+        from ..karaoke.presets import preset_list
+
+        return preset_list()
+
+    @app.get("/api/projects/{pid}/karaoke")
+    def get_karaoke(pid: str):
+        return handle(pid).project.karaoke.model_dump(mode="json")
+
+    @app.put("/api/projects/{pid}/karaoke")
+    def put_karaoke(pid: str, body: dict):
+        h = handle(pid)
+        S.set_karaoke_style(h, body)
+        return h.project.karaoke.model_dump(mode="json")
+
+    @app.post("/api/projects/{pid}/karaoke/preview")
+    def karaoke_preview(pid: str, body: dict):
+        from ..karaoke.render import RenderError
+
+        try:
+            png = S.karaoke_preview(handle(pid), int(body.get("t_ms", 0)), body.get("style"),
+                                    background=body.get("background", "auto"))
+        except RenderError as e:
+            raise HTTPException(400, str(e)) from e
+        return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/projects/{pid}/karaoke/burn")
+    def karaoke_burn(pid: str, body: dict):
+        h = handle(pid)
+        if h.project.result() is None:
+            raise HTTPException(400, "还没有对齐结果：请先完成对齐")
+        audio = body.get("audio", "original")
+        if audio not in ("original", "mix", "none"):
+            raise HTTPException(400, "audio 只能是 original / mix / none")
+
+        def run(job: Job):
+            out = S.karaoke_burn(h, background=body.get("background", "auto"), audio=audio,
+                                 quality=body.get("quality", "standard"), cancel=job.cancel_token,
+                                 progress=progress_setter(job))
+            return {"filename": out["filename"], "warnings": out["warnings"],
+                    "url": f"/api/projects/{pid}/exports/{out['filename']}"}
+
+        return jm.submit("burn", run, project_id=pid).to_dict()
+
     @app.post("/api/projects/{pid}/video/export")
     def video_export(pid: str, body: dict):
         h = handle(pid)

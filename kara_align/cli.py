@@ -330,6 +330,13 @@ def cmd_video(a) -> None:
     _print({"file": str(h.dir / "exports" / out["filename"]), "report": out["report"]})
 
 
+def cmd_burn(a) -> None:
+    h = S.open_dir(Path(a.project))
+    out = S.karaoke_burn(h, background=a.background, audio=a.audio, quality=a.quality, progress=_progress)
+    print(file=sys.stderr)
+    _print({"file": str(h.dir / "exports" / out["filename"]), "warnings": out["warnings"]})
+
+
 def cmd_package(a) -> None:
     from .project import store
 
@@ -508,7 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("export", cmd_export, "导出")
     p.add_argument("format", choices=["alignment", "prepared", "project", "csv", "lrc-line", "lrc-unit",
-                                      "lrc-calibrated"])
+                                      "lrc-calibrated", "karaoke-ass"])
     p.add_argument("--out")
     p.add_argument("--result")
 
@@ -523,6 +530,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vocal", type=float, default=20.0, help="人声保留 p%%")
     p.add_argument("--inst", type=float, default=100.0, help="伴奏 q%%")
     p.add_argument("--master", type=float, default=1.0)
+
+    p = add("burn", cmd_burn, "把卡拉OK字幕烧录进视频（字幕样式见 WebUI“卡拉OK字幕”页；ASS 用 export karaoke-ass）")
+    p.add_argument("--background", choices=["auto", "black"], default="auto", help="auto：有视频时用原视频，否则纯黑")
+    p.add_argument("--audio", choices=["original", "mix", "none"], default="original", help="mix：按混音设置降低人声")
+    p.add_argument("--quality", choices=["standard", "high"], default="standard")
 
     p = add("package", cmd_package, "导出便携项目包")
     p.add_argument("out")

@@ -485,6 +485,70 @@ class VideoAsset(_Base):
     audio_sha256: str
 
 
+# ---------------------------------------------------------------------------
+# Karaoke subtitle style (ASS). Pixel values are defined for a 1080p frame and
+# scaled to the actual resolution.
+# ---------------------------------------------------------------------------
+
+
+class KaraokeText(_Base):
+    font: str = ""  # font family; "" = best available Japanese font
+    size: int = 88
+    bold: bool = True
+    color_unsung: str = "#FFFFFF"
+    color_sung: str = "#2F80ED"
+    outline_color: str = "#0B1F3A"
+    outline: float = 4.5
+    shadow: float = 2.0
+    shadow_color: str = "#000000"
+    shadow_opacity: int = 45  # %
+
+
+class KaraokeRuby(_Base):
+    enabled: bool = True
+    script: Literal["hiragana", "katakana", "romaji"] = "hiragana"
+    target: Literal["kanji", "all"] = "kanji"
+    size_pct: int = 45  # of the lyric size
+    gap: int = 2  # px between ruby and lyric
+    fit: Literal["widen", "overflow"] = "widen"
+    follow_colors: bool = True
+    font: str = ""  # "" = same as the lyric font
+    color_unsung: str = "#FFFFFF"
+    color_sung: str = "#2F80ED"
+    outline_color: str = "#0B1F3A"
+    outline: float = 3.0
+
+
+class KaraokeLayout(_Base):
+    position: Literal["bottom", "top"] = "bottom"
+    lines: int = Field(default=2, ge=1, le=3)
+    arrangement: Literal["alternate", "center"] = "alternate"
+    margin_v: int = 70  # px from the top / bottom edge
+    line_spacing: int = 26  # px between stacked lines
+    margin_h: int = 140  # px left and right
+    shrink_long_lines: bool = True  # scale down lines wider than the frame
+    show_translation: bool = False
+    translation_size_pct: int = 50
+
+
+class KaraokeTiming(_Base):
+    lead_in_ms: int = 1000  # line appears at least this long before its first syllable
+    hold_ms: int = 500  # and stays after its last one
+    # show the next line as soon as its slot is free (at most early_max_ms ahead)
+    early_show: bool = True
+    early_max_ms: int = 4000
+    highlight: Literal["sweep", "instant"] = "sweep"  # \kf or \k
+
+
+class KaraokeStyle(_Base):
+    version: int = 1
+    preset: str = "classic"
+    layout: KaraokeLayout = Field(default_factory=KaraokeLayout)
+    text: KaraokeText = Field(default_factory=KaraokeText)
+    ruby: KaraokeRuby = Field(default_factory=KaraokeRuby)
+    timing: KaraokeTiming = Field(default_factory=KaraokeTiming)
+
+
 class Project(_Base):
     format: str = FMT_PROJECT
     version: int = SCHEMA_VERSION
@@ -503,6 +567,7 @@ class Project(_Base):
     active_result_id: Optional[str] = None
     mix: MixSettings = Field(default_factory=MixSettings)
     video: Optional[VideoAsset] = None
+    karaoke: KaraokeStyle = Field(default_factory=KaraokeStyle)
 
     def asset(self, role: str) -> Optional[AudioAsset]:
         for a in self.audio:
