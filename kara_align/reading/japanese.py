@@ -7,7 +7,10 @@ Morae (拍) rules:
 * 撥音 ``ん`` is its own mora, flag ``hatsuon``.
 * long-vowel marks ``ー`` / ``〜`` / ``～`` are their own mora, flag ``long``.
 
-Rule readings come from pykakasi.  They are context free, so every kanji
+Segmentation and rule readings come from MeCab (fugashi + UniDic) when it is
+installed: one segment per word, a kanji word keeps its okurigana (好き, 始まり,
+震える) and readings use the context (君 → きみ).  Without it, lines are split
+by character class and read by pykakasi (context free).  Either way every kanji
 segment is marked ``uncertain`` – manual / AI readings take precedence.
 """
 
@@ -16,6 +19,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ..models import Segment, Unit
 
@@ -151,11 +155,139 @@ def _split_okurigana(orig: str, hira: str) -> list[tuple[str, str]]:
     return out_pre + ([(middle, h)] if middle else []) + out_suf
 
 
+_tagger_state: dict = {}
+
+
+def _tagger():
+    """A shared fugashi Tagger, or None when MeCab / UniDic is not installed."""
+    if "t" not in _tagger_state:
+        try:
+            import fugashi
+
+            _tagger_state["t"] = fugashi.Tagger()
+        except Exception:  # optional dependency: fall back to character classes
+            _tagger_state["t"] = None
+    return _tagger_state["t"]
+
+
+def _is_ja(s: str) -> bool:
+    return any(is_kana(c) or is_kanji(c) for c in s)
+
+
+def word_spans(text: str) -> Optional[list[tuple[int, int, str, str]]]:
+    """Words of ``text`` as (start, end, sung reading in hiragana, pos1), or None
+    without MeCab.
+
+    MeCab's short units are grouped the way lyrics are read: auxiliary verbs
+    (except the copula だ), suffixes and conjunctive particles stay with the
+    word before them (なっ+てく → なってく, 聞い+た → 聞いた, 咲い+て → 咲いて)
+    and consecutive particles form one word (で+も → でも).  The reading is "" when a word
+    has no dictionary reading.  Particles written は / へ are read わ / え.
+    Whitespace is not part of any word.  None is also returned when the
+    analyser's surfaces cannot be mapped back onto ``text`` exactly.
+    """
+    t = _tagger()
+    if t is None or not text:
+        return None
+    out: list[list] = []  # [start, end, reading, pos1, last_pos1]
+    pos = 0
+    for w in t(text):
+        surf = w.surface
+        start = text.find(surf, pos)
+        if not surf or start < 0 or text[pos:start].strip():
+            return None
+        f = w.feature
+        pos1 = getattr(f, "pos1", "") or ""
+        pos2 = getattr(f, "pos2", "") or ""
+        kana = getattr(f, "kana", None) or ""
+        reading = "" if kana in ("", "*") else to_hiragana(kana)
+        if pos1 == "助詞" and surf in _PARTICLE_SOUND:
+            reading = _PARTICLE_SOUND[surf]
+        if not _is_ja(surf):
+            reading = ""
+        prev = out[-1] if out else None
+        lemma = getattr(f, "lemma", "") or ""
+        joins = (
+            (pos1 == "助動詞" and lemma != "だ")  # ない, た, てく, たい … (not the copula だ / に / で)
+            or pos1 == "接尾辞"
+            or (pos1 == "助詞" and (pos2 == "接続助詞" or prev is not None and prev[4] == "助詞"))
+        )
+        attach = (prev is not None and joins and prev[1] == start
+                  and _is_ja(surf) and _is_ja(text[prev[0]:prev[1]]))
+        if attach:
+            prev[1] = start + len(surf)
+            prev[2] = prev[2] + reading if (prev[2] and reading) else ""
+            prev[4] = pos1
+        else:
+            out.append([start, start + len(surf), reading, pos1, pos1])
+        pos = start + len(surf)
+    if text[pos:].strip():
+        return None
+    return [(a, b, r, p1) for a, b, r, p1, _ in out]
+
+
+_LATIN_RE = re.compile(r"^[A-Za-zＡ-Ｚａ-ｚ']+$")
+_DIGIT_RE = re.compile(r"^[0-9０-９]+$")
+# particles written は / へ but sung わ / え
+_PARTICLE_SOUND = {"は": "わ", "へ": "え"}
+
+
+def _punct(segs: list[Segment], run: str) -> None:
+    if segs and not segs[-1].units and segs[-1].reading_source == "none" and not segs[-1].uncertain:
+        segs[-1].surface += run  # merge consecutive punctuation / spaces
+    else:
+        segs.append(Segment(surface=run, reading=None, lang="ja", units=[], reading_source="none"))
+
+
+def _word_segments(text: str, words: list[tuple[int, int, str, str]]) -> list[Segment]:
+    segs: list[Segment] = []
+    pos = 0
+    for a, b, kana, pos1 in words:
+        if a > pos:
+            _punct(segs, text[pos:a])
+        pos = b
+        surf = text[a:b]
+        if any(is_kanji(c) for c in surf):
+            reading = kana
+            if not is_kana_text(reading):
+                reading = _kanji_reading(surf)
+            if not is_kana_text(reading):
+                segs.extend(_class_segments(surf))  # unknown word: old method for this word
+                continue
+            alt = _kanji_reading(surf)  # a context-free second opinion, offered as a candidate
+            segs.append(Segment(surface=surf, reading=reading, lang="ja", units=reading_units(reading),
+                                reading_source="rule", uncertain=True,
+                                candidates=[alt] if alt != reading and is_kana_text(alt) else []))
+        elif is_kana_text(surf):
+            units = kana_units(surf)
+            sung = split_morae(kana) if is_kana_text(kana) else []
+            if len(sung) == len(units):  # particles は / へ sung わ / え
+                for u, m in zip(units, sung):
+                    u.reading = m.text
+            segs.append(Segment(surface=surf, reading="".join(u.reading for u in units), lang="ja",
+                                units=units, reading_source="rule"))
+        elif _LATIN_RE.match(surf) or _DIGIT_RE.match(surf) or any(is_kana(c) for c in surf):
+            segs.extend(_class_segments(surf))
+        else:
+            _punct(segs, surf)
+    if pos < len(text):
+        _punct(segs, text[pos:])
+    return segs
+
+
 def rule_segments(text: str) -> list[Segment]:
-    """Rule-based segmentation of a Japanese line.
+    """Rule-based segmentation of a Japanese line (by word when MeCab is available).
 
     Surfaces of the returned segments concatenate exactly to ``text``.
     """
+    words = word_spans(text)
+    if words is not None:
+        return _word_segments(text, words)
+    return _class_segments(text)
+
+
+def _class_segments(text: str) -> list[Segment]:
+    """Fallback: split by character class (kanji run / kana run / latin / digits)."""
     segs: list[Segment] = []
     for m in _CLASS_RE.finditer(text):
         kind, run = m.lastgroup, m.group()
@@ -181,10 +313,7 @@ def rule_segments(text: str) -> list[Segment]:
             segs.append(Segment(surface=run, reading=None, lang="ja", units=[], uncertain=True,
                                 reading_source="none", note="数字：读音需要人工或 AI 补充"))
         else:
-            if segs and not segs[-1].units and segs[-1].reading_source == "none" and not segs[-1].uncertain:
-                segs[-1].surface += run  # merge consecutive punctuation / spaces
-            else:
-                segs.append(Segment(surface=run, reading=None, lang="ja", units=[], reading_source="none"))
+            _punct(segs, run)
     return segs
 
 

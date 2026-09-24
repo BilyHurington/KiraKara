@@ -107,44 +107,43 @@ def _ruby_text(reading: str, script: str, romaji: Optional[str]) -> str:
 
 
 def _split_affixes(seg: Segment) -> list[tuple[str, list]]:
-    """Split kana prefix / okurigana off a kanji segment: [(surface, units)].
+    """Split the kana of a kanji word off its kanji: [(surface, units)].
 
-    Only splits where the reading boundary falls on a unit boundary, so every
-    piece keeps whole units (and their times).
+    Handles a kana prefix, okurigana and kana between kanji (笑い合え →
+    笑 い 合 え), so ruby sits only over kanji.  Only splits where the
+    reading boundary falls on a unit boundary, so every piece keeps whole
+    units (and their times); otherwise the word stays one piece.
     """
     surface, units = seg.surface, seg.units
-    reading = "".join(u.reading for u in units)
     if not has_kanji(surface) or not units:
         return [(surface, units)]
-    hira = to_hiragana(surface)
-    pre = 0
-    while pre < len(surface) and not is_kanji(surface[pre]) and pre < len(reading) and hira[pre] == reading[pre]:
-        pre += 1
-    suf = 0
-    while (suf < len(surface) - pre and not is_kanji(surface[-1 - suf]) and suf < len(reading) - pre
-           and hira[-1 - suf] == reading[-1 - suf]):
-        suf += 1
-
-    def cut(n_chars: int, from_start: bool) -> Optional[int]:
-        """number of units covering exactly n reading chars from the start / end."""
-        acc = 0
-        seq = units if from_start else list(reversed(units))
-        for i, u in enumerate(seq):
-            if acc == n_chars:
-                return i
-            acc += len(u.reading)
-        return len(seq) if acc == n_chars else None
-
-    k_pre = cut(pre, True) if pre else 0
-    k_suf = cut(suf, False) if suf else 0
-    if k_pre is None or k_suf is None or k_pre + k_suf >= len(units):
+    reading = "".join(u.reading for u in units)
+    runs = [(m.group(), bool(m.group(1))) for m in re.finditer(r"([^\u3041-\u30ff]+)|([\u3041-\u30ff]+)", surface)]
+    if len(runs) == 1:
         return [(surface, units)]
-    pieces = []
-    if pre:
-        pieces.append((surface[:pre], units[:k_pre]))
-    pieces.append((surface[pre:len(surface) - suf], units[k_pre:len(units) - k_suf]))
-    if suf:
-        pieces.append((surface[len(surface) - suf:], units[len(units) - k_suf:]))
+    # kana runs must appear literally in the reading; kanji runs take at least one kana
+    pattern = "".join(("(.+?)" if is_k else f"({re.escape(to_hiragana(text))})") for text, is_k in runs)
+    m = re.fullmatch(pattern, reading)
+    if m is None:
+        return [(surface, units)]
+    edges = [0]
+    for g in m.groups():
+        edges.append(edges[-1] + len(g))
+    unit_edges = [0]
+    for u in units:
+        unit_edges.append(unit_edges[-1] + len(u.reading))
+    pieces: list[tuple[str, list]] = []
+    ui = 0
+    text_parts: list[str] = []
+    for (text, _), end in zip(runs, edges[1:]):
+        text_parts.append(text)
+        if end not in unit_edges:
+            continue  # the boundary cuts a unit: keep this run with the next one
+        k = unit_edges.index(end)
+        pieces.append(("".join(text_parts), units[ui:k]))
+        ui, text_parts = k, []
+    if text_parts or ui < len(units):
+        return [(surface, units)]
     return pieces
 
 

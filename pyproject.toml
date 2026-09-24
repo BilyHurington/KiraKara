@@ -15,6 +15,10 @@ dependencies = [
     "uvicorn>=0.29",
     "python-multipart>=0.0.9",
     "pykakasi>=2.3,<3",
+    # Japanese word segmentation and context-aware readings (MeCab + UniDic lite);
+    # without them the rules fall back to character classes + pykakasi
+    "fugashi>=1.3",
+    "unidic-lite>=1.0.8",
     "pypinyin>=0.51",
     # karaoke subtitles: text measurement for ASS layout
     "pillow>=10",

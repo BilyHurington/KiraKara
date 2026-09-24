@@ -49,6 +49,7 @@ class PrepareReport:
     prepared: list[str] = field(default_factory=list)  # line ids filled by rules
     kept: list[str] = field(default_factory=list)  # protected lines left alone
     rederived: list[str] = field(default_factory=list)  # protected but text changed -> re-derived
+    regrouped: list[str] = field(default_factory=list)  # segments regrouped by word, readings kept
     messages: list[str] = field(default_factory=list)
 
 
@@ -59,6 +60,8 @@ def prepare_line(line: Line, lang_hint: Optional[str] = None, *, overwrite_rule:
     if line.kind != "lyric" or not line.sing:
         return line
     text_changed = bool(line.segments) and _surface(line) != line.text
+    if line.segments and not text_changed and regroup_words(line):
+        report.regrouped.append(line.id)
     protected = [s for s in line.segments if _is_protected(s)]
     if line.segments and not text_changed:
         if protected:
@@ -93,6 +96,91 @@ def _refresh_unprotected(line: Line, lang_hint: Optional[str]) -> None:
         _reuse_ids([seg], fresh)
         out.extend(fresh)
     line.segments = out
+
+
+def _kana_splittable(seg: Segment) -> bool:
+    """A kana segment whose units map 1:1 onto its surface can be cut between units."""
+    return (seg.lang == "ja" and not seg.confirmed and bool(seg.units) and is_kana_text(seg.surface)
+            and all(u.surface for u in seg.units) and "".join(u.surface for u in seg.units) == seg.surface)
+
+
+def regroup_words(line: Line) -> bool:
+    """Regroup a Japanese line's segments along word boundaries (MeCab), in place.
+
+    Older rule segmentation split by character class (好 | きになってく); an AI
+    reply often keeps that split.  This merges a kanji segment with its
+    okurigana and splits kana runs between words (好き | に | なっ | てく)
+    **without touching any reading or unit**: units keep their ids, readings
+    and times, so alignment results stay valid.  Confirmed segments, segments
+    without units (punctuation), other languages and two separately read kanji
+    segments are never merged; a kanji segment is never cut.  Returns True
+    when changed.
+    """
+    if not line.segments or not any(s.lang == "ja" and s.units for s in line.segments):
+        return False
+    words = japanese.word_spans(line.text)
+    if words is None or _surface(line) != line.text:
+        return False
+    cuts = {0, len(line.text)} | {a for a, _, _, _ in words} | {b for _, b, _, _ in words}
+
+    # atomic pieces: (start, end, segment, units, reading, barrier)
+    pieces = []
+    pos = 0
+    for seg in line.segments:
+        barrier = not seg.units or seg.confirmed or seg.lang != "ja"
+        if _kana_splittable(seg):
+            for u in seg.units:
+                pieces.append((pos, pos + len(u.surface), seg, [u], u.reading, False))
+                pos += len(u.surface)
+        else:
+            reading = seg.reading if seg.reading is not None else "".join(u.reading for u in seg.units)
+            pieces.append((pos, pos + len(seg.surface), seg, list(seg.units), reading, barrier))
+            pos += len(seg.surface)
+
+    def kanji_piece(pc) -> bool:
+        return any(japanese.is_kanji(c) for c in pc[2].surface) and not _kana_splittable(pc[2])
+
+    groups: list[list[tuple]] = []
+    for pc in pieces:
+        if (groups and not pc[5] and not groups[-1][-1][5] and pc[0] not in cuts
+                # two separately read kanji segments keep their own readings (今|君)
+                and not (kanji_piece(pc) and any(kanji_piece(x) for x in groups[-1]))):
+            groups[-1].append(pc)
+        else:
+            groups.append([pc])
+
+    new_segs: list[Segment] = []
+    for g in groups:
+        uniq = list({id(pc[2]): pc[2] for pc in g}.values())  # owning segments, in order
+        units = [u for pc in g for u in pc[3]]
+        if len(uniq) == 1 and [u.id for u in units] == [u.id for u in uniq[0].units]:
+            new_segs.append(uniq[0])  # unchanged
+            continue
+        surface = line.text[g[0][0]:g[-1][1]]
+        reading = "".join(pc[4] for pc in g)
+        kanji = [o for o in uniq if not _kana_splittable(o)]
+        kanji_owner = kanji[0] if kanji else None
+        cands: list[str] = []
+        if len(kanji) == 1 and kanji_owner.candidates:
+            # the kanji's alternative readings, with the kana around it
+            before = "".join(pc[4] for pc in g[:next(i for i, pc in enumerate(g) if pc[2] is kanji_owner)])
+            after = "".join(pc[4] for pc in g[next(i for i, pc in enumerate(g) if pc[2] is kanji_owner) + 1:])
+            cands = [before + c + after for c in kanji_owner.candidates]
+        sources = {o.reading_source for o in uniq}
+        seg = Segment(
+            surface=surface, reading=reading, lang="ja", units=units,
+            reading_source="ai" if "ai" in sources else ("manual" if "manual" in sources else "rule"),
+            uncertain=any(o.uncertain for o in uniq), candidates=cands,
+            note="; ".join(dict.fromkeys(o.note for o in uniq if o.note)),
+        )
+        if kanji_owner is not None:
+            seg.id = kanji_owner.id
+        _assign_surfaces(seg)
+        new_segs.append(seg)
+    if [(s.id, s.surface) for s in new_segs] == [(s.id, s.surface) for s in line.segments]:
+        return False
+    line.segments = new_segs
+    return True
 
 
 def _reuse_ids(old: Sequence[Segment], new: Sequence[Segment]) -> None:

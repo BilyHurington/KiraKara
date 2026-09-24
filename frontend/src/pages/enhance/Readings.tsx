@@ -29,7 +29,7 @@ export function ReadingsCard() {
   const [filter, setFilter] = useState<Filter>('all');
   const [overwrite, setOverwrite] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [lastReport, setLastReport] = useState<{ prepared: string[]; kept: string[]; rederived: string[]; messages: string[] } | null>(null);
+  const [lastReport, setLastReport] = useState<{ prepared: string[]; kept: string[]; rederived: string[]; regrouped?: string[]; messages: string[] } | null>(null);
   const [editing, setEditing] = useState<{ line: Line; seg: Segment } | null>(null);
 
   const lines = useMemo(() => project.lyrics.lines.filter((l) => l.sing && l.kind === 'lyric'), [project.lyrics.lines]);
@@ -55,7 +55,9 @@ export function ReadingsCard() {
       const pv = await api.post<ProjectView & { report: any }>(ppath('/readings/prepare'), { overwrite_rule: overwrite });
       setPV(pv);
       setLastReport(pv.report);
-      toast('ok', '规则注音完成', `填充 ${pv.report?.prepared?.length ?? 0} 行，保留 ${pv.report?.kept?.length ?? 0} 行`);
+      const regrouped = pv.report?.regrouped?.length ?? 0;
+      toast('ok', '规则注音完成', `填充 ${pv.report?.prepared?.length ?? 0} 行，保留 ${pv.report?.kept?.length ?? 0} 行`
+        + (regrouped ? `，${regrouped} 行按词重新分组` : ''));
     } finally {
       setBusy(false);
     }
@@ -106,6 +108,9 @@ export function ReadingsCard() {
           <Callout tone="ok" title="规则注音结果">
             填充 {lastReport.prepared.length} 行 · 保留 {lastReport.kept.length} 行（人工/AI/已确认）
             {lastReport.rederived.length > 0 && ` · ${lastReport.rederived.length} 行因原文变化重新生成，需重新确认`}
+            {(lastReport.regrouped?.length ?? 0) > 0 && (
+              <div className="text-xs">{lastReport.regrouped!.length} 行的片段已按词重新分组（如 好|き → 好き），读音和发音单元不变</div>
+            )}
             {lastReport.messages.slice(0, 3).map((m) => <div key={m} className="text-xs">{m}</div>)}
           </Callout>
         )}

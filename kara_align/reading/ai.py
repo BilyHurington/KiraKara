@@ -100,6 +100,9 @@ def build_prompt(doc: LyricsDoc, line_ids: Optional[Sequence[str]] = None, lang:
     rules = [
         "原样保留每行的 id、text 和行的顺序；不得增删、合并、拆分或改写任何歌词行。",
         "每行所有 segments 的 surface 按顺序拼接后必须与该行 text 完全一致（包括标点和空格）。",
+        "segments 按词切分：汉字词连同它的送假名是一个 segment（好き、始まり、震える、聞いた，不要切成 好／き…），"
+        "助词单独成段（に、を、は）；熟字训、当て字等只能整体读的词作为一个 segment（真新＝まっさら，不要拆成 真／新）。"
+        "current_segments 的切分只是程序给的参考，可以合并或重新切分（locked 片段除外）。",
         "reading 写实际发音（助词は读作わ时写わ，へ读作え时写え），units 拼接后必须等于 reading。",
         "重复的副歌也必须逐行完整输出，禁止用“同上”“略”“x2”等省略。",
         "不要输出任何时间、时间戳、偏移或时长字段；不要猜测时间。",
@@ -116,7 +119,7 @@ def build_prompt(doc: LyricsDoc, line_ids: Optional[Sequence[str]] = None, lang:
         "规则 / Rules:\n" + "\n".join(f"{i + 1}. {r}" for i, r in enumerate(rules)) + "\n\n"
         f"返回格式（snapshot 必须原样填写 \"{snap}\"）/ Return format:\n"
         "```json\n" + json.dumps(example, ensure_ascii=False, indent=2) + "\n```\n\n"
-        f"待标注歌词（共 {len(lines)} 行；current_segments 为程序已有的切分和读音，可修正非 locked 部分）/ Lyrics:\n"
+        f"待标注歌词（共 {len(lines)} 行；current_segments 为程序已有的切分和读音，仅供参考：非 locked 部分可以重新切分和修正）/ Lyrics:\n"
         "```json\n" + json.dumps({"snapshot": snap, "lines": payload}, ensure_ascii=False, indent=1) + "\n```\n"
     )
     rt = AiRoundtrip(

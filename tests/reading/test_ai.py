@@ -75,7 +75,11 @@ def test_valid_patch_and_idempotent_apply():
 
 
 def test_unit_ids_preserved_when_grouping_same():
+    from kara_align.reading.japanese import reading_units
+
     doc = make_doc()
+    kimi = doc.lines[0].segments[0]
+    kimi.reading, kimi.units = "くん", reading_units("くん")  # a context-free rule reading the AI corrects
     b = build_prompt(doc)
     to_ids = [u.id for u in doc.lines[0].segments[1].units]  # と unchanged grouping
     new, _ = apply_patch(doc, validate_patch(doc, good_patch(b.snapshot_id), [b.roundtrip]))
