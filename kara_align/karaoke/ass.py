@@ -23,6 +23,7 @@ from .fonts import Measurer, default_family
 
 REF_HEIGHT = 1080  # style pixel values are defined for this height
 DEFAULT_SIZE = (1920, 1080)
+PAUSE_HIDE_MS = 6000  # a pause inside a line at least this long hides the line meanwhile
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ class LaidLine:
     show_from: int = 0
     show_to: int = 0
     slot: int = 0
+    units: list[tuple[int, int]] = field(default_factory=list)  # timed units (start, end), for pauses
 
 
 def _ruby_text(reading: str, script: str, romaji: Optional[str]) -> str:
@@ -237,6 +239,30 @@ def schedule(lines: list[LaidLine], style: KaraokeStyle) -> None:
         last_in_slot[ll.slot] = ll
 
 
+def visible_spans(ll: LaidLine, style: KaraokeStyle) -> list[tuple[int, int]]:
+    """Display intervals of a scheduled line.
+
+    Normally one interval.  If the line itself contains a long pause (the
+    singer stops mid-line for an interlude), the line is hidden during it:
+    it stays ``hold_ms`` after the last sung part before the pause and comes
+    back ``lead_in_ms`` before singing resumes.
+    """
+    tm = style.timing
+    min_pause = max(PAUSE_HIDE_MS, tm.hold_ms + tm.lead_in_ms + 2000)
+    times = ll.units or [(p.start, p.end) for c in ll.chunks for p in c.base
+                         if p.start is not None and p.end is not None]
+    spans: list[tuple[int, int]] = []
+    a = ll.show_from
+    reach: Optional[int] = None
+    for s, e in sorted(times):
+        if reach is not None and s - reach >= min_pause:
+            spans.append((a, reach + tm.hold_ms))
+            a = s - tm.lead_in_ms
+        reach = e if reach is None else max(reach, e)
+    spans.append((a, ll.show_to))
+    return [(x, y) for x, y in spans if y > x]
+
+
 def _karaoke(parts: list[Part], t0: int, tag: str) -> str:
     out, cursor = [], 0
     for p in parts:
@@ -340,8 +366,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         if not starts or not ends:
             skipped += 1
             continue
+        unit_times = [times[u.id] for u in ln.units() if u.id in times and None not in times[u.id]]
         laid.append(LaidLine(ln, chunks, min(starts), max(ends),
-                             translation=ln.translation if lay.show_translation else None))
+                             translation=ln.translation if lay.show_translation else None,
+                             units=unit_times))  # type: ignore[arg-type]
     if skipped:
         warnings.append(f"{skipped} 行没有任何时间，未写入字幕")
     laid.sort(key=lambda x: x.start)
@@ -377,22 +405,28 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         main_y = slot_top + ((ruby_size + gap) if has_ruby else 0) * 1.0 + main_size
         # shrunk lines keep their bottom edge where it was
         ruby_y = main_y - main_size * scale - gap * scale
-        start, end = ass_time(ll.show_from + time_offset_ms), ass_time(ll.show_to + time_offset_ms)
         fs = "" if scale >= 1.0 else f"\\fscx{scale * 100:.1f}\\fscy{scale * 100:.1f}"
-        x = x0
-        for c, w in zip(ll.chunks, widths):
-            cx = x + w * scale / 2
-            body = _karaoke(c.base, ll.show_from, tag)
-            events.append(f"Dialogue: 1,{start},{end},KMain,,0,0,0,,{{\\an2\\pos({cx:.1f},{main_y:.1f}){fs}}}{body}")
-            if c.ruby:
-                rbody = _karaoke(c.ruby, ll.show_from, tag)
-                events.append(f"Dialogue: 2,{start},{end},KRuby,,0,0,0,,{{\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}}}{rbody}")
-            x += w * scale
-        if ll.translation:
-            ty = main_y + trans_gap + trans_size
-            an, tx = {"left": (1, x0), "right": (3, x0 + line_w), "center": (2, W / 2)}[align]
-            events.append(f"Dialogue: 0,{start},{end},KTrans,,0,0,0,,{{\\an{an}\\pos({tx:.1f},{ty:.1f})}}"
-                          f"{escape_text(ll.translation)}")
+        spans = visible_spans(ll, style)
+        if len(spans) > 1:
+            pause = (spans[1][0] - spans[0][1] + style.timing.hold_ms + style.timing.lead_in_ms) / 1000
+            warnings.append(f"「{ll.line.text}」中间停顿约 {pause:.0f} 秒，停顿期间暂时隐藏该行")
+        for t_from, t_to in spans:
+            start, end = ass_time(t_from + time_offset_ms), ass_time(t_to + time_offset_ms)
+            x = x0
+            for c, w in zip(ll.chunks, widths):
+                cx = x + w * scale / 2
+                body = _karaoke(c.base, t_from, tag)
+                events.append(f"Dialogue: 1,{start},{end},KMain,,0,0,0,,{{\\an2\\pos({cx:.1f},{main_y:.1f}){fs}}}{body}")
+                if c.ruby:
+                    rbody = _karaoke(c.ruby, t_from, tag)
+                    events.append(f"Dialogue: 2,{start},{end},KRuby,,0,0,0,,"
+                                  f"{{\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}}}{rbody}")
+                x += w * scale
+            if ll.translation:
+                ty = main_y + trans_gap + trans_size
+                an, tx = {"left": (1, x0), "right": (3, x0 + line_w), "center": (2, W / 2)}[align]
+                events.append(f"Dialogue: 0,{start},{end},KTrans,,0,0,0,,{{\\an{an}\\pos({tx:.1f},{ty:.1f})}}"
+                              f"{escape_text(ll.translation)}")
 
     def style_line(name: str, font: str, size: float, sung: str, unsung: str, outline_c: str, outline: float) -> str:
         return (f"Style: {name},{font},{size:.1f},{ass_color(sung)},{ass_color(unsung)},{ass_color(outline_c)},"

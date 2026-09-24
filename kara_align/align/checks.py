@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from ..models import CheckConfig, Issue, LineTiming, UnitTiming
+from .activity import VocalActivity
 
 
 def _flag(obj, code: str) -> None:
@@ -41,6 +42,44 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
             _flag(u, "long_unit")
             issues.append(Issue(code="long_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
                                 message=f"单元「{u.reading}」持续 {d} ms", data={"duration_ms": d}))
+    return issues
+
+
+def check_line_gaps(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
+    """A long pause between two consecutive units of the same line."""
+    issues: list[Issue] = []
+    prev: dict[str, UnitTiming] = {}
+    for u in units:
+        if u.start_ms is None or u.end_ms is None:
+            continue
+        p = prev.get(u.line_id)
+        prev[u.line_id] = u
+        if p is None or p.end_ms is None:
+            continue
+        gap = u.start_ms - p.end_ms
+        if gap > cfg.max_line_gap_ms:
+            _flag(u, "line_gap")
+            issues.append(Issue(code="line_gap", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                                message=f"「{p.reading}」与「{u.reading}」之间停顿 {gap / 1000:.1f} 秒；"
+                                        "可能被放进了间奏", data={"gap_ms": gap}))
+    return issues
+
+
+def check_rest(units: list[UnitTiming], activity: Optional[VocalActivity]) -> list[Issue]:
+    """A unit placed where the separated vocal stem is silent."""
+    if activity is None:
+        return []
+    issues: list[Issue] = []
+    for u in units:
+        if u.start_ms is None or u.end_ms is None or u.end_ms <= u.start_ms:
+            continue
+        if activity.is_rest(u.start_ms, u.end_ms):
+            _flag(u, "in_rest")
+            issues.append(Issue(code="unit_in_rest", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                                message=f"单元「{u.reading}」所在位置人声分轨几乎无声"
+                                        f"（{activity.peak_db(u.start_ms, u.end_ms):.0f} dB，"
+                                        f"演唱约 {activity.reference_db:.0f} dB）",
+                                data={"peak_db": round(activity.peak_db(u.start_ms, u.end_ms), 1)}))
     return issues
 
 
@@ -143,12 +182,15 @@ def stability_issues(base: dict[str, Optional[int]], alt: dict[str, Optional[int
 
 
 def run_checks(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckConfig,
-               voices: Optional[dict[str, str]] = None) -> tuple[list[Issue], float]:
+               voices: Optional[dict[str, str]] = None,
+               activity: Optional[VocalActivity] = None) -> tuple[list[Issue], float]:
     cov_issues, cov = check_coverage(units, lines, cfg)
-    issues = check_units(units, cfg) + cov_issues + check_lines(lines, cfg, voices) + check_unit_order(units, voices)
+    issues = (check_units(units, cfg) + check_line_gaps(units, cfg) + check_rest(units, activity) + cov_issues
+              + check_lines(lines, cfg, voices) + check_unit_order(units, voices))
     return issues, cov
 
 
 # issue codes that a retry could plausibly improve
 RETRYABLE = {"short_unit", "token_gap", "long_unit", "anchor_deviation", "window_edge", "line_overlap", "order_conflict",
-             "unstable_boundary", "line_incomplete", "decode_failed", "boundary_conflict"}
+             "unstable_boundary", "line_incomplete", "decode_failed", "boundary_conflict", "line_gap",
+             "unit_in_rest"}

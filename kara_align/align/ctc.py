@@ -18,6 +18,16 @@ self loops are free.
 * soft: ``A = -lam * Huber((t - frame) / sigma)``
 * hard: ``A = 0`` if ``floor(lo) <= t <= ceil(hi)`` else ``-inf``
 
+Optional per-frame priors (``FramePriors``, all costs <= 0) are added to the
+emission score of a state at frame ``t``:
+
+* ``token[t]``  on every token state (e.g. singing placed where the vocal stem
+  is silent);
+* ``gap[t]``    on the *interior* blank states listed in ``gap_states`` (the
+  blanks between two tokens of the same lyric line), so a line cannot stretch
+  across an interlude for free.  Leading / trailing / between-line blanks stay
+  free.
+
 Tie-breaking (deterministic, identical in both implementations): among equal
 predecessor scores prefer *stay*, then ``s-1``, then ``s-2``; at the end prefer
 the trailing blank ``S-1`` over the last token ``S-2`` when scores are equal.
@@ -52,6 +62,13 @@ class AnchorSpec:
     hi_frame: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class FramePriors:
+    token: Optional[np.ndarray] = None  # [T] cost (<= 0) per frame on token states
+    gap: Optional[np.ndarray] = None  # [T] cost (<= 0) per frame on gap_states
+    gap_states: Optional[np.ndarray] = None  # [S] bool: interior blank states
+
+
 @dataclass
 class TokenSpan:
     token_index: int
@@ -68,6 +85,7 @@ class CtcPath:
     anchor_cost: float
     num_frames: int
     states: Optional[np.ndarray] = field(default=None, repr=False)  # state per frame
+    prior_cost: float = 0.0  # sum of FramePriors along the path (<= 0)
 
     @property
     def mean_acoustic(self) -> float:
@@ -139,6 +157,49 @@ def _entry_costs(anchors: Sequence[AnchorSpec], T: int) -> dict[int, np.ndarray]
     return out
 
 
+def _check_priors(priors: Optional[FramePriors], T: int, z: np.ndarray, blank: int
+                  ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    """Validated (token[T], gap[T], gap_states[S]) arrays; None for absent parts."""
+    if priors is None:
+        return None, None, None
+    tok = gap = mask = None
+    if priors.token is not None:
+        tok = np.asarray(priors.token, dtype=np.float64)
+        if tok.shape != (T,):
+            raise ValueError("token prior 长度必须等于帧数")
+    if priors.gap is not None and priors.gap_states is not None:
+        gap = np.asarray(priors.gap, dtype=np.float64)
+        mask = np.asarray(priors.gap_states, dtype=bool)
+        if gap.shape != (T,) or mask.shape != (len(z),):
+            raise ValueError("gap prior 尺寸不匹配")
+        if np.any(mask & (z != blank)):
+            raise ValueError("gap_states 只能包含 blank 状态")
+    for a in (tok, gap):
+        if a is not None and (np.any(a > 0) or not np.all(np.isfinite(a))):
+            raise ValueError("先验代价必须是有限的非正数")
+    return tok, gap, mask
+
+
+def _prior_at(pri, t: int, s: int) -> float:
+    tok, gap, mask = pri
+    v = 0.0
+    if tok is not None and s % 2 == 1:
+        v += float(tok[t])
+    if gap is not None and mask[s]:
+        v += float(gap[t])
+    return v
+
+
+def _path_prior_cost(pri, states: np.ndarray) -> float:
+    tok, gap, mask = pri
+    v = 0.0
+    if tok is not None:
+        v += float(tok[states % 2 == 1].sum())
+    if gap is not None:
+        v += float(gap[mask[states]].sum())
+    return v
+
+
 def _band_mask(T: int, S: int, band: Optional[int]) -> Optional[tuple[np.ndarray, np.ndarray]]:
     if band is None:
         return None
@@ -159,10 +220,11 @@ def _backtrack(bp: np.ndarray, end_state: int) -> np.ndarray:
     return states
 
 
-def _path_from_states(logp, z, states, anchors_by_state, U) -> CtcPath:
+def _path_from_states(logp, z, states, anchors_by_state, U, pri=(None, None, None)) -> CtcPath:
     T = len(states)
     frame_scores = logp[np.arange(T), z[states]]
     acoustic = float(frame_scores.sum())
+    prior_cost = _path_prior_cost(pri, states)
     anchor_cost = 0.0
     prev = -1
     for t in range(T):
@@ -176,7 +238,7 @@ def _path_from_states(logp, z, states, anchors_by_state, U) -> CtcPath:
         # a legal CTC path visits every token state at least once
         st, en = int(idx[0]), int(idx[-1]) + 1
         spans.append(TokenSpan(j, st, en, float(frame_scores[st:en].mean())))
-    return CtcPath(spans, acoustic + anchor_cost, acoustic, anchor_cost, T, states)
+    return CtcPath(spans, acoustic + anchor_cost + prior_cost, acoustic, anchor_cost, T, states, prior_cost)
 
 
 def ctc_align(
@@ -185,6 +247,7 @@ def ctc_align(
     blank: int,
     anchors: Sequence[AnchorSpec] = (),
     band: Optional[int] = None,
+    priors: Optional[FramePriors] = None,
 ) -> CtcPath:
     """Vectorised Viterbi forced alignment. Raises :class:`NoFeasiblePath`."""
     logp = np.asarray(logp, dtype=np.float64)
@@ -200,7 +263,13 @@ def ctc_align(
     entry_mat = np.stack([entry[s] for s in entry_states]) if len(entry_states) else None
     bandlim = _band_mask(T, S, band)
 
-    emit = logp[:, z]  # [T, S]
+    emit = logp[:, z]  # [T, S] (a copy: priors are added in place)
+    pri = _check_priors(priors, T, z, blank)
+    if pri[0] is not None:
+        emit[:, 1::2] += pri[0][:, None]
+    if pri[1] is not None:
+        for s_ in np.nonzero(pri[2])[0]:
+            emit[:, s_] += pri[1]
     bp = np.zeros((T, S), dtype=np.int8)
     D = np.full(S, NEG_INF)
     D[0] = emit[0, 0]
@@ -241,7 +310,7 @@ def ctc_align(
             reason += f" (band={band})"
         raise NoFeasiblePath(reason)
     states = _backtrack(bp, end_state)
-    return _path_from_states(logp, z, states, entry, U)
+    return _path_from_states(logp, z, states, entry, U, pri)
 
 
 def ctc_align_reference(
@@ -249,6 +318,7 @@ def ctc_align_reference(
     targets: Sequence[int],
     blank: int,
     anchors: Sequence[AnchorSpec] = (),
+    priors: Optional[FramePriors] = None,
 ) -> CtcPath:
     """Plain-loop reference implementation with identical semantics."""
     logp = np.asarray(logp, dtype=np.float64)
@@ -259,14 +329,18 @@ def ctc_align_reference(
     z = _states(targets, blank)
     S = len(z)
     entry = _entry_costs(anchors, T)
+    pri = _check_priors(priors, T, z, blank)
 
     def A(t: int, s: int) -> float:
         return float(entry[s][t]) if s in entry else 0.0
 
+    def E(t: int, s: int) -> float:
+        return float(logp[t, z[s]]) + _prior_at(pri, t, s)
+
     D = [[NEG_INF] * S for _ in range(T)]
     bp = np.zeros((T, S), dtype=np.int8)
-    D[0][0] = logp[0, z[0]]
-    D[0][1] = logp[0, z[1]] + A(0, 1)
+    D[0][0] = E(0, 0)
+    D[0][1] = E(0, 1) + A(0, 1)
     for t in range(1, T):
         for s in range(S):
             best, arg = D[t - 1][s], 0
@@ -278,10 +352,10 @@ def ctc_align_reference(
                 v = D[t - 1][s - 2] + A(t, s)
                 if v > best:
                     best, arg = v, 2
-            D[t][s] = best + logp[t, z[s]]
+            D[t][s] = best + E(t, s)
             bp[t, s] = arg
     end_state = S - 1 if D[T - 1][S - 1] >= D[T - 1][S - 2] else S - 2
     if not math.isfinite(D[T - 1][end_state]):
         raise NoFeasiblePath("没有可行的 CTC 路径")
     states = _backtrack(bp, end_state)
-    return _path_from_states(logp, z, states, entry, U)
+    return _path_from_states(logp, z, states, entry, U, pri)

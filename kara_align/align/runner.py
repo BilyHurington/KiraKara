@@ -34,6 +34,7 @@ from ..models import (
     utcnow,
 )
 from . import checks as chk
+from .activity import VocalActivity, detect_activity
 from .calibration import calibration_hash, check_issues, validate_anchors
 from .decoding import Prepared, TaskOutcome, decode_task, prepare, unit_timings_for_line
 from .planning import Task, merge_tasks, plan_lrc, plan_plain
@@ -126,13 +127,23 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             emissions[r] = inp.emission_for(r)
         return emissions[r]
 
+    # where the separated vocal stem is singing: a soft prior for decoding and
+    # evidence for the checks (never used without a vocal stem)
+    activity: Optional[VocalActivity] = None
+    if inp.energy_for is not None and "vocals" in inp.available_roles:
+        try:
+            activity = detect_activity(*inp.energy_for("vocals"))
+        except Exception as e:  # optional evidence
+            issues.append(Issue(code="activity_unavailable", severity="info", message=f"无法读取人声能量：{e}"))
+
     n_decodes = 0
 
     def decode(task: Task, r: str, sigma_scale: float = 1.0, line_units_override=None, label: str = "base") -> TaskOutcome:
         nonlocal n_decodes
         check_cancel()
         n_decodes += 1
-        return decode_task(task, emission(r), prep, cfg.decode, r, sigma_scale, line_units_override, label)
+        return decode_task(task, emission(r), prep, cfg.decode, r, sigma_scale, line_units_override, label,
+                           activity=activity)
 
     def plan(decode_cfg=None, extra_context: int = 0, line_ids=None, force_joint=None) -> list[Task]:
         if inp.mode == "plain":
@@ -217,7 +228,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
         return units, lines, extra
 
     units, lines, dec_issues = build(outcomes)
-    check_issues_, coverage = chk.run_checks(units, lines, cfg.checks, voices)
+    check_issues_, coverage = chk.run_checks(units, lines, cfg.checks, voices, activity)
     stab_issues: list[Issue] = []
     if inp.mode == "lrc" and tasks:
         prog(0.55, "稳定性检查")
@@ -263,7 +274,8 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
                     r = po.line_ranges.get(prep.order[j])
                     if r and voices[prep.order[j]] == voices[lid]:
                         neigh.append(LineTiming(line_id=prep.order[j], start_ms=r[0], end_ms=r[1]))
-            iss = chk.check_units(uts, cfg.checks) + chk.check_lines(neigh + [lt], cfg.checks, voices)
+            iss = (chk.check_units(uts, cfg.checks) + chk.check_line_gaps(uts, cfg.checks)
+                   + chk.check_rest(uts, activity) + chk.check_lines(neigh + [lt], cfg.checks, voices))
             iss = [i for i in iss if i.line_id == lid]
             timed = sum(1 for u in uts if u.start_ms is not None)
             cov = timed / len(uts) if uts else 1.0
@@ -300,7 +312,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             for lid, o in retry_report.committed.items():
                 outcomes[lid] = (o.task, o)
             units, lines, dec_issues = build(outcomes)
-            check_issues_, coverage = chk.run_checks(units, lines, cfg.checks, voices)
+            check_issues_, coverage = chk.run_checks(units, lines, cfg.checks, voices, activity)
             stab_issues = [i for i in stab_issues if i.line_id not in retry_report.committed]
 
     # --- manual locks from the previous result

@@ -75,13 +75,18 @@ export const FLAG_HELP: Record<string, string> = {
   illegal_interval: '区间非法（结束不晚于开始）',
   incomplete: '该行部分单元没有时间',
   edge: '贴近解码窗口边缘',
+  line_gap: '与本行前一个单元相隔很久：可能被错放进了间奏',
+  in_rest: '所在位置人声分轨几乎无声：可能被错放进了间奏',
+  tail_adjusted: '尾音结束时间已按人声能量修正',
+  tail_unresolved: '尾音附近找不到可靠的能量边界，保留模型时间',
 };
 
 export function flagLabel(flag: string): string {
   if (flag.startsWith('manual-resolved:')) return '人工补齐';
   const map: Record<string, string> = {
     token_gap: '内部停顿', short_unit: '过短', long_unit: '过长', manual: '人工', adopted: '已采用',
-    partial_tokens: '部分 token', illegal_interval: '非法区间',
+    partial_tokens: '部分 token', illegal_interval: '非法区间', line_gap: '行内长停顿', in_rest: '人声无声处',
+    tail_adjusted: '尾音已修正', tail_unresolved: '尾音未定',
   };
   return map[flag] ?? flag;
 }

@@ -49,6 +49,31 @@ def effective_line_starts(doc: LyricsDoc, cal: Calibration) -> dict[str, tuple[i
     return out
 
 
+def effective_line_ends(doc: LyricsDoc, cal: Calibration) -> dict[str, int]:
+    """line_id -> effective end hint for sung lines whose LRC marks an end.
+
+    An end is marked either explicitly (``imported_end_ms``) or, as NetEase and
+    most LRC files do before an interlude, by a *timed blank line* right after
+    the lyric.  The hint moves with the line (global shift or manual anchor).
+    It is only approximate: singers often hold the last note past it.
+    """
+    starts = effective_line_starts(doc, cal)
+    out: dict[str, int] = {}
+    lines = doc.lines
+    for i, ln in enumerate(lines):
+        if ln.id not in starts or ln.imported_start_ms is None:
+            continue
+        end = ln.imported_end_ms
+        if end is None and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            if nxt.kind == "blank" and not nxt.text.strip() and nxt.imported_start_ms is not None:
+                end = nxt.imported_start_ms
+        if end is None or end <= ln.imported_start_ms:
+            continue
+        out[ln.id] = starts[ln.id][0] + (int(end) - int(ln.imported_start_ms))
+    return out
+
+
 def _snapshot(cal: Calibration) -> dict:
     return {
         "user_shift_ms": cal.user_shift_ms,

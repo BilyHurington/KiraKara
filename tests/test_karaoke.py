@@ -285,3 +285,33 @@ def test_long_line_slides_back_instead_of_shrinking(tmp_path):
     assert not any("缩小" in w for w in warnings)  # indent never causes shrinking
     lo, hi = _main_x(text)
     assert 140 < lo and hi < 1920 - 140  # still inside the margins
+
+
+def test_line_is_hidden_during_a_long_pause_inside_it():
+    st = KaraokeStyle()
+    line = _line()
+    times = _times(line)
+    last = line.units()[-1].id
+    times[last] = (30000, 30400)  # the last syllable comes after a 27 s pause
+    ll = A.LaidLine(line, A.build_chunks(line, times, st, {}), 1000, 30400, units=sorted(times.values()))
+    A.schedule([ll], st)
+    spans = A.visible_spans(ll, st)
+    assert spans == [(ll.show_from, 2400 + st.timing.hold_ms), (30000 - st.timing.lead_in_ms, 30400 + st.timing.hold_ms)]
+    # an ordinary breath inside a line changes nothing
+    times[last] = (4000, 4300)
+    ll2 = A.LaidLine(line, A.build_chunks(line, times, st, {}), 1000, 4300, units=sorted(times.values()))
+    A.schedule([ll2], st)
+    assert A.visible_spans(ll2, st) == [(ll2.show_from, ll2.show_to)]
+
+
+def test_ass_hides_line_across_interlude(tmp_path):
+    h = _project(tmp_path)
+    r = h.project.result()
+    last = [u for u in r.units if u.line_id == h.project.lyrics.lines[0].id][-1]
+    last.start_ms, last.end_ms = 40000, 40300
+    text, warnings = S.karaoke_ass(h)
+    assert any("停顿" in w for w in warnings)
+    ruby = [l for l in text.splitlines() if l.startswith("Dialogue") and ",KRuby," in l and "さ" in l]
+    assert [l.split(",")[1:3] for l in ruby] == [["0:00:00.00", "0:00:03.20"], ["0:00:39.00", "0:00:40.80"]]
+    # the second event starts with the earlier syllables already sung
+    assert ruby[1].endswith("{\\kf0}さ{\\kf0}く{\\k100}{\\kf30}ら")

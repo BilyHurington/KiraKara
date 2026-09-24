@@ -259,6 +259,15 @@ class DecodeConfig(_Base):
     joint_context_lines: int = 1
     tight_gap_ms: int = 400  # neighbour lines closer than this are aligned jointly
     band_frames: Optional[int] = None
+    # pauses *inside* a line cost this much per second, so a line cannot stretch
+    # across an interlude for free (between-line pauses stay free)
+    line_gap_cost: float = 1.0
+    # with a vocal stem: extra cost per second of an in-line pause where the stem
+    # is silent, and per second of singing placed where the stem is silent
+    rest_gap_cost: float = 4.0
+    rest_token_cost: float = 25.0
+    # an LRC end marker (a timed blank line) bounds the search this far after it
+    end_marker_margin_ms: int = 6000
 
 
 class CheckConfig(_Base):
@@ -268,6 +277,7 @@ class CheckConfig(_Base):
     edge_crowd_ms: int = 120
     stability_tolerance_ms: int = 150
     min_coverage: float = 0.999
+    max_line_gap_ms: int = 4000  # a longer pause between two units of one line is suspicious
 
 
 class RetryConfig(_Base):

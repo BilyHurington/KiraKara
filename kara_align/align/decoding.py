@@ -12,7 +12,10 @@ from typing import Callable, Optional, Sequence
 
 from ..interfaces import Emission, TokenizedUnit, TranslitProfile
 from ..models import DecodeConfig, Issue, Line, LyricsDoc, UnitTiming
-from .ctc import AnchorSpec, NoFeasiblePath, ctc_align
+import numpy as np
+
+from .activity import VocalActivity
+from .ctc import AnchorSpec, FramePriors, NoFeasiblePath, ctc_align
 from .planning import Task
 
 
@@ -143,6 +146,7 @@ def decode_task(
     sigma_scale: float = 1.0,
     line_units_override: Optional[dict[str, Sequence[tuple[str, Sequence[int]]]]] = None,
     label: str = "base",
+    activity: Optional[VocalActivity] = None,
 ) -> TaskOutcome:
     em = emission.slice(task.start_frame, task.end_frame)
     fm = em.frame_map
@@ -150,6 +154,7 @@ def decode_task(
     out = TaskOutcome(task, role, False, window_ms=window_ms, sigma_scale=sigma_scale, label=label)
     targets: list[int] = []
     pos_unit: list[str] = []
+    pos_line: list[str] = []
     first_tok: dict[str, int] = {}
     for lid in task.participating_line_ids:
         seq = (line_units_override or {}).get(lid)
@@ -161,6 +166,7 @@ def decode_task(
             first_tok.setdefault(lid, len(targets))
             targets.extend(int(t) for t in toks)
             pos_unit.extend([uid] * len(toks))
+            pos_line.extend([lid] * len(toks))
     if not targets:
         out.reason = "该任务中没有可转为 token 的单元"
         return out
@@ -182,8 +188,10 @@ def decode_task(
             anchors.append(AnchorSpec(ti, "soft", fm.ms_to_frame(a.ms),
                                       sigma_frames=cfg.soft_sigma_ms * sigma_scale * task.sigma_scale / frame_ms,
                                       lam=cfg.soft_lambda, huber_delta=cfg.huber_delta))
+    priors = frame_priors(pos_line, em.num_frames, frame_ms, cfg,
+                          activity.for_frames(fm, 0, em.num_frames) if activity is not None else None)
     try:
-        path = ctc_align(em.logp, targets, em.blank_id, anchors, band=cfg.band_frames)
+        path = ctc_align(em.logp, targets, em.blank_id, anchors, band=cfg.band_frames, priors=priors)
     except NoFeasiblePath as e:
         out.reason = e.reason
         return out
@@ -211,6 +219,28 @@ def decode_task(
         if spans:
             out.line_ranges[lid] = (min(s.start_ms for s in spans), max(s.end_ms for s in spans))
     return out
+
+
+def frame_priors(pos_line: Sequence[str], num_frames: int, frame_ms: float, cfg: DecodeConfig,
+                 rest: Optional[np.ndarray]) -> Optional[FramePriors]:
+    """In-line pause cost and rest costs for one decode (see :mod:`.ctc`)."""
+    sec = frame_ms / 1000.0
+    U = len(pos_line)
+    gap_states = np.zeros(2 * U + 1, dtype=bool)
+    for k in range(1, U):
+        gap_states[2 * k] = pos_line[k] == pos_line[k - 1]
+    gap = np.full(num_frames, -cfg.line_gap_cost * sec)
+    token = None
+    if rest is not None:
+        gap = gap - cfg.rest_gap_cost * sec * rest
+        token = -cfg.rest_token_cost * sec * rest
+    if not gap_states.any() or not np.any(gap):
+        gap = None
+    if token is not None and not np.any(token):
+        token = None
+    if gap is None and token is None:
+        return None
+    return FramePriors(token=token, gap=gap, gap_states=gap_states if gap is not None else None)
 
 
 def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_id: str) -> list[UnitTiming]:

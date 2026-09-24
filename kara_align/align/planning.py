@@ -11,7 +11,10 @@ optional context lines) inside
     W = [eff(first participating) - left_margin, next_anchor + right_margin]
 
 but only commits its *retained* lines.  The next anchor only bounds the
-search; it is not the end of the line.  Windows are clipped to the audio.
+search; it is not the end of the line.  When the LRC marks where the last
+participating line ends (a timed blank line before an interlude), the window
+also stops ``end_marker_margin`` after that mark, so a line cannot reach into
+a long interlude.  Windows are clipped to the audio.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from typing import Iterable, Optional
 
 from ..models import Calibration, DecodeConfig, Line, LyricsDoc
 from ..timebase import FrameMap
-from .calibration import effective_line_starts
+from .calibration import effective_line_ends, effective_line_starts
 
 
 @dataclass
@@ -76,12 +79,10 @@ def plan_plain(doc: LyricsDoc, num_frames: int, line_ids: Optional[list[str]] = 
     return tasks
 
 
-def _line_gap_ms(prev: Line, nxt_start: int, prev_start: int) -> Optional[int]:
-    """Gap between line end and next start, when a line end is known."""
-    if prev.imported_end_ms is None:
-        return None
-    end = prev.imported_end_ms + (prev_start - (prev.imported_start_ms or prev_start))
-    return nxt_start - end
+def _line_gap_ms(ends: dict[str, int], prev: Line, nxt_start: int) -> Optional[int]:
+    """Gap between line end and next start, when the LRC marks the line end."""
+    end = ends.get(prev.id)
+    return None if end is None else nxt_start - end
 
 
 def plan_lrc(
@@ -96,6 +97,7 @@ def plan_lrc(
     extra_context: int = 0,
 ) -> list[Task]:
     starts = effective_line_starts(doc, cal)
+    ends = effective_line_ends(doc, cal)
     force_joint = force_joint or set()
     tasks: list[Task] = []
     for voice, lines in _voices(doc.sung_lines()).items():
@@ -123,24 +125,26 @@ def plan_lrc(
             retained = [ln.id for ln in grp if line_ids is None or ln.id in line_ids]
             if not retained:
                 continue
-            # 2. context: tight neighbours / unknown gaps / forced lines
+            # 2. context: tight neighbours / unknown gaps / forced lines, per side
+            #    (a line whose LRC marks a clear pause after it needs no context there)
             ctx = cfg.joint_context_lines + extra_context
             lo_g, hi_g = gi, gi
-            need = any(i in force_joint for i in retained) or extra_context > 0
-            if not need and ctx > 0:
+            forced = any(i in force_joint for i in retained) or extra_context > 0
+            need_next = need_prev = forced
+            if not forced and ctx > 0:
                 if gi + 1 < len(groups):
                     na = g_anchor(gi + 1)
+                    gap = _line_gap_ms(ends, grp[-1], na) if na is not None else None
+                    need_next = gap is None or gap < cfg.tight_gap_ms
+                if gi > 0:
                     ga = g_anchor(gi)
-                    gap = _line_gap_ms(grp[-1], na, ga) if (na is not None and ga is not None) else None
-                    need = gap is None or gap < cfg.tight_gap_ms
-                if gi > 0 and not need:
-                    pa = g_anchor(gi - 1)
-                    ga = g_anchor(gi)
-                    gap = _line_gap_ms(groups[gi - 1][-1], ga, pa) if (pa is not None and ga is not None) else None
-                    need = gap is None or gap < cfg.tight_gap_ms
-            if need and ctx > 0:
-                lo_g = max(0, gi - ctx)
-                hi_g = min(len(groups) - 1, gi + ctx)
+                    gap = _line_gap_ms(ends, groups[gi - 1][-1], ga) if ga is not None else None
+                    need_prev = gap is None or gap < cfg.tight_gap_ms
+            if ctx > 0:
+                if need_prev:
+                    lo_g = max(0, gi - ctx)
+                if need_next:
+                    hi_g = min(len(groups) - 1, gi + ctx)
             part_lines = [ln for g in groups[lo_g:hi_g + 1] for ln in g]
             first_anchor = g_anchor(lo_g)
             if first_anchor is None:
@@ -148,6 +152,9 @@ def plan_lrc(
             nxt = g_anchor(hi_g + 1) if hi_g + 1 < len(groups) else None
             lo_ms = first_anchor - cfg.left_margin_ms
             hi_ms = (nxt + cfg.right_margin_ms) if nxt is not None else audio_duration_ms
+            last_end = ends.get(part_lines[-1].id)
+            if last_end is not None:
+                hi_ms = min(hi_ms, last_end + cfg.end_marker_margin_ms)
             anchors = []
             for ln in part_lines:
                 if ln.id in starts:

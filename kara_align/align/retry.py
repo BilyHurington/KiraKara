@@ -11,7 +11,10 @@ Variants per flagged line (limited by :class:`RetryConfig` budgets):
 
 Selection: feasibility, coverage, error / warning count, anchor residual; the
 normalised acoustic score is only used to break ties between variants decoded
-with the same model on the same audio slice.  Clearly divergent variants are
+with the same model on the same audio slice.  Residuals closer than
+``RESIDUAL_TIE_MS`` count as equal: a soft LRC anchor is not precise enough to
+prefer one variant for a few tens of milliseconds, so the earlier (base)
+variant is kept.  Clearly divergent variants are
 kept as candidates; times are never averaged.
 """
 
@@ -24,6 +27,8 @@ from ..interfaces import TokenizedUnit, TranslitProfile
 from ..models import Candidate, Issue, RetryConfig, UnitTiming, new_id
 from .decoding import Prepared, TaskOutcome, unit_timings_for_line
 from .planning import Task
+
+RESIDUAL_TIE_MS = 150
 
 
 @dataclass
@@ -53,6 +58,16 @@ class Scored:
         warns = sum(1 for i in self.issues if i.severity == "warning")
         res = self.outcome.residual(line_id)
         return (self.outcome.feasible, round(self.coverage, 6), -errors, -warns, -abs(res) if res is not None else 0)
+
+    def better_than(self, other: "Scored", line_id: str) -> bool:
+        a, b = self.key(line_id), other.key(line_id)
+        if a[:-1] != b[:-1]:
+            return a[:-1] > b[:-1]
+        if abs(a[-1] - b[-1]) > RESIDUAL_TIE_MS:
+            return a[-1] > b[-1]
+        return (self.slice_id() == other.slice_id()
+                and self.outcome.mean_acoustic is not None and other.outcome.mean_acoustic is not None
+                and self.outcome.mean_acoustic > other.outcome.mean_acoustic)
 
     def slice_id(self) -> tuple:
         t = self.outcome.task
@@ -172,11 +187,7 @@ def retry_line(line_id: str, base_task: Task, base: TaskOutcome, ctx: RetryConte
 
     best = scored[0]
     for s in scored[1:]:
-        if s.key(line_id) > best.key(line_id):
-            best = s
-        elif (s.key(line_id) == best.key(line_id) and s.slice_id() == best.slice_id()
-              and s.outcome.mean_acoustic is not None and best.outcome.mean_acoustic is not None
-              and s.outcome.mean_acoustic > best.outcome.mean_acoustic):
+        if s.better_than(best, line_id):
             best = s
     report.log.append({"line_id": line_id, "tried": [s.outcome.label for s in scored], "chosen": best.outcome.label,
                        "keys": {s.outcome.label: list(s.key(line_id)) for s in scored}})
