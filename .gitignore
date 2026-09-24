@@ -26,3 +26,6 @@ dist/
 # frontend
 frontend/node_modules/
 frontend/*.tsbuildinfo
+
+# third-party tools deployed locally for comparison
+/third_party/
