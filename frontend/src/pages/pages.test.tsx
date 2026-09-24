@@ -320,6 +320,7 @@ describe('karaoke subtitles page', () => {
     text: { font: '', size: 88, bold: true, color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 4.5, shadow: 2, shadow_color: '#000000', shadow_opacity: 45 },
     ruby: { enabled: true, script: 'hiragana', target: 'kanji', size_pct: 45, gap: 2, fit: 'widen', follow_colors: true, font: '', color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 3 },
     timing: { lead_in_ms: 1000, hold_ms: 500, highlight: 'sweep', early_show: true, early_max_ms: 4000 },
+    output: { vocal_keep_pct: 20 },
   };
 
   function karaokeServer() {
@@ -370,6 +371,34 @@ describe('karaoke subtitles page', () => {
     renderUI(<KaraokePage />);
     await userEvent.click(await screen.findByRole('button', { name: /一键烧录/ }));
     await waitFor(() => expect(api.calls.some((c) => c.url.endsWith('/karaoke/burn'))).toBe(true));
-    expect(api.calls.find((c) => c.url.endsWith('/karaoke/burn'))!.body).toEqual({ background: 'auto', audio: 'original', quality: 'standard' });
+    expect(api.calls.find((c) => c.url.endsWith('/karaoke/burn'))!.body).toEqual({ background: 'auto', audio: 'original', quality: 'standard', vocal_keep_pct: 20 });
+  });
+
+  it('reduced vocals shows its own level control and burns with it', async () => {
+    seedStore('karaoke');
+    const api = karaokeServer();
+    (URL as any).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = vi.fn();
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    await screen.findByRole('button', { name: /一键烧录/ });
+    expect(screen.queryByRole('textbox', { name: '人声保留（输入数值）' })).toBeNull();
+    // the option no longer shows the Export page's mix level
+    const mix = screen.getByRole('radio', { name: '降低人声' });
+    await userEvent.click(mix);
+    expect(screen.getByRole('textbox', { name: '人声保留（输入数值）' })).toHaveValue('20');
+    await waitFor(() => expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length).toBeGreaterThan(0), { timeout: 2000 });
+    const previews = api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length;
+    const box = screen.getByRole('textbox', { name: '人声保留（输入数值）' });
+    await userEvent.click(box);
+    await new Promise((r) => setTimeout(r, 30)); // the field selects its text on the next frame
+    await userEvent.keyboard('35{Enter}');
+    await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.output.vocal_keep_pct).toBe(35), { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 500));
+    // changing the audio level does not re-render the picture
+    expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length).toBe(previews);
+    await userEvent.click(screen.getByRole('button', { name: /一键烧录/ }));
+    await waitFor(() => expect(api.calls.some((c) => c.url.endsWith('/karaoke/burn'))).toBe(true));
+    expect(api.calls.find((c) => c.url.endsWith('/karaoke/burn'))!.body).toMatchObject({ audio: 'mix', vocal_keep_pct: 35 });
   });
 });

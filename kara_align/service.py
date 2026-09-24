@@ -773,8 +773,14 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
+                 vocal_keep_pct: Optional[float] = None,
                  cancel: Optional[CancelToken] = None, progress: Optional[Callable[[float, str], None]] = None) -> dict:
-    """Burn the karaoke subtitles into a video (the source video or black)."""
+    """Burn the karaoke subtitles into a video (the source video or black).
+
+    ``audio="mix"`` keeps the vocals at ``vocal_keep_pct`` (default: the karaoke
+    style's own setting) over the full instrumental; the Export page's mix
+    settings are neither used nor changed.
+    """
     import tempfile
 
     from .karaoke.ass import build_ass, resolution
@@ -789,7 +795,10 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     text, warnings = build_ass(h.project, r, k, time_offset_ms=offset_s * 1000)
     size = resolution(h.project) if video else (resolution(h.project) if h.project.video else (1920, 1080))
     stem = Path((h.project.video.filename if video else None) or h.project.name or "karaoke").stem
-    suffix = {"original": "", "mix": f"-vocal{int(round(h.project.mix.vocal_keep_pct))}", "none": "-noaudio"}[audio]
+    pct = float(k.output.vocal_keep_pct if vocal_keep_pct is None else vocal_keep_pct)
+    if not 0.0 <= pct <= 100.0:
+        raise ServiceError("人声保留比例必须在 0–100% 之间")
+    suffix = {"original": "", "mix": f"-vocal{int(round(pct))}", "none": "-noaudio"}[audio]
     out = h.dir / "exports" / f"{stem}-karaoke{suffix}.mp4"
     with tempfile.TemporaryDirectory() as td:
         audio_file: Optional[Path] = None
@@ -797,7 +806,8 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
         if audio == "mix":
             if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
                 raise ServiceError("降低人声需要人声和伴奏两条分轨，请先进行人声分离")
-            audio_file = Path(export_mix(h, {}, Path(td) / "mix.wav")["path"])
+            mix = MixSettings(vocal_keep_pct=pct, instrumental_pct=100.0).model_dump()
+            audio_file = Path(export_mix(h, mix, Path(td) / "mix.wav", save=False)["path"])
         elif audio == "original":
             if video is not None:
                 use_video_audio = True
@@ -935,7 +945,7 @@ def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
     return {"bus_gain": rep.bus_gain, "peak_before": rep.peak_before}
 
 
-def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None) -> dict:
+def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None, *, save: bool = True) -> dict:
     from .audio.mix import export_mix_wav
 
     v, i = h.project.asset("vocals"), h.project.asset("instrumental")
@@ -952,9 +962,10 @@ def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None
     rep = export_mix_wav(asset_path(h, v), asset_path(h, i), out, s.vocal_keep_pct, s.instrumental_pct,
                          s.master, limiter="normalize_peak" if s.limiter == "normalize_peak" else "none",
                          original_num_samples=original_n)
-    with h.lock:
-        h.project.mix = s
-        h.save()
+    if save:  # the Export page remembers its mix; other callers (burn-in) do not touch it
+        with h.lock:
+            h.project.mix = s
+            h.save()
     rep_d = _jsonable(asdict(rep)) if hasattr(rep, "__dataclass_fields__") else _jsonable(rep)
     return {"filename": out.name, "path": str(out), "report": rep_d}
 

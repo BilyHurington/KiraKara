@@ -97,7 +97,7 @@ export function KaraokePage() {
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <PreviewCard style={style} lines={lines} />
-          <BurnCard />
+          <BurnCard style={style} patch={patch} />
         </div>
         <div className="space-y-6 xl:sticky xl:top-4">
           <Card>
@@ -163,6 +163,8 @@ function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] 
 
   const line = lines[Math.min(lineIdx, Math.max(0, lines.length - 1))];
   const t = custom ?? (line ? Math.round(line.start + (line.end - line.start) * pct / 100) : 0);
+  // the burn-in audio setting lives in the style but does not change the picture
+  const lookKey = JSON.stringify({ ...style, output: undefined });
   const w = project.video?.width ?? 1920;
   const h = project.video?.height ?? 1080;
 
@@ -187,7 +189,7 @@ function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] 
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [style, t, bg]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lookKey, t, bg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (i: number) => { setCustom(null); setLineIdx(Math.max(0, Math.min(lines.length - 1, i))); };
   const followPlayhead = () => {
@@ -260,7 +262,7 @@ function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] 
 
 // ------------------------------------------------------------------ export / burn
 
-function BurnCard() {
+function BurnCard({ style, patch }: { style: KaraokeStyle; patch: (fn: (s: KaraokeStyle) => void) => void }) {
   const project = useProject()!;
   const view = useApp((s) => s.pv?.view);
   const job = useJob('burn');
@@ -270,10 +272,12 @@ function BurnCard() {
   const [out, setOut] = useState<{ url: string; filename: string; warnings: string[] } | null>(null);
   const canMix = !!view?.audio.vocals?.available && !!view?.audio.instrumental?.available;
   const running = job && (job.status === 'queued' || job.status === 'running');
+  const vocalPct = style.output?.vocal_keep_pct ?? 20;
+  const setVocalPct = (v: number) => patch((s) => { s.output = { ...s.output, vocal_keep_pct: v }; });
 
   const start = () => run(async () => {
     setOut(null);
-    const j = await api.post<Job>(ppath('/karaoke/burn'), { background, audio, quality });
+    const j = await api.post<Job>(ppath('/karaoke/burn'), { background, audio, quality, vocal_keep_pct: vocalPct });
     trackJob(j, { label: '字幕烧录', onDone: (d) => { if (d.status === 'succeeded' && d.output) setOut(d.output); } });
   }, '无法开始烧录');
 
@@ -300,7 +304,7 @@ function BurnCard() {
             <div className="text-[13px] font-medium">音频</div>
             <Segmented size="sm" value={audio} onChange={setAudio} options={[
               { value: 'original', label: '原声' },
-              { value: 'mix', label: `降低人声 ${Math.round(project.mix.vocal_keep_pct)}%`, disabled: !canMix, title: canMix ? '使用“导出”页的混音设置' : '需要先分离人声' },
+              { value: 'mix', label: '降低人声', disabled: !canMix, title: canMix ? undefined : '需要先分离人声' },
               { value: 'none', label: '无' },
             ]} />
           </div>
@@ -308,6 +312,14 @@ function BurnCard() {
             <div className="text-[13px] font-medium">画质</div>
             <Segmented size="sm" value={quality} onChange={setQuality} options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
           </div>
+          {audio === 'mix' && canMix && (
+            <div className="space-y-1.5 md:col-span-3">
+              <div className="text-[13px] font-medium">人声保留</div>
+              <SliderField name="人声保留" value={vocalPct} onChange={setVocalPct} min={0} max={100} step={1} unit="%"
+                trackClassName="min-w-40" />
+              <div className="text-xs text-subtle">0% 为纯伴奏；伴奏保持 100%。只用于这里的烧录，不影响“导出”页的混音。</div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-3">

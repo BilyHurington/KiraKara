@@ -315,3 +315,30 @@ def test_ass_hides_line_across_interlude(tmp_path):
     assert [l.split(",")[1:3] for l in ruby] == [["0:00:00.00", "0:00:03.20"], ["0:00:39.00", "0:00:40.80"]]
     # the second event starts with the earlier syllables already sung
     assert ruby[1].endswith("{\\kf0}さ{\\kf0}く{\\k100}{\\kf30}ら")
+
+
+def test_burn_reduced_vocals_uses_its_own_level(tmp_path, monkeypatch):
+    import kara_align.karaoke.render as R
+
+    h = _project(tmp_path)
+    x = (np.random.default_rng(1).standard_normal(22050 * 7) * 0.05).astype(np.float32)
+    for role in ("vocals", "instrumental"):
+        sf.write(tmp_path / f"{role}.wav", x, 22050)
+        S.add_audio(h, tmp_path / f"{role}.wav", role)
+    h.project.mix.vocal_keep_pct = 80.0  # the Export page's setting
+    seen = {}
+
+    def fake_burn(text, out, size, duration_ms, *, audio=None, **kw):
+        seen["audio"] = audio
+        seen["peak"] = float(np.abs(sf.read(str(audio))[0]).max())
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+
+    monkeypatch.setattr(R, "burn", fake_burn)
+    S.set_karaoke_style(h, {**h.project.karaoke.model_dump(mode="json"), "output": {"vocal_keep_pct": 30}})
+    out = S.karaoke_burn(h, background="black", audio="mix")
+    assert out["filename"].endswith("-vocal30.mp4")  # the karaoke page's own level
+    assert S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=0)["filename"].endswith("-vocal0.mp4")
+    assert h.project.mix.vocal_keep_pct == 80.0  # Export page settings untouched
+    with pytest.raises(S.ServiceError):
+        S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=150)

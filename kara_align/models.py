@@ -553,6 +553,12 @@ class KaraokeTiming(_Base):
     highlight: Literal["sweep", "instant"] = "sweep"  # \kf or \k
 
 
+class KaraokeOutput(_Base):
+    # "reduced vocals" audio for burn-in: vocals at this %, instrumental at 100 %
+    # (independent of the Export page's mix, which comes later in the flow)
+    vocal_keep_pct: float = Field(default=20.0, ge=0.0, le=100.0)
+
+
 class KaraokeStyle(_Base):
     version: int = 1
     preset: str = "classic"
@@ -560,6 +566,7 @@ class KaraokeStyle(_Base):
     text: KaraokeText = Field(default_factory=KaraokeText)
     ruby: KaraokeRuby = Field(default_factory=KaraokeRuby)
     timing: KaraokeTiming = Field(default_factory=KaraokeTiming)
+    output: KaraokeOutput = Field(default_factory=KaraokeOutput)
 
 
 class Project(_Base):

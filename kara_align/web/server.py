@@ -469,10 +469,14 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         audio = body.get("audio", "original")
         if audio not in ("original", "mix", "none"):
             raise HTTPException(400, "audio 只能是 original / mix / none")
+        pct = body.get("vocal_keep_pct")
+        if pct is not None and (not isinstance(pct, (int, float)) or not 0 <= pct <= 100):
+            raise HTTPException(400, "vocal_keep_pct 必须是 0–100 之间的数字")
 
         def run(job: Job):
             out = S.karaoke_burn(h, background=body.get("background", "auto"), audio=audio,
-                                 quality=body.get("quality", "standard"), cancel=job.cancel_token,
+                                 quality=body.get("quality", "standard"), vocal_keep_pct=pct,
+                                 cancel=job.cancel_token,
                                  progress=progress_setter(job))
             return {"filename": out["filename"], "warnings": out["warnings"],
                     "url": f"/api/projects/{pid}/exports/{out['filename']}"}

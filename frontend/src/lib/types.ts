@@ -194,6 +194,8 @@ export interface KaraokeStyle {
     outline_color: string; outline: number;
   };
   timing: { lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number };
+  /** burn-in audio: vocals kept at this % over the full instrumental */
+  output?: { vocal_keep_pct: number };
 }
 
 export interface KaraokePreset { name: string; label: string; description: string; style: KaraokeStyle }
