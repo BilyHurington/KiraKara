@@ -325,8 +325,7 @@ export interface AppSettings {
   };
   simple: {
     default_mode: Mode; ai_readings: boolean; separate: boolean; separation_preset: string;
-    separation_device: 'auto' | 'cpu'; karaoke_preset: string; ruby: boolean;
-    ruby_script: 'hiragana' | 'katakana' | 'romaji'; auto_export: boolean;
+    separation_device: 'auto' | 'cpu'; karaoke: KaraokeStyle; auto_export: boolean;
     video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high';
   };
 }
@@ -334,7 +333,7 @@ export interface AppSettings {
 /** Partial update for PUT /api/settings (api_key / clear_api_key are write-only). */
 export interface SettingsPatch {
   ai?: Partial<AppSettings['ai']> & { api_key?: string; clear_api_key?: boolean };
-  simple?: Partial<AppSettings['simple']>;
+  simple?: Partial<AppSettings['simple']> & { reset_karaoke?: boolean };
 }
 
 export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }

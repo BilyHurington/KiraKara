@@ -18,6 +18,28 @@ _PRESETS: dict[str, dict] = {
 }
 
 
+# Default style of the simple mode: the look tuned on a real project (pink sweep,
+# romaji over every syllable, lines close to the bottom, shown 4 s early and
+# held 2 s so a line never flashes by).
+SIMPLE_DEFAULT: dict = {
+    "preset": "custom",
+    "layout": {"margin_v": 40, "line_spacing": 0, "margin_h": 240},
+    "text": {"color_sung": "#ED35B3"},
+    "ruby": {"script": "romaji", "target": "all"},
+    "timing": {"lead_in_ms": 4000, "hold_ms": 2000, "early_max_ms": 6000},
+}
+
+
+def simple_default_style() -> KaraokeStyle:
+    data = KaraokeStyle().model_dump()
+    for key, over in SIMPLE_DEFAULT.items():
+        if isinstance(over, dict):
+            data[key].update(over)
+        else:
+            data[key] = over
+    return KaraokeStyle.model_validate(data)
+
+
 def preset_list() -> list[dict]:
     return [{"name": k, "label": v["label"], "description": v["description"],
              "style": make_preset(k).model_dump(mode="json")} for k, v in _PRESETS.items()]

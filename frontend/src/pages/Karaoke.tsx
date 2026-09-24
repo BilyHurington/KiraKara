@@ -1,18 +1,19 @@
 // Step 7: karaoke subtitles — presets, settings, a live libass preview at any
 // moment, ASS download and one-click burn-in (see docs/karaoke.md).
 
-import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, RotateCcw, Subtitles } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, RotateCcw, Sparkles, Subtitles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs, parseTime } from '@/lib/format';
 import type { FontFamily, Job, KaraokePreset, KaraokeStyle } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
-import { ppath, run, setStep, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
+import { ppath, run, setStep, toast, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
 import { StyleSettings } from './karaoke/Settings';
+import { saveSettings } from '@/store/simple';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number }
 
@@ -120,12 +121,20 @@ export function KaraokePage() {
           </Card>
           <Card>
             <CardHeader title="设置" actions={
+              <>
+              <Tip content="极简模式新建的任务使用这套样式（含布局、注音与时间）">
+                <Button size="xs" variant="ghost" icon={<Sparkles className="size-3.5" />}
+                  onClick={() => run(async () => { await saveSettings({ simple: { karaoke: style } }); toast('ok', '已设为极简模式默认样式'); }, '保存失败')}>
+                  设为极简默认
+                </Button>
+              </Tip>
               <Tip content="恢复为默认样式（经典）">
                 <Button size="xs" variant="ghost" icon={<RotateCcw className="size-3.5" />}
                   onClick={() => { const d = presets.find((p) => p.name === 'classic'); if (d) { dirty.current = true; setStyle(structuredClone(d.style)); } }}>
                   默认
                 </Button>
               </Tip>
+              </>
             } />
             <CardBody>
               <StyleSettings style={style} patch={patch} fonts={fonts.families} defaultFont={fonts.default} />

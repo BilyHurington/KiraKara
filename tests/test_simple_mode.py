@@ -61,6 +61,19 @@ def test_settings_merge_and_never_return_the_key():
         AS.update({"ai": {"provider": "nope"}})
 
 
+def test_simple_mode_default_subtitle_style_and_reset():
+    k = AS.load().simple.karaoke
+    # the look tuned on a real project: pink sweep, romaji over everything, shown 4 s early, held 2 s
+    assert (k.text.color_sung, k.ruby.script, k.ruby.target) == ("#ED35B3", "romaji", "all")
+    assert (k.layout.margin_v, k.layout.line_spacing, k.layout.margin_h) == (40, 0, 240)
+    assert (k.timing.lead_in_ms, k.timing.hold_ms, k.timing.early_max_ms) == (4000, 2000, 6000)
+    AS.update({"simple": {"karaoke": {"timing": {"hold_ms": 800}}}})  # nested partial update keeps the rest
+    k2 = AS.load().simple.karaoke
+    assert k2.timing.hold_ms == 800 and k2.timing.lead_in_ms == 4000 and k2.ruby.script == "romaji"
+    AS.update({"simple": {"reset_karaoke": True}})
+    assert AS.load().simple.karaoke == k
+
+
 # ------------------------------------------------------------------ AI providers
 
 
@@ -221,7 +234,7 @@ def _scripted_import(monkeypatch):
 @needs_ffmpeg
 def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     _scripted_import(monkeypatch)
-    AS.update({"simple": {"separate": False, "auto_export": True, "karaoke_preset": "sakura", "ruby_script": "katakana"}})
+    AS.update({"simple": {"separate": False, "auto_export": True, "karaoke": {"ruby": {"script": "katakana"}}}})
     q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
     t = q.add(media=_wav(tmp_path / "song.wav"), filename="song.wav", lyrics=LRC, mode="lrc")
     assert t.lyrics_kind == "text" and t.name == "song"
@@ -237,7 +250,9 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     r = h.project.result()
     got = [(u.reading, u.start_ms) for u in r.units]
     assert all(abs(s - e[1]) <= 45 for (_, s), e in zip(got, SCRIPT))
-    assert h.project.karaoke.preset == "sakura" and h.project.karaoke.ruby.script == "katakana"
+    k = h.project.karaoke  # the simple mode's full default style, with the one change made above
+    assert k.ruby.script == "katakana" and k.ruby.target == "all" and k.text.color_sung == "#ED35B3"
+    assert (k.timing.lead_in_ms, k.timing.hold_ms, k.layout.margin_v) == (4000, 2000, 40)
     video = h.dir / "exports" / t.outputs["video"]["filename"]
     assert video.exists() and video.stat().st_size > 1000
     # the queue survives a restart; finished tasks stay listed

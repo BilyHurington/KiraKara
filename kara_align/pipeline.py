@@ -510,14 +510,8 @@ def stage_align(q, task, cfg, cancel, progress):
 
 
 def apply_karaoke_settings(h: "S.ProjectHandle", simple: "app_settings.SimpleSettings") -> None:
-    from .karaoke.presets import make_preset
-
-    try:
-        style = make_preset(simple.karaoke_preset, keep=h.project.karaoke)
-    except KeyError:
-        style = h.project.karaoke.model_copy(deep=True)
-    style.ruby.enabled = simple.ruby
-    style.ruby.script = simple.ruby_script
+    """The project gets the simple mode's complete subtitle style."""
+    style = simple.karaoke.model_copy(deep=True)
     style.output.vocal_keep_pct = simple.vocal_keep_pct
     S.set_karaoke_style(h, style.model_dump(mode="json"))
 

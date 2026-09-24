@@ -13,7 +13,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from .models import _Base
+from .karaoke.presets import simple_default_style
+from .models import KaraokeStyle, _Base
 from .project.store import atomic_write_text, home_dir
 
 AiProvider = Literal["none", "claude", "codex", "openai"]
@@ -34,9 +35,9 @@ class SimpleSettings(_Base):
     separate: bool = True
     separation_preset: str = "melband-roformer"
     separation_device: Literal["auto", "cpu"] = "auto"
-    karaoke_preset: str = "classic"
-    ruby: bool = True
-    ruby_script: Literal["hiragana", "katakana", "romaji"] = "hiragana"
+    # the complete subtitle style of new tasks (layout, colours, ruby, timing);
+    # output.vocal_keep_pct is taken from vocal_keep_pct below
+    karaoke: KaraokeStyle = Field(default_factory=simple_default_style)
     auto_export: bool = True
     video_audio: Literal["original", "mix", "none"] = "original"
     vocal_keep_pct: float = Field(default=20.0, ge=0.0, le=100.0)
@@ -84,17 +85,29 @@ def update(patch: dict) -> AppSettings:
     ``ai.clear_api_key: true`` removes it."""
     with _lock:
         cur = load().model_dump(mode="json")
+        simple_patch = dict(patch.get("simple") or {})
+        if simple_patch.pop("reset_karaoke", False):
+            simple_patch["karaoke"] = simple_default_style().model_dump(mode="json")
+            cur["simple"].pop("karaoke", None)
         ai_patch = dict(patch.get("ai") or {})
         clear = bool(ai_patch.pop("clear_api_key", False))
         if not ai_patch.get("api_key"):
             ai_patch.pop("api_key", None)
-        for key, sub in (("ai", ai_patch), ("simple", patch.get("simple") or {})):
-            cur[key] = {**cur[key], **sub}
+        for key, sub in (("ai", ai_patch), ("simple", simple_patch)):
+            cur[key] = _merge(cur[key], sub)
         if clear:
             cur["ai"]["api_key"] = ""
         s = AppSettings.model_validate(cur)
         save(s)
         return s
+
+
+def _merge(base: dict, over: dict) -> dict:
+    """Nested merge, so a partial style ({"karaoke": {"timing": {...}}}) keeps the rest."""
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
 
 
 def public(s: AppSettings) -> dict:
