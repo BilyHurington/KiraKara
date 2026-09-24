@@ -287,3 +287,24 @@ describe('video in / reduced-vocal video out', () => {
     expect(screen.getByRole('textbox', { name: /音量/ })).toBeInTheDocument();
   });
 });
+
+describe('dock track switching', () => {
+  it('offers only original / vocals / instrumental (no custom mix)', () => {
+    seedStore('review');
+    serverLike();
+    renderUI(<StudioDock />);
+    expect(screen.queryByRole('radio', { name: '自定义混音' })).toBeNull();
+  });
+
+  it('the waveform loads the peaks of the selected track', async () => {
+    const pv = seedStore('review');
+    const api = serverLike();
+    renderUI(<StudioDock />);
+    const orig = pv.project.audio.find((a) => a.role === 'original')!;
+    const voc = pv.project.audio.find((a) => a.role === 'vocals')!;
+    await waitFor(() => expect(api.find('GET', `/audio/${orig.id}/peaks`).length).toBeGreaterThan(0));
+    act(() => player.setSource('vocals'));
+    await waitFor(() => expect(api.find('GET', `/audio/${voc.id}/peaks`).length).toBeGreaterThan(0));
+    act(() => player.setSource('original'));
+  });
+});

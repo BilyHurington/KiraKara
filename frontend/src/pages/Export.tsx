@@ -1,12 +1,12 @@
 // Step 7: exports. alignment.json is the complete standard output; other
 // formats may lose information and show explicit loss warnings.
 
-import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Music2, Package, Sparkles } from 'lucide-react';
+import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, Music2, Package, Sparkles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
 import type { ExportInline, Job } from '@/lib/types';
-import { player } from '@/audio/player';
+import { player, usePlayer } from '@/audio/player';
 import { ppath, run, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, Dialog, EmptyState, Field, PageHeader, Segmented, Select, SliderField,
@@ -212,8 +212,16 @@ function MixCard() {
   const [videoOut, setVideoOut] = useState<{ url: string; filename: string } | null>(null);
   const hasVideo = !!project.video;
 
-  // the player's “自定义混音” source previews exactly these settings
+  // “试听此混音” plays exactly these settings through the player
   useEffect(() => { player.setMix({ p, q, master }); }, [p, q, master]);
+  const pl = usePlayer();
+  const previewing = pl.source === 'mix';
+  // leaving the page returns the player to the original track
+  useEffect(() => () => { if (player.source === 'mix') player.setSource('original'); }, []);
+  const togglePreview = () => {
+    if (previewing) player.setSource('original');
+    else { player.setSource('mix'); if (!player.playing) player.play(); }
+  };
 
   useEffect(() => {
     if (!canMix) return;
@@ -277,6 +285,11 @@ function MixCard() {
               </div>
             </Field>
             <div className="flex flex-wrap justify-end gap-2">
+              <Tip content="用播放器按当前比例试听（与导出同一混音规则）">
+                <Button variant={previewing ? 'soft' : 'ghost'} onClick={togglePreview} icon={<Headphones className="size-4" />}>
+                  {previewing ? '停止试听混音' : '试听此混音'}
+                </Button>
+              </Tip>
               {hasVideo && (
                 <Tip content="画面原样复制（不重新编码），声音换成当前比例的混音，并保持与画面同步">
                   <Button onClick={exportVideo} loading={!!videoRunning} icon={<Film className="size-4" />}>导出降低人声的视频</Button>

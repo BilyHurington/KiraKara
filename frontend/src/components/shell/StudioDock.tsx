@@ -127,9 +127,8 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
           size="sm"
           value={p.source}
           onChange={(v) => player.setSource(v)}
-          options={(['original', 'vocals', 'instrumental', 'mix'] as Source[]).map((s) => ({
+          options={(['original', 'vocals', 'instrumental'] as Source[]).map((s) => ({
             value: s, label: ROLE_LABEL[s], disabled: !sources.includes(s),
-            title: s === 'mix' ? '人声 + 伴奏按“导出”页设置的比例混合（与导出同一规则）' : undefined,
           }))}
         />
       ) : (
@@ -285,7 +284,14 @@ function WaveArea() {
   // never let the waveform take more than ~1/4 of the window on small screens
   const effectiveHeight = Math.max(WAVE_HEIGHT.min, Math.min(waveHeight, Math.round(viewportH * 0.25)));
   const pid = useApp((s) => s.pid);
-  const originalId = useApp((s) => s.pv?.project.audio.find((a) => a.role === 'original')?.id ?? null);
+  // the waveform shows the track being played (the mix preview shows the original)
+  const source = usePlayer().source;
+  const waveRole = source === 'mix' ? 'original' : source;
+  const assetId = useApp((s) => {
+    const audio = s.pv?.project.audio ?? [];
+    return (audio.find((a) => a.role === waveRole) ?? audio.find((a) => a.role === 'original'))?.id ?? null;
+  });
+  const lastPid = useRef<string | null>(null);
   const getOverlays = useOverlays();
   const [scroll, setScroll] = useState({ start: 0, size: 1 });
 
@@ -326,17 +332,24 @@ function WaveArea() {
   useEffect(() => {
     const wf = waveformRef.current;
     if (!wf) return;
-    if (!pid || !originalId) {
+    if (!pid || !assetId) {
       wf.setPeaks(null);
       wf.durationMs = 0;
       return;
     }
+    // a new project resets zoom; switching tracks keeps the current view
+    const newProject = lastPid.current !== pid;
+    lastPid.current = pid;
     let cancelled = false;
-    api.get<Peaks>(`/api/projects/${pid}/audio/${originalId}/peaks?per_second=200`)
-      .then((pk) => { if (!cancelled) { wf.durationMs = 0; wf.setPeaks(pk); } })
+    api.get<Peaks>(`/api/projects/${pid}/audio/${assetId}/peaks?per_second=200`)
+      .then((pk) => {
+        if (cancelled) return;
+        if (newProject) wf.durationMs = 0;
+        wf.setPeaks(pk);
+      })
       .catch((e) => toast('error', '加载波形失败', e.message));
     return () => { cancelled = true; };
-  }, [pid, originalId]);
+  }, [pid, assetId]);
 
   const zoom = useMemo(() => ({
     in: () => waveformRef.current?.zoom(1 / 1.5),
