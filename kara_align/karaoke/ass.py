@@ -470,44 +470,48 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
 
     ruby_unsung = (txt if rb.follow_colors else rb).color_unsung
 
-    def follow_clip(c: Chunk, cx: float, t0: int) -> str:
-        """An animated \\clip whose right edge follows the lyric's sweep through this chunk.
+    def line_clip(chunks: list[Chunk], cxs: list[float], t0: int) -> str:
+        """An animated \\clip whose right edge is where the lyric's sweep is on this line.
 
         The lyric's \\kf fills each piece from its left to its right edge over the piece's time
-        (\\k: at once when it starts); the ruby's sung part is cut at the same x.  A ruby wider
-        than its lyric gets the sweep stretched over its own width, so it is empty when the
-        lyric starts and full when the lyric is.
+        (\\k: at once when it starts) and jumps over the space between pieces; the ruby's sung
+        part is cut at exactly the same x, so both are swept by one vertical line.  Nothing is
+        sung before the line's first piece starts.
         """
-        widths = [m_main.width(p.text) for p in c.base]
-        bw = m_main.width(c.base_text) * scale
-        norm = bw / (sum(widths) or 1.0)
-        rw = m_ruby.width(c.ruby_text) * scale if m_ruby is not None else bw
-        bl, br = cx - bw / 2, cx + bw / 2
-        ul, ur = min(bl, cx - rw / 2), max(br, cx + rw / 2)
+        segs: list[tuple[int, int, float, float]] = []  # (start, end) ms from t0, x from, x to
+        for c, cx in zip(chunks, cxs):
+            widths = [m_main.width(p.text) for p in c.base]
+            bw = m_main.width(c.base_text) * scale
+            norm = bw / (sum(widths) or 1.0)
+            x, cursor = cx - bw / 2, 0
+            for p, pw in zip(c.base, widths):
+                # the same centisecond timing as _karaoke()
+                s = int(round((p.start - t0) / 10)) if p.start is not None else cursor
+                e = int(round((p.end - t0) / 10)) if p.end is not None else s
+                s = max(s, cursor)
+                e = max(e, s)
+                segs.append((s * 10, e * 10, x, x + pw * norm))
+                x += pw * norm
+                cursor = e
+        segs.sort(key=lambda g: g[0])
 
-        def clip(xb: float) -> str:
-            x = ur if br <= bl else ul + (xb - bl) / (br - bl) * (ur - ul)
+        def clip(x: float) -> str:
             return f"\\clip(0,0,{int(round(x))},{H})"
 
-        tags, cursor, x = [clip(bl)], 0, bl
-        for p, pw in zip(c.base, widths):
-            # the same centisecond timing as _karaoke()
-            s = int(round((p.start - t0) / 10)) if p.start is not None else cursor
-            e = int(round((p.end - t0) / 10)) if p.end is not None else s
-            s = max(s, cursor)
-            e = max(e, s)
-            x += pw * norm
+        tags, cur = [clip(0)], None
+        for s, e, xa, xb in segs:
+            if cur is None or abs(xa - cur) > 0.5:  # on to the next piece
+                tags.append(f"\\t({s},{s + 1},{clip(xa)})")
             if tm.highlight == "sweep" and e > s:
-                tags.append(f"\\t({s * 10},{e * 10},{clip(x)})")
+                tags.append(f"\\t({s},{e},{clip(xb)})")
             else:
-                tags.append(f"\\t({s * 10},{s * 10 + 1},{clip(x)})")
-            cursor = e
+                tags.append(f"\\t({s},{s + 1},{clip(xb)})")
+            cur = xb
         return "".join(tags)
 
-    def emit_ruby_following(t_from: float, t_to: float, pos: str, c: Chunk, cx: float) -> None:
-        """Ruby whose sung part lines up with the sung part of the lyric below it."""
+    def emit_ruby_following(t_from: float, t_to: float, pos: str, c: Chunk, clip: str) -> None:
+        """Ruby whose sung part lines up with the sung part of the lyric below it (``clip``: line_clip())."""
         plain = escape_text(c.ruby_text)
-        clip = follow_clip(c, cx, int(t_from))
         if glow.enabled and glow.ruby:
             width = glow.size * k * 0.55
             emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, width, ruby_family, ruby_size,
@@ -551,13 +555,17 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             pause = (spans[1][0] - spans[0][1] + tm.hold_ms + tm.lead_in_ms) / 1000
             warnings.append(f"「{ll.line.text}」中间停顿约 {pause:.0f} 秒，停顿期间暂时隐藏该行")
         for t_from, t_to in spans:
+            cxs, x = [], x0
+            for w in widths:
+                cxs.append(x + w * scale / 2)
+                x += w * scale
+            ruby_clip = line_clip(ll.chunks, cxs, int(t_from)) if rb.sweep == "base" and has_ruby else ""
             x = x0
-            for c, w in zip(ll.chunks, widths):
-                cx = x + w * scale / 2
+            for c, w, cx in zip(ll.chunks, widths, cxs):
                 emit_text(L_MAIN, t_from, t_to, "KMain", f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}", c.base,
                           glow.size * k, True, family, main_size)
                 if c.ruby and rb.sweep == "base":
-                    emit_ruby_following(t_from, t_to, f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c, cx)
+                    emit_ruby_following(t_from, t_to, f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c, ruby_clip)
                 elif c.ruby:
                     emit_text(L_RUBY, t_from, t_to, "KRuby", f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c.ruby,
                               glow.size * k * 0.55, glow.ruby, ruby_family, ruby_size)

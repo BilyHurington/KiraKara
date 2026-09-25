@@ -575,15 +575,23 @@ def test_ruby_sweep_follows_the_lyric(tmp_path):
     unsung, sung = ruby[0::2], ruby[1::2]
     assert all("\\1c&HFFFFFF&" in l and "\\clip" not in l for l in unsung)  # the whole reading, unsung
     assert all("\\clip(0,0," in l and "\\t(" in l for l in sung)  # the sung colour, cut at the sweep
-    # the cut moves exactly when the lyric below is swept: 窓 (まど) is one \kf piece
+    # one cut for the whole line, at the lyric's sweep: every ruby of a line carries the same clip
+    clip_of = lambda l: l.split("\\shad0", 1)[1].split("}", 1)[0]  # noqa: E731
+    by_start: dict[str, set] = {}
+    for l in sung:
+        by_start.setdefault(l.split(",")[1], set()).add(clip_of(l))
+    assert all(len(v) == 1 for v in by_start.values())
+    # nothing sung before the line starts; the cut sweeps while 窓 (まど) is swept below
     m = next(l for l in main if "窓" in l)
-    kf = re.findall(r"\\k(\d+)\}\{\\kf(\d+)\}窓", m) or [("0", re.search(r"\\kf(\d+)\}窓", m).group(1))]
-    delay, dur = (int(x) * 10 for x in kf[0])
+    pre = re.search(r"\\k(\d+)\}\{\\kf(\d+)\}窓", m)
+    delay, dur = (int(pre.group(1)) * 10, int(pre.group(2)) * 10) if pre else \
+        (0, int(re.search(r"\\kf(\d+)\}窓", m).group(1)) * 10)
     r = next(l for l in sung if "まど" in l)
-    t = re.findall(r"\\t\((\d+),(\d+),\\clip\(0,0,(\d+),", r)
-    assert (int(t[0][0]), int(t[0][1])) == (delay, delay + dur)
-    x0 = int(re.search(r"\\clip\(0,0,(\d+),", r).group(1))
-    assert int(t[-1][2]) > x0  # sweeps left to right
+    assert "\\clip(0,0,0," in r
+    t = [(int(a), int(b), int(x)) for a, b, x in re.findall(r"\\t\((\d+),(\d+),\\clip\(0,0,(\d+),", r)]
+    assert (delay, delay + 1) == t[0][:2] and (delay, delay + dur) == t[1][:2] and t[1][2] > t[0][2]
+    xs = [x for _, _, x in t]
+    assert xs == sorted(xs)  # left to right
     # the sung glow of the ruby follows the same cut (no \ko)
     glows = [l for l in lines if ",KGlow," in l and ("まど" in l)]
     assert len(glows) == 2 and "\\clip" in glows[1] and "\\ko" not in glows[1]

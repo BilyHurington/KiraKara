@@ -217,7 +217,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
                 options={[{ value: 'widen', label: '加宽歌词' }, { value: 'overflow', label: '允许超出' }]} />
             </Row>
             <Row label="唱过的部分" hint={R.sweep === 'base'
-              ? '注音的覆盖条和下方歌词在同一个位置，上下一条竖线扫过（注音比歌词宽时按比例拉伸）'
+              ? '注音的覆盖条和下方歌词在同一个位置，上下一条竖线扫过'
               : '注音按每个读音自己的时间变色（如「き」「み」分别扫过）'}>
               <Segmented value={R.sweep} onChange={(v) => patch((s) => { s.ruby.sweep = v; })}
                 options={[{ value: 'own', label: '按注音时间' }, { value: 'base', label: '与歌词对齐' }]} />
