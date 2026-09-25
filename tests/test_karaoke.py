@@ -571,18 +571,21 @@ def test_ruby_sweep_follows_the_lyric(tmp_path):
     main = [l for l in lines if ",KMain," in l]
     ruby = [l for l in lines if ",KRuby," in l]
     n_ruby_chunks = len([l for l in own if ",KRuby," in l])
+    n_chunks = len([l for l in own if ",KMain," in l])
+    # the lyric is cut by the same computed line (libass puts its own \\kf edge by glyph ink)
+    assert len(main) == 2 * n_chunks and not any("\\k" in l for l in main)
     assert len(ruby) == 2 * n_ruby_chunks and not any("\\k" in l for l in ruby)
     unsung, sung = ruby[0::2], ruby[1::2]
     assert all("\\1c&HFFFFFF&" in l and "\\clip" not in l for l in unsung)  # the whole reading, unsung
     assert all("\\clip(0,0," in l and "\\t(" in l for l in sung)  # the sung colour, cut at the sweep
-    # one cut for the whole line, at the lyric's sweep: every ruby of a line carries the same clip
+    # one cut for the whole line: every lyric and ruby event of a line carries the same clip
     clip_of = lambda l: l.split("\\shad0", 1)[1].split("}", 1)[0]  # noqa: E731
     by_start: dict[str, set] = {}
-    for l in sung:
+    for l in sung + main[1::2]:
         by_start.setdefault(l.split(",")[1], set()).add(clip_of(l))
     assert all(len(v) == 1 for v in by_start.values())
     # nothing sung before the line starts; the cut sweeps while 窓 (まど) is swept below
-    m = next(l for l in main if "窓" in l)
+    m = next(l for l in own if ",KMain," in l and "窓" in l)
     pre = re.search(r"\\k(\d+)\}\{\\kf(\d+)\}窓", m)
     delay, dur = (int(pre.group(1)) * 10, int(pre.group(2)) * 10) if pre else \
         (0, int(re.search(r"\\kf(\d+)\}窓", m).group(1)) * 10)
@@ -595,6 +598,7 @@ def test_ruby_sweep_follows_the_lyric(tmp_path):
     # the sung glow of the ruby follows the same cut (no \ko)
     glows = [l for l in lines if ",KGlow," in l and ("まど" in l)]
     assert len(glows) == 2 and "\\clip" in glows[1] and "\\ko" not in glows[1]
+    assert not any("\\ko" in l for l in lines if ",KGlow," in l)
     # instant highlight: the cut jumps when each piece starts
     st.timing.highlight = "instant"
     S.set_karaoke_style(h, st.model_dump(mode="json"))

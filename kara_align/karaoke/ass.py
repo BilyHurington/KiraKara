@@ -509,17 +509,19 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             cur = xb
         return "".join(tags)
 
-    def emit_ruby_following(t_from: float, t_to: float, pos: str, c: Chunk, clip: str) -> None:
-        """Ruby whose sung part lines up with the sung part of the lyric below it (``clip``: line_clip())."""
-        plain = escape_text(c.ruby_text)
-        if glow.enabled and glow.ruby:
-            width = glow.size * k * 0.55
-            emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, width, ruby_family, ruby_size,
-                                                                 txt.bold), plain)
-            emit(L_GLOW_SUNG, t_from, t_to, "KGlow", pos + glow_tags(glow.color_sung, width, ruby_family,
-                                                                     ruby_size, txt.bold) + clip, plain)
-        emit(L_RUBY, t_from, t_to, "KRuby", pos + f"\\1c{_bgr_tag(ruby_unsung)}", plain)
-        emit(L_RUBY, t_from, t_to, "KRuby", pos + "\\shad0" + clip, plain)  # the sung colour, cut at the sweep
+    def emit_following(layer: int, name: str, t_from: float, t_to: float, pos: str, text: str, unsung: str,
+                       font: str, size: float, glow_width: float, with_glow: bool, clip: str) -> None:
+        """Text swept by a moving \\clip instead of \\kf: the whole text in the unsung colour, and
+        the sung colour (the style's primary) cut at ``clip`` (line_clip()).  Lyric and ruby of a
+        line share the clip, so their sung parts end at the same x."""
+        plain = escape_text(text)
+        if glow.enabled and with_glow:
+            emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, glow_width, font, size, txt.bold),
+                 plain)
+            emit(L_GLOW_SUNG, t_from, t_to, "KGlow",
+                 pos + glow_tags(glow.color_sung, glow_width, font, size, txt.bold) + clip, plain)
+        emit(layer, t_from, t_to, name, pos + f"\\1c{_bgr_tag(unsung)}", plain)
+        emit(layer, t_from, t_to, name, pos + "\\shad0" + clip, plain)  # outline drawn again: no fringe
 
     def emit_trans(t_from: float, t_to: float, pos: str, text: str) -> None:
         if glow.enabled and tr.glow:
@@ -562,13 +564,22 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             ruby_clip = line_clip(ll.chunks, cxs, int(t_from)) if rb.sweep == "base" and has_ruby else ""
             x = x0
             for c, w, cx in zip(ll.chunks, widths, cxs):
-                emit_text(L_MAIN, t_from, t_to, "KMain", f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}", c.base,
-                          glow.size * k, True, family, main_size)
-                if c.ruby and rb.sweep == "base":
-                    emit_ruby_following(t_from, t_to, f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c, ruby_clip)
+                main_pos = f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}"
+                ruby_pos = f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}"
+                if ruby_clip:
+                    # lyric and ruby cut by one computed line: libass places its own \\kf boundary by
+                    # glyph ink, a few pixels away from any position computed outside it
+                    emit_following(L_MAIN, "KMain", t_from, t_to, main_pos, c.base_text, txt.color_unsung,
+                                   family, main_size, glow.size * k, True, ruby_clip)
+                else:
+                    emit_text(L_MAIN, t_from, t_to, "KMain", main_pos, c.base, glow.size * k, True, family,
+                              main_size)
+                if c.ruby and ruby_clip:
+                    emit_following(L_RUBY, "KRuby", t_from, t_to, ruby_pos, c.ruby_text, ruby_unsung, ruby_family,
+                                   ruby_size, glow.size * k * 0.55, glow.ruby, ruby_clip)
                 elif c.ruby:
-                    emit_text(L_RUBY, t_from, t_to, "KRuby", f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c.ruby,
-                              glow.size * k * 0.55, glow.ruby, ruby_family, ruby_size)
+                    emit_text(L_RUBY, t_from, t_to, "KRuby", ruby_pos, c.ruby, glow.size * k * 0.55, glow.ruby,
+                              ruby_family, ruby_size)
                 if fx_on:
                     group = f"{ll.line.id}@{t_from}"
                     top = (ruby_y - ruby_size * scale) if has_ruby else (main_y - main_size * scale)
