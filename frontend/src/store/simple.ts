@@ -65,14 +65,17 @@ export async function loadProviders(refresh = false) {
 
 // ------------------------------------------------------------------ tasks
 
-const ACTIVE = new Set(['queued', 'running']);
+const ACTIVE = new Set(['preparing', 'queued', 'running']);
 
 export async function loadTasks() {
   const tasks = await api.get<PipelineTask[]>('/api/tasks');
   const before = new Map(get().tasks.map((t) => [t.id, t.status]));
   for (const t of tasks) {
     const was = before.get(t.id);
-    if (was && ACTIVE.has(was) && !ACTIVE.has(t.status)) {
+    if (t.status === 'waiting' && was !== undefined && was !== 'waiting') {
+      toast('warn', `「${t.name || t.media_filename}」需要确认开头位置`, '点任务里的“确认开头位置”，确认后自动继续', 10000);
+    }
+    if (was && ACTIVE.has(was) && !ACTIVE.has(t.status) && t.status !== 'waiting') {
       if (t.status === 'succeeded') toast('ok', `「${t.name || t.media_filename}」已完成`, t.outputs.video ? '视频已生成' : undefined);
       else if (t.status === 'failed') toast('error', `「${t.name || t.media_filename}」失败`, t.error ?? undefined);
     }
@@ -94,6 +97,11 @@ export async function addTask(file: File, lyrics: string, mode: string, name: st
   const t = await api.post<PipelineTask>('/api/tasks', fd);
   set({ tasks: [t, ...get().tasks.filter((x) => x.id !== t.id)] });
   return t;
+}
+
+export async function confirmCalibration(id: string, body: { marked_ms?: number; plain?: boolean }) {
+  await api.post(`/api/tasks/${id}/calibration`, body);
+  await loadTasks();
 }
 
 export async function taskAction(id: string, action: 'cancel' | 'retry' | 'delete') {

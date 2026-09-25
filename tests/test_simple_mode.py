@@ -214,7 +214,7 @@ def _wait(q, tid, timeout=120):
     t0 = time.time()
     while time.time() - t0 < timeout:
         t = q.get(tid)
-        if t.status not in ("queued", "running"):
+        if t.status not in ("preparing", "queued", "running"):
             return t
         time.sleep(0.2)
     raise AssertionError(f"task still {q.get(tid).status}: {q.get(tid).message}")
@@ -238,11 +238,21 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
     t = q.add(media=_wav(tmp_path / "song.wav"), filename="song.wav", lyrics=LRC, mode="lrc")
     assert t.lyrics_kind == "text" and t.name == "song"
+    # LRC mode: right after import + lyrics (before separation) it asks where the first line starts
+    t = _wait(q, t.id)
+    assert t.status == "waiting", (t.error, t.detail)
+    assert [x.status for x in t.stages] == ["done", "done", "waiting", "pending", "pending", "pending", "pending"]
+    c = t.calibration
+    assert c["line_text"] == "きみと" and c["lrc_ms"] == 1500 and c["check_line"]["text"] == "あるいた"
+    assert c["asset_id"] == q.ws.get(t.project_id).project.asset("original").id
+    with pytest.raises(S.ServiceError):
+        q.confirm_calibration(t.id)  # a position is required
+    q.confirm_calibration(t.id, marked_ms=1000)  # sung 0.5 s before the LRC time
     t = _wait(q, t.id)
     assert t.status == "succeeded", (t.error, t.detail)
     st = {s.key: (s.status, s.message) for s in t.stages}
     assert st["readings"][0] == "skipped" and st["separate"][0] == "skipped"  # no AI / separation set up
-    assert st["calibrate"] == ("done", "整体偏移 -500 ms")
+    assert st["calibrate"] == ("done", "偏移 -500 ms（已确认）")
     assert st["import"] == ("done", "") and st["lyrics"] == ("done", "3 行")  # result notes only, no stale progress text
     assert st["export"][0] == "done" and t.progress == 1.0
     h = q.ws.get(t.project_id)
@@ -294,7 +304,8 @@ def test_tasks_http_api(tmp_path, monkeypatch):
 
     from kara_align.web.server import create_app
 
-    monkeypatch.setattr(P.TaskQueue, "_worker", lambda self: None)  # keep the task queued
+    monkeypatch.setattr(P.TaskQueue, "_worker", lambda self: None)  # nothing runs
+    monkeypatch.setattr(P.TaskQueue, "_prepare", lambda self, t: None)
     app = create_app(tmp_path / "projects")
     client = TestClient(app)
     wav = _wav(tmp_path / "s.wav")
@@ -303,10 +314,11 @@ def test_tasks_http_api(tmp_path, monkeypatch):
                         data={"lyrics": "https://music.163.com/song?id=1", "mode": "lrc"})
     assert r.status_code == 200, r.text
     t = r.json()
-    assert t["status"] == "queued" and t["lyrics_kind"] == "link" and len(t["stages"]) == 7
+    assert t["status"] == "preparing" and t["lyrics_kind"] == "link" and len(t["stages"]) == 7
     assert [x["id"] for x in client.get("/api/tasks").json()] == [t["id"]]
     assert client.post(f"/api/tasks/{t['id']}/cancel").json()["status"] == "cancelled"
-    assert client.post(f"/api/tasks/{t['id']}/retry").json()["status"] == "queued"
+    assert client.post(f"/api/tasks/{t['id']}/retry").json()["status"] == "preparing"  # starts from import again
+    assert client.post(f"/api/tasks/{t['id']}/calibration", json={"marked_ms": 1}).status_code == 400  # not waiting
     with open(wav, "rb") as f:
         bad = client.post("/api/tasks", files={"file": ("s.txt", f, "text/plain")}, data={"lyrics": "x"})
     assert bad.status_code == 400
@@ -317,3 +329,40 @@ def test_tasks_http_api(tmp_path, monkeypatch):
     assert s["ai"]["provider"] == "codex" and s["ai"]["has_api_key"] and "api_key" not in s["ai"]
     assert {p["id"] for p in client.get("/api/ai/providers").json()} == {"claude", "codex", "openai"}
     assert client.put("/api/settings", json={"simple": {"quality": "ultra"}}).status_code == 400
+
+
+def test_waiting_task_does_not_block_the_queue_and_can_switch_to_plain(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    a = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=LRC, mode="lrc", name="A")
+    b = q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics="きみと\nあるいた\nそら\n", mode="plain", name="B")
+    assert _wait(q, a.id).status == "waiting"
+    assert _wait(q, b.id).status == "succeeded"  # ran while A waited
+    assert q.get(b.id).stage("calibrate").status == "skipped"  # plain mode needs no offset
+    # restart while waiting: still waiting, still answerable
+    q.shutdown()
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    assert q.get(a.id).status == "waiting"
+    q.confirm_calibration(a.id, plain=True)
+    t = _wait(q, a.id)
+    assert t.status == "succeeded" and t.mode == "plain" and t.stage("calibrate").message == "改用普通模式"
+    assert q.ws.get(t.project_id).project.mode == "plain"
+    with pytest.raises(S.ServiceError):
+        q.confirm_calibration(a.id, marked_ms=1000)  # nothing to confirm any more
+    q.shutdown()
+
+
+def test_automatic_offset_suggestion_for_the_detailed_page(tmp_path):
+    from kara_align.auto_calibrate import suggest_calibration
+
+    h = S.create_dir(tmp_path / "proj", "t", "lrc")
+    S.update_settings(h, config={"backend": "scripted"})
+    pv = S.parse_lyrics(h, LRC, origin="paste")
+    S.apply_lyrics(h, pv["preview_id"])
+    S.add_audio(h, _wav(tmp_path / "s.wav"), "original")
+    before = h.project.calibration.model_dump()
+    sug = suggest_calibration(h)
+    assert sug["shift_ms"] == -500 and sug["agree"] == 1.0 and sug["lines_checked"] == 3
+    assert sug["audio_role"] == "original" and sug["vocal_onset_ms"] is None
+    assert h.project.calibration.model_dump() == before and not h.project.results  # nothing saved

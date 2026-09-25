@@ -3,7 +3,7 @@
 A task turns (video or audio, music link or pasted lyrics, mode) into a karaoke
 video with the app settings::
 
-    import → lyrics → AI readings → separation → LRC offset → align → video
+    import → lyrics → LRC offset (confirmed by the user) → AI readings → separation → align → video
 
 Each stage reuses the service functions of the detailed mode, so a finished
 (or failed) task is an ordinary project that can be opened and refined there.
@@ -12,8 +12,15 @@ detailed mode's jobs.  The queue is saved in ``<workspace>/.tasks/tasks.json``;
 after a restart, queued tasks continue and an interrupted one can be retried
 from the stage where it stopped.
 
-Stages that only improve the result (AI readings, separation, the LRC offset)
-never fail a task: they are skipped with a warning shown on the task.
+Stages that only improve the result (AI readings, separation) never fail a
+task: they are skipped with a warning shown on the task.
+
+The first stages (import, lyrics, offset) are quick and run at once in a
+separate preparation lane, even while another task holds the heavy worker.
+In LRC mode the task then stops for the user to mark where the first line is
+sung (the audio of a video is often not the recording the LRC was timed on),
+so everything that needs a person happens right after the task is added; the
+rest (AI readings, separation, alignment, video) runs unattended in order.
 """
 
 from __future__ import annotations
@@ -21,7 +28,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import statistics
 import threading
 import time
 import traceback
@@ -37,18 +43,23 @@ from .models import _Base, new_id, utcnow
 from .project.jobs import run_heavy
 from .project.store import atomic_write_text
 
-TaskStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
-StageStatus = Literal["pending", "running", "done", "skipped", "failed"]
+TaskStatus = Literal["preparing", "queued", "running", "waiting", "succeeded", "failed", "cancelled", "interrupted"]
+StageStatus = Literal["pending", "running", "waiting", "done", "skipped", "failed"]
+
+
+class WaitForUser(Exception):
+    """A stage needs a decision from the user; the task waits without failing."""
 
 STAGES: list[tuple[str, str, float]] = [  # key, label, share of the progress bar
     ("import", "导入视频", 0.05),
     ("lyrics", "获取歌词", 0.03),
+    ("calibrate", "确认偏移", 0.02),
     ("readings", "AI 注音", 0.12),
-    ("separate", "人声分离", 0.35),
-    ("calibrate", "LRC 校准", 0.08),
-    ("align", "对齐", 0.17),
+    ("separate", "人声分离", 0.38),
+    ("align", "对齐", 0.20),
     ("export", "生成视频", 0.20),
 ]
+PREP_STAGES = ("import", "lyrics", "calibrate")  # quick; run as soon as the task is added
 _LABEL = {k: label for k, label, _ in STAGES}
 _WEIGHT = {k: w for k, _, w in STAGES}
 
@@ -79,6 +90,9 @@ class PipelineTask(_Base):
     detail: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     outputs: dict[str, Any] = Field(default_factory=dict)
+    # LRC offset to confirm: the suggestion shown to the user (see stage_calibrate)
+    calibration: Optional[dict[str, Any]] = None
+    calibration_confirmed: bool = False
 
     def stage(self, key: str) -> Stage:
         return next(s for s in self.stages if s.key == key)
@@ -109,9 +123,15 @@ class TaskQueue:
         self._wake = threading.Condition(self._lock)
         self._cancel: dict[str, CancelToken] = {}
         self.tasks: list[PipelineTask] = self._load()
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._prep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kara-prep")
         self._thread = threading.Thread(target=self._worker, name="kara-tasks", daemon=True)
         self._stop = False
         self._thread.start()
+        for t in self.tasks:
+            if t.status == "preparing":
+                self._prep_pool.submit(self._prepare, t)
 
     # ---- persistence
     def _file(self) -> Path:
@@ -126,9 +146,14 @@ class TaskQueue:
         except Exception:
             return []
         for t in tasks:
-            if t.status == "running":  # the app stopped while it ran
+            if t.status == "running" and _first_open_stage(t) not in PREP_STAGES:  # stopped while it ran
                 t.status = "interrupted"
                 t.message = "应用重启时中断，可以重试"
+                for s in t.stages:
+                    if s.status == "running":
+                        s.status = "pending"
+            elif t.status == "running":  # was still preparing: simply prepare again
+                t.status = "preparing"
                 for s in t.stages:
                     if s.status == "running":
                         s.status = "pending"
@@ -169,18 +194,33 @@ class TaskQueue:
         dest = self.dir / t.id
         dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(media), dest / safe)
+        t.status, t.message = "preparing", "读取视频和歌词"
         with self._lock:
             self.tasks.append(t)
-            self._wake.notify_all()
         self._save()
+        self._prep_pool.submit(self._prepare, t)
         return t
+
+    def _prepare(self, task: PipelineTask) -> None:
+        """Quick stages right away; then wait for the user (LRC) or join the queue."""
+        token = CancelToken()
+        with self._lock:
+            if task.status != "preparing":
+                return
+            self._cancel[task.id] = token
+        self._run(task, token, PREP_STAGES, done_status="queued")
+        with self._lock:
+            self._wake.notify_all()
 
     def cancel(self, task_id: str) -> PipelineTask:
         t = self.get(task_id)
         with self._lock:
-            if t.status == "queued":
+            if t.status in ("queued", "waiting") or (t.status == "preparing" and t.id not in self._cancel):
                 t.status, t.message, t.finished = "cancelled", "已取消", utcnow()
-            elif t.status == "running" and task_id in self._cancel:
+                for s in t.stages:
+                    if s.status == "waiting":
+                        s.status = "pending"
+            elif t.status in ("running", "preparing") and task_id in self._cancel:
                 self._cancel[task_id].cancel()
                 t.message = "正在取消…"
         self._save()
@@ -192,16 +232,48 @@ class TaskQueue:
             if t.status not in ("failed", "cancelled", "interrupted"):
                 raise S.ServiceError("只有失败、取消或中断的任务可以重试")
             for s in t.stages:
-                if s.status in ("failed", "running", "skipped"):  # optional stages get another chance
+                if s.status in ("failed", "running", "skipped", "waiting"):  # optional stages get another chance
                     s.status, s.progress, s.message = "pending", 0.0, ""
-            t.status, t.error, t.detail, t.message, t.finished = "queued", None, None, "等待开始", None
+            prep = _first_open_stage(t) in PREP_STAGES
+            t.status = "preparing" if prep else "queued"
+            t.error, t.detail, t.message, t.finished = None, None, "等待开始", None
+            self._wake.notify_all()
+        self._save()
+        if prep:
+            self._prep_pool.submit(self._prepare, t)
+        return t
+
+    def confirm_calibration(self, task_id: str, *, marked_ms: Optional[int] = None, plain: bool = False) -> PipelineTask:
+        """The user confirmed where the first line starts (or chose not to use the LRC times)."""
+        from .align import calibration as C
+
+        t = self.get(task_id)
+        if t.status != "waiting" or not t.calibration or not t.project_id:
+            raise S.ServiceError("这个任务现在不需要确认偏移")
+        h = self.ws.get(t.project_id)
+        st = t.stage("calibrate")
+        if plain:
+            S.update_settings(h, mode="plain")
+            t.mode = "plain"
+            st.message = "改用普通模式"
+        else:
+            if marked_ms is None:
+                raise S.ServiceError("请标记第一句开始唱的位置")
+            S.calibration_op(h, "mark", line_id=t.calibration["line_id"], marked_ms=int(marked_ms))
+            shift = h.project.calibration.user_shift_ms
+            st.message = f"偏移 {shift:+d} ms（已确认）"
+            t.calibration["confirmed_ms"] = int(marked_ms)
+        with self._lock:
+            st.status, st.progress = "done", 1.0
+            t.calibration_confirmed = True
+            t.status, t.message = "queued", "等待继续"
             self._wake.notify_all()
         self._save()
         return t
 
     def remove(self, task_id: str) -> None:
         t = self.get(task_id)
-        if t.status == "running":
+        if t.status == "running" or (t.status == "preparing" and task_id in self._cancel):
             raise S.ServiceError("任务正在运行，请先取消")
         with self._lock:
             self.tasks = [x for x in self.tasks if x.id != task_id]
@@ -214,6 +286,7 @@ class TaskQueue:
             for c in self._cancel.values():
                 c.cancel()
             self._wake.notify_all()
+        self._prep_pool.shutdown(wait=False, cancel_futures=True)
 
     # ---- worker
     def _next(self) -> Optional[PipelineTask]:
@@ -228,28 +301,41 @@ class TaskQueue:
                     return
                 task = self._next()
                 assert task is not None
-                task.status, task.message = "running", "开始"
                 token = CancelToken()
                 self._cancel[task.id] = token
-            self._save()
-            try:
-                run_task(self, task, token)
-                task.status, task.message = "succeeded", "完成"
+            self._run(task, token, None, done_status="succeeded")
+
+    def _run(self, task: PipelineTask, token: CancelToken, keys: Optional[tuple[str, ...]], *,
+             done_status: TaskStatus) -> None:
+        with self._lock:
+            task.status, task.message = ("preparing" if keys else "running"), "开始"
+        self._save()
+        try:
+            run_task(self, task, token, keys)
+            task.status = done_status
+            task.message = "完成" if done_status == "succeeded" else "排队中"
+            if done_status == "succeeded":
                 task.progress = 1.0
-            except Cancelled:
-                task.status, task.message = "cancelled", "已取消"
-                self._mark_running_stage(task, "pending")
-            except Exception as e:  # report the real reason on the task
-                task.status = "failed"
-                task.error = str(e) if isinstance(e, S.ServiceError) else f"{type(e).__name__}: {e}"
-                task.detail = traceback.format_exc(limit=8)
-                task.message = "失败"
-                self._mark_running_stage(task, "failed", task.error)
-            finally:
+        except WaitForUser as w:
+            task.status, task.message = "waiting", str(w)
+            for s in task.stages:
+                if s.status == "running":
+                    s.status, s.message = "waiting", str(w)
+        except Cancelled:
+            task.status, task.message = "cancelled", "已取消"
+            self._mark_running_stage(task, "pending")
+        except Exception as e:  # report the real reason on the task
+            task.status = "failed"
+            task.error = str(e) if isinstance(e, S.ServiceError) else f"{type(e).__name__}: {e}"
+            task.detail = traceback.format_exc(limit=8)
+            task.message = "失败"
+            self._mark_running_stage(task, "failed", task.error)
+        finally:
+            if task.status in ("succeeded", "failed", "cancelled"):
                 task.finished = utcnow()
-                with self._lock:
-                    self._cancel.pop(task.id, None)
-                self._save()
+            with self._lock:
+                self._cancel.pop(task.id, None)
+            self._save()
 
     @staticmethod
     def _mark_running_stage(task: PipelineTask, status: StageStatus, message: str = "") -> None:
@@ -263,7 +349,11 @@ class TaskQueue:
 # ------------------------------------------------------------------------------------------ stages
 
 
-def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken) -> None:
+def _first_open_stage(t: PipelineTask) -> Optional[str]:
+    return next((s.key for s in t.stages if s.status not in ("done", "skipped")), None)
+
+
+def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Optional[tuple[str, ...]] = None) -> None:
     cfg = app_settings.load()
     last_save = [0.0]
 
@@ -279,7 +369,7 @@ def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken) -> None:
 
     for key, _label, _w in STAGES:
         st = task.stage(key)
-        if st.status in ("done", "skipped"):
+        if st.status in ("done", "skipped") or (keys is not None and key not in keys):
             continue
         cancel.check()
         st.status, st.progress, st.message = "running", 0.0, ""
@@ -430,60 +520,41 @@ def _audio_role(h) -> str:
 
 
 def stage_calibrate(q, task, cfg, cancel, progress):
+    """LRC mode: wait for the user to mark where the first timed line is sung."""
     h = _handle(q, task)
     if h.project.mode != "lrc":
         return "skipped"
+    if task.calibration_confirmed:
+        return task.stage("calibrate").message or "已确认"
     try:
-        info = run_heavy(lambda: estimate_lrc_shift(h, cancel=cancel, progress=progress),
-                         lambda m: progress(0.0, m), cancel)
-    except Cancelled:
-        raise
-    except Exception as e:
-        _warn(task, f"LRC 自动校准失败，按原始时间对齐：{e}")
-        return "skipped"
-    if info["agree"] < 0.5:
-        _warn(task, f"LRC 时间与音频对不上（只有 {info['agree']:.0%} 的行一致），可能不是同一版本；已改用普通模式")
+        task.calibration = calibration_request(h)
+    except S.ServiceError as e:
+        _warn(task, f"LRC 时间无法使用（{e}）；已改用普通模式")
         S.update_settings(h, mode="plain")
+        task.mode = "plain"
         return "改用普通模式"
-    return f"整体偏移 {info['shift_ms']:+d} ms"
+    raise WaitForUser("等待确认开头位置")
 
 
-def estimate_lrc_shift(h: "S.ProjectHandle", *, cancel: Optional[CancelToken] = None,
-                       progress: Optional[Callable[[float, str], None]] = None) -> dict:
-    """Estimate the LRC's global offset without anyone marking a first onset.
-
-    A plain-mode alignment (on a throw-away copy of the project) gives each
-    line's sung start; the global shift is the median of (sung start − LRC
-    time).  Also returns the share of lines that agree within 0.7 s, which
-    tells whether the LRC fits this recording at all.  The shift is saved as
-    the project's calibration.
-    """
-    import copy
-
+def calibration_request(h: "S.ProjectHandle") -> dict:
+    """What the confirmation dialog needs: the first timed line, its LRC time,
+    a line from the middle to check the result by ear, and the audio to play.
+    (No automatic guess here: the vocals are not separated yet.)"""
     from .align import calibration as C
 
-    with h.lock:
-        tmp = S.ProjectHandle(h.dir, copy.deepcopy(h.project))
-    tmp.save = lambda: None  # type: ignore[method-assign]
-    tmp.project.mode = "plain"
-    tmp.project.results, tmp.project.active_result_id = [], None
-    r = S.run_align(tmp, audio_role=_audio_role(h), cancel=cancel, progress=progress)
-    starts = {lt.line_id: lt.start_ms for lt in r.lines if lt.start_ms is not None}
-    diffs = []
     doc = h.project.lyrics
-    for ln in doc.sung_lines():
-        b = C.base_ms(doc, ln)
-        if b is not None and ln.anchor is None and ln.id in starts:
-            diffs.append(starts[ln.id] - b)
-    if len(diffs) < 3:
-        raise S.ServiceError("带时间的行太少，无法估计偏移")
-    shift = int(round(statistics.median(diffs)))
-    agree = sum(1 for d in diffs if abs(d - shift) <= 700) / len(diffs)
-    if agree >= 0.5:
-        with h.lock:
-            h.project.calibration = C.set_user_shift(h.project.calibration, shift, h.project.lyrics)
-            h.save()
-    return {"shift_ms": shift, "agree": agree, "lines": len(diffs)}
+    timed = [ln for ln in doc.sung_lines() if C.base_ms(doc, ln) is not None and ln.anchor is None]
+    if not timed:
+        raise S.ServiceError("歌词没有可用的行时间")
+    ref = timed[0]
+    mid = timed[len(timed) // 2] if len(timed) > 2 else None
+    audio = h.project.asset("original")
+    return {
+        "line_id": ref.id, "line_text": ref.text, "lrc_ms": C.base_ms(doc, ref),
+        "lines": [{"id": ln.id, "text": ln.text, "lrc_ms": C.base_ms(doc, ln)} for ln in timed[:3]],
+        "check_line": {"id": mid.id, "text": mid.text, "lrc_ms": C.base_ms(doc, mid)} if mid else None,
+        "asset_id": audio.id if audio else None, "duration_ms": audio.duration_ms if audio else None,
+    }
 
 
 def stage_align(q, task, cfg, cancel, progress):

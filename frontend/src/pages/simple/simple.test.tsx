@@ -216,3 +216,92 @@ describe('one-click AI readings in the detailed mode', () => {
     expect(screen.getByRole('button', { name: /应用所选 1 行/ })).toBeEnabled();
   });
 });
+
+describe('confirming the start before the task continues', () => {
+  const cal = {
+    line_id: 'L1', line_text: 'きみと', lrc_ms: 1500, lines: [{ id: 'L1', text: 'きみと', lrc_ms: 1500 }, { id: 'L2', text: 'あるいた', lrc_ms: 3500 }],
+    check_line: { id: 'L2', text: 'あるいた', lrc_ms: 3500 }, asset_id: 'a1', duration_ms: 60000,
+  };
+  const waiting = () => task({ id: 'tw', status: 'waiting', project_id: 'p', calibration: cal,
+    stages: stages(2).map((s, i) => (i === 2 ? { ...s, status: 'waiting' as const } : s)) });
+
+  it('opens by itself for the task just added, and the marked position is sent', async () => {
+    seed();
+    const api = mockApi({
+      'GET /api/tasks': () => useSimple.getState().tasks,
+      'POST /api/tasks/tw/calibration': () => ({ ...waiting(), status: 'queued' }),
+      'POST /api/tasks': () => task({ id: 'tw', status: 'preparing' }),
+      'GET /api/projects/p/audio/a1/peaks': () => ({ per_second: 100, mins: [], maxs: [] }),
+    });
+    const { container } = renderUI(<SimpleHome />);
+    await userEvent.upload(container.querySelector('input[type=file]') as HTMLInputElement, new File(['x'], 'a.mp4', { type: 'video/mp4' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '音乐链接或歌词' }), { target: { value: '[00:01.50]きみと' } });
+    await userEvent.click(screen.getByRole('button', { name: /开始制作/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks')).toHaveLength(1));
+    // import + lyrics are done: the task now waits for the user
+    useSimple.setState({ tasks: [waiting()] });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('きみと')).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: '标记时间' })).toHaveValue('0:01.500');
+    expect(within(dialog).getByRole('button', { name: /从标记处播放/ })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: /标记前 2 秒开始/ })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: /试听中间一句「あるいた」/ })).toBeEnabled();
+    await userEvent.click(within(dialog).getByRole('button', { name: '−100 ms' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /确认并继续/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks/tw/calibration')).toHaveLength(1));
+    expect(api.find('POST', '/api/tasks/tw/calibration')[0].body).toEqual({ marked_ms: 1400 });  // −100 ms nudge
+  });
+
+  it('a waiting task shows the button; plain mode is one click', async () => {
+    seed();
+    useSimple.setState({ tasks: [waiting()] });
+    const api = mockApi({
+      'GET /api/tasks': () => [waiting()],
+      'POST /api/tasks/tw/calibration': () => ({ ...waiting(), status: 'queued' }),
+      'GET /api/projects/p/audio/a1/peaks': () => ({ per_second: 100, mins: [], maxs: [] }),
+    });
+    renderUI(<SimpleHome />);
+    expect(await screen.findByText(/需要你确认第一句「きみと」/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /确认开头位置/ }));
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByRole('textbox', { name: '标记时间' });
+    await userEvent.clear(input);
+    await userEvent.type(input, '0:02.250{Enter}');
+    expect(within(dialog).getByText('+750 ms')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: /改普通模式/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks/tw/calibration')[0]?.body).toEqual({ plain: true }));
+  });
+});
+
+describe('detailed calibration page', () => {
+  it('plays from the calibrated start and applies the automatic match only on request', async () => {
+    const { seedStore } = await import('@/test/helpers');
+    const { CalibratePage } = await import('@/pages/Calibrate');
+    const { player } = await import('@/audio/player');
+    const { vi } = await import('vitest');
+    const pv = seedStore('calibrate');
+    const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+    const line = pv.project.lyrics.lines.find((l) => pv.view.effective_starts[l.id])!;
+    const eff = pv.view.effective_starts[line.id].ms;
+    const base = line.imported_start_ms! + pv.project.lyrics.embedded_shift_ms;
+    const api = mockApi({
+      [`POST /api/projects/${pv.project.id}/calibration/suggest`]: () => ({ id: 'jc', kind: 'calibrate', project_id: pv.project.id, status: 'running', progress: 0, message: '', error: null, created: 'z', finished: null, output: null }),
+      'GET /api/jobs/jc': () => ({ id: 'jc', kind: 'calibrate', project_id: pv.project.id, status: 'succeeded', progress: 1, message: '完成', error: null, created: 'z', finished: 'z',
+        output: { shift_ms: -180, agree: 0.92, lines_checked: 48, audio_role: 'vocals', vocal_onset_ms: 12000, line_starts: {} } }),
+      [`POST /api/projects/${pv.project.id}/calibration/shift`]: () => pv,
+    });
+    renderUI(<CalibratePage />);
+    await userEvent.click(await screen.findByRole('button', { name: /从校准点播放/ }));
+    expect(play).toHaveBeenLastCalledWith(eff);
+    await userEvent.click(screen.getByRole('button', { name: /从有效句首前 2 秒播放/ }));
+    expect(play).toHaveBeenLastCalledWith(Math.max(0, eff - 2000));
+    await userEvent.click(screen.getByRole('button', { name: /自动匹配/ }));
+    expect(await screen.findByText('44/48 行一致', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(api.find('POST', '/calibration/shift')).toHaveLength(0);  // nothing changes by itself
+    await userEvent.click(screen.getByRole('button', { name: /试听建议位置/ }));
+    expect(play).toHaveBeenLastCalledWith(Math.max(0, base - 180));
+    await userEvent.click(screen.getByRole('button', { name: '应用建议' }));
+    await waitFor(() => expect(api.find('POST', '/calibration/shift')[0]?.body).toEqual({ user_shift_ms: -180 }));
+    play.mockRestore();
+  });
+});

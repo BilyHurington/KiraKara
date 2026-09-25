@@ -288,6 +288,16 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         task_or_404(task_id)
         return tq.retry(task_id).model_dump(mode="json")
 
+    @app.post("/api/tasks/{task_id}/calibration")
+    def confirm_task_calibration(task_id: str, body: dict):
+        task_or_404(task_id)
+        marked = (body or {}).get("marked_ms")
+        if marked is not None and (not isinstance(marked, (int, float)) or marked < 0):
+            raise HTTPException(400, "marked_ms 必须是非负的毫秒数")
+        t = tq.confirm_calibration(task_id, marked_ms=None if marked is None else int(marked),
+                                   plain=bool((body or {}).get("plain")))
+        return t.model_dump(mode="json")
+
     @app.delete("/api/tasks/{task_id}")
     def delete_task(task_id: str):
         task_or_404(task_id)
@@ -614,6 +624,22 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         return FileResponse(path, filename=path.name)
 
     # ------------------------------------------------------------------ calibration
+
+    @app.post("/api/projects/{pid}/calibration/suggest")
+    def calibration_suggest(pid: str):
+        """Automatic offset suggestion (a trial plain alignment); nothing is changed."""
+        from ..auto_calibrate import suggest_calibration
+
+        h = handle(pid)
+        if h.project.mode != "lrc":
+            raise HTTPException(400, "只有 LRC 增强模式需要校准")
+        if h.project.asset("original") is None:
+            raise HTTPException(400, "请先上传原曲")
+
+        def run(job: Job):
+            return suggest_calibration(h, cancel=job.cancel_token, progress=progress_setter(job))
+
+        return jm.submit("calibrate", run, project_id=pid).to_dict()
 
     @app.post("/api/projects/{pid}/calibration/mark")
     def cal_mark(pid: str, body: MarkBody):

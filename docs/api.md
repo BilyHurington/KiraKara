@@ -130,6 +130,8 @@ A local rerun (`align` with `line_ids`) creates a new partial result with `paren
 | POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?` | `PipelineTask` |
 | POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
 | POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
+| POST | `/api/tasks/{id}/calibration` | `{marked_ms}` (first sung onset of `calibration.line_id`) or `{plain: true}` | `PipelineTask` (only while `waiting`; the task continues) |
+| POST | `/api/projects/{pid}/calibration/suggest` | – | `Job` (kind `calibrate`; output `{shift_ms, agree, lines_checked, line_starts, vocal_onset_ms, audio_role}`; nothing is saved) |
 | DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
 
-`PipelineTask`: `{id, name, mode, status: queued|running|succeeded|failed|cancelled|interrupted, project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, readings, separate, calibrate, align, export`. See `docs/simple-mode.md`.
+`PipelineTask`: `{id, name, mode, status: preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted, calibration (while waiting: {line_id, line_text, lrc_ms, lines, check_line, asset_id, duration_ms}), project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, calibrate, readings, separate, align, export` (stage status may be `waiting`). See `docs/simple-mode.md`.

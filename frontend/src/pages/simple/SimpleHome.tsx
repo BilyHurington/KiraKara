@@ -1,10 +1,10 @@
 // 极简模式首页：选模式 → 拖入视频 → 粘贴链接或歌词 → 开始；下方是任务队列。
 
 import {
-  AlertTriangle, ArrowRight, Check, CircleDashed, Download, Film, Link2, ListMusic, Loader2, Play, RotateCcw,
-  Settings2, Sparkles, Trash2, X,
+  AlertTriangle, ArrowRight, Check, CircleDashed, Crosshair, Download, Film, Hand, Link2, ListMusic, Loader2, Play,
+  RotateCcw, Settings2, Sparkles, Trash2, X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, PipelineStage, PipelineTask } from '@/lib/types';
 import { run, toast } from '@/store/app';
@@ -13,6 +13,7 @@ import {
 } from '@/store/simple';
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Progress, Segmented, Textarea } from '@/components/ui';
 import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
+import { CalibrateDialog } from './CalibrateDialog';
 
 const PROVIDER_LABEL = { none: '', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
 
@@ -39,6 +40,9 @@ export function SimpleHome() {
   const [lyrics, setLyrics] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [calibrating, setCalibrating] = useState<string | null>(null);
+  // tasks added from this page: their offset dialog opens by itself when they are ready
+  const mine = useRef(new Set<string>());
   const detected = useMemo(() => detectLyrics(lyrics), [lyrics]);
   const active = hasActiveTasks(tasks);
 
@@ -59,6 +63,16 @@ export function SimpleHome() {
     return () => { stop = true; clearTimeout(timer); };
   }, []);
 
+  useEffect(() => {
+    if (calibrating) return;
+    const ready = tasks.find((t) => t.status === 'waiting' && mine.current.has(t.id));
+    if (ready) {
+      mine.current.delete(ready.id);
+      setCalibrating(ready.id);
+    }
+  }, [tasks, calibrating]);
+  const calTask = tasks.find((t) => t.id === calibrating && t.status === 'waiting' && t.calibration);
+
   const chooseMode = (m: Mode) => {
     setMode(m);
     void run(() => saveSettings({ simple: { default_mode: m } }));
@@ -68,8 +82,9 @@ export function SimpleHome() {
     if (!file) return;
     setBusy(true);
     try {
-      await addTask(file, lyrics, mode, name);
-      toast('ok', '已加入队列', active ? '前面的任务完成后自动开始' : '马上开始');
+      const t = await addTask(file, lyrics, mode, name);
+      mine.current.add(t.id);
+      toast('ok', '已开始', mode === 'lrc' ? '读取视频和歌词后请确认开头位置，之后全部自动完成' : active ? '前面的任务完成后自动继续' : '马上开始');
       setFile(null);
       setLyrics('');
       setName('');
@@ -99,7 +114,9 @@ export function SimpleHome() {
               { value: 'plain', label: '普通', title: '只用歌词文字' },
             ]} />
             <p className="mt-1.5 text-xs text-muted">
-              {mode === 'lrc' ? '歌词带时间时使用它定位每一行（会自动校准偏移）；没有时间会自动改用普通模式。' : '只用歌词文字，不需要时间。'}
+              {mode === 'lrc'
+                ? '使用歌词里的行时间定位每一行。开始后几秒内会请你确认第一句从哪里开始唱（视频和歌词常常差几百毫秒），之后全部自动完成；歌词没有时间会自动改用普通模式。'
+                : '只用歌词文字，不需要时间，开始后全部自动完成。'}
             </p>
           </StepBlock>
 
@@ -157,11 +174,13 @@ export function SimpleHome() {
             <EmptyState className="m-4 py-10" title="还没有任务" description="上面放入视频和歌词，点“开始制作”" />
           ) : (
             <ul className="divide-y divide-line">
-              {tasks.map((t) => <TaskRow key={t.id} task={t} ahead={tasks.filter((x) => x.status === 'queued' && x.created < t.created).length} />)}
+              {tasks.map((t) => <TaskRow key={t.id} task={t} onCalibrate={() => setCalibrating(t.id)}
+                ahead={tasks.filter((x) => (x.status === 'queued' || x.status === 'running') && x.created < t.created).length} />)}
             </ul>
           )}
         </CardBody>
       </Card>
+      {calTask && <CalibrateDialog task={calTask} onClose={() => setCalibrating(null)} />}
     </div>
   );
 }
@@ -179,6 +198,8 @@ function StepBlock({ n, title, children }: { n: number; title: string; children:
 }
 
 const STATUS: Record<PipelineTask['status'], { label: string; tone: 'accent' | 'ok' | 'danger' | 'neutral' | 'warn' }> = {
+  preparing: { label: '读取中', tone: 'accent' },
+  waiting: { label: '等待确认', tone: 'warn' },
   queued: { label: '排队中', tone: 'neutral' },
   running: { label: '进行中', tone: 'accent' },
   succeeded: { label: '完成', tone: 'ok' },
@@ -187,10 +208,10 @@ const STATUS: Record<PipelineTask['status'], { label: string; tone: 'accent' | '
   interrupted: { label: '已中断', tone: 'warn' },
 };
 
-function TaskRow({ task: t, ahead }: { task: PipelineTask; ahead: number }) {
+function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: number; onCalibrate: () => void }) {
   const st = STATUS[t.status];
-  const live = t.status === 'running' || t.status === 'queued';
-  const canOpen = !!t.project_id && t.status !== 'running';
+  const live = t.status === 'running' || t.status === 'queued' || t.status === 'preparing' || t.status === 'waiting';
+  const canOpen = !!t.project_id && t.status !== 'running' && t.status !== 'preparing' && t.status !== 'waiting';
   const act = (a: 'cancel' | 'retry' | 'delete') => run(() => taskAction(t.id, a), '操作失败');
   const open = () => t.project_id && openInDetail(t.project_id, t.outputs.video ? 'karaoke' : 'review');
   return (
@@ -226,10 +247,18 @@ function TaskRow({ task: t, ahead }: { task: PipelineTask; ahead: number }) {
         </div>
       </div>
 
-      {t.status === 'queued' ? (
+      {t.status === 'waiting' && t.calibration && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-warn-soft px-3 py-2.5">
+          <Hand className="size-4 text-warn" />
+          <span className="min-w-0 flex-1 text-[13px]">需要你确认第一句「{t.calibration.line_text}」从哪里开始唱，之后全部自动完成</span>
+          <Button size="sm" variant="primary" icon={<Crosshair className="size-4" />} onClick={onCalibrate}>确认开头位置</Button>
+        </div>
+      )}
+      {t.status === 'queued' && !t.stages.some((s) => s.status === 'done') ? (
         <div className="mt-2 text-xs text-muted">{ahead ? `前面还有 ${ahead} 个任务` : '即将开始'}</div>
       ) : (
         <>
+          {t.status === 'queued' && <div className="mt-2 text-xs text-muted">{ahead ? `已确认，排队中（前面还有 ${ahead} 个任务）` : '即将继续'}</div>}
           {t.status === 'running' && (
             <div className="mt-3 flex items-center gap-3">
               <Progress value={t.progress} className="flex-1" />
@@ -239,7 +268,7 @@ function TaskRow({ task: t, ahead }: { task: PipelineTask; ahead: number }) {
           <ol className="mt-3 flex flex-wrap gap-1.5" aria-label="处理步骤">
             {t.stages.map((s) => <StageChip key={s.key} s={s} />)}
           </ol>
-          {t.status === 'running' && t.message && <div className="mt-2 text-xs text-muted">{t.message}</div>}
+          {(t.status === 'running' || t.status === 'preparing') && t.message && <div className="mt-2 text-xs text-muted">{t.message}</div>}
         </>
       )}
       {t.error && <div className="mt-2 rounded-lg bg-danger-soft px-3 py-2 text-xs break-words text-danger">{t.error}</div>}
@@ -260,6 +289,7 @@ function StageChip({ s }: { s: PipelineStage }) {
     running: <Loader2 className="size-3 animate-spin" />,
     failed: <X className="size-3" strokeWidth={3} />,
     skipped: <CircleDashed className="size-3" />,
+    waiting: <Hand className="size-3" />,
     pending: null,
   }[s.status];
   const tip = s.status === 'running' ? `${Math.round(s.progress * 100)}% ${s.message}` : s.message || (s.status === 'skipped' ? '已跳过' : '');
@@ -268,6 +298,7 @@ function StageChip({ s }: { s: PipelineStage }) {
       className={cn('flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
         { done: 'border-ok/40 bg-ok-soft text-ok', running: 'border-accent/50 bg-accent-soft text-accent',
           failed: 'border-danger/40 bg-danger-soft text-danger', skipped: 'border-dashed border-line-strong text-subtle',
+          waiting: 'border-warn/50 bg-warn-soft text-warn',
           pending: 'border-line text-subtle' }[s.status])}>
       {icon}{s.label}
       {s.status === 'done' && s.message && <span className="font-normal opacity-80">· {s.message}</span>}

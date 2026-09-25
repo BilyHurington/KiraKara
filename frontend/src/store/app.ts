@@ -262,7 +262,7 @@ export function trackJob(job: Job, opts: { label: string; onDone?: (j: Job) => v
   return job;
 }
 
-const JOB_LABELS: Record<string, string> = { align: '对齐', separate: '人声分离', mix: '混音导出', video: '视频导出', burn: '字幕烧录', ai: 'AI 注音' };
+const JOB_LABELS: Record<string, string> = { align: '对齐', separate: '人声分离', mix: '混音导出', video: '视频导出', burn: '字幕烧录', ai: 'AI 注音', calibrate: '自动匹配' };
 
 /** Re-attach to jobs still running on the server (e.g. after a page reload). */
 export async function resumeJobs(pid: string) {

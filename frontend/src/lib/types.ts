@@ -338,13 +338,21 @@ export interface SettingsPatch {
 
 export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }
 
-export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
+export type TaskStatus = 'preparing' | 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
 
-export interface PipelineStage { key: string; label: string; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; progress: number; message: string }
+export interface PipelineStage { key: string; label: string; status: 'pending' | 'running' | 'waiting' | 'done' | 'skipped' | 'failed'; progress: number; message: string }
+
+/** What the user confirms right after an LRC task is added (see pipeline.calibration_request). */
+export interface CalibrationRequest {
+  line_id: string; line_text: string; lrc_ms: number; lines: { id: string; text: string; lrc_ms: number }[];
+  check_line: { id: string; text: string; lrc_ms: number } | null;
+  asset_id: string | null; duration_ms: number | null; confirmed_ms?: number;
+}
 
 export interface PipelineTask {
   id: string; created: string; finished: string | null; name: string; mode: Mode; media_filename: string;
   lyrics_kind: 'link' | 'text'; lyrics_input: string; status: TaskStatus; project_id: string | null;
   stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
   warnings: string[]; outputs: { video?: { filename: string; url: string } };
+  calibration?: CalibrationRequest | null; calibration_confirmed?: boolean;
 }

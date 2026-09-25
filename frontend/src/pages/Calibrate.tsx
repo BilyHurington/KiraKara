@@ -5,15 +5,15 @@
 // (never accumulated). Audio is never moved or trimmed.
 
 import {
-  ArrowRight, ChevronLeft, ChevronRight, Crosshair, Flag, MapPin, PlayCircle, RotateCcw, Timer, Undo2,
+  ArrowRight, ChevronLeft, ChevronRight, Crosshair, Flag, MapPin, Play, PlayCircle, RotateCcw, Timer, Undo2, Wand2,
 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs, fmtSigned } from '@/lib/format';
-import type { Line, ProjectView } from '@/lib/types';
+import type { Job, Line, ProjectView } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
-import { ppath, run, setPV, setStep, toast, useApp, useProject, useView } from '@/store/app';
+import { ppath, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Kbd, KV, NumberInput, PageHeader, Tip,
 } from '@/components/ui';
@@ -123,6 +123,30 @@ function Calibration() {
     revealOnWaveform(from, eff.ms + 3000);
     player.play(from);
   };
+  const playAt = () => {
+    if (!eff) return;
+    revealOnWaveform(Math.max(0, eff.ms - 1000), eff.ms + 4000);
+    player.play(eff.ms);
+  };
+
+  // automatic suggestion: a trial alignment on the (separated) vocals
+  type Suggestion = { shift_ms: number; agree: number; lines_checked: number; audio_role: string; vocal_onset_ms: number | null };
+  const sugJob = useJob('calibrate');
+  const [sug, setSug] = useState<Suggestion | null>(null);
+  const suggesting = !!sugJob && (sugJob.status === 'queued' || sugJob.status === 'running');
+  const suggest = () => run(async () => {
+    setSug(null);
+    const j = await api.post<Job>(ppath('/calibration/suggest'));
+    trackJob(j, { label: '自动匹配', onDone: (d) => { if (d.status === 'succeeded' && d.output) setSug(d.output as Suggestion); } });
+  }, '无法开始自动匹配');
+  const baseOf = (l: Line | null) => (l?.imported_start_ms == null ? null : l.imported_start_ms + doc.embedded_shift_ms);
+  const playSuggested = () => {
+    const b = baseOf(line);
+    if (!sug || b === null) return;
+    const at = Math.max(0, b + sug.shift_ms);
+    revealOnWaveform(Math.max(0, at - 1000), at + 4000);
+    player.play(at);
+  };
 
   const noTimes = timed.length === 0;
 
@@ -180,12 +204,39 @@ function Calibration() {
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
+                <Button variant="outline" onClick={playAt} disabled={!eff} icon={<Play className="size-4" />}>
+                  从校准点播放
+                </Button>
                 <Button variant="outline" onClick={playBefore} disabled={!eff} icon={<PlayCircle className="size-4" />}>
                   从有效句首前 2 秒播放
                 </Button>
                 <Button variant="primary" size="lg" onClick={mark} disabled={!line || noTimes} icon={<Flag className="size-4" />}>
                   在播放头标记首个发音 <Kbd>M</Kbd>
                 </Button>
+              </div>
+
+              <div className="rounded-xl border border-line p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button size="sm" variant="soft" icon={<Wand2 className="size-4" />} loading={suggesting} disabled={noTimes} onClick={suggest}>
+                    自动匹配
+                  </Button>
+                  {suggesting ? <span className="text-xs text-muted">{sugJob!.message || '试对齐中…'}</span> : !sug && (
+                    <span className="text-xs text-muted">先按普通模式试对齐一次，取各行偏移的中位数作为建议（有人声分轨时更准）；不会自动保存</span>
+                  )}
+                  {sug && (
+                    <>
+                      <span className="text-[13px]">建议全局平移 <b className="tabular font-mono">{fmtSigned(sug.shift_ms)}</b></span>
+                      <Badge tone={sug.agree >= 0.7 ? 'ok' : sug.agree >= 0.5 ? 'warn' : 'danger'}>
+                        {Math.round(sug.agree * sug.lines_checked)}/{sug.lines_checked} 行一致
+                      </Badge>
+                      <Button size="xs" variant="outline" icon={<Play className="size-3.5" />} disabled={baseOf(line) === null} onClick={playSuggested}>试听建议位置</Button>
+                      <Button size="xs" variant="primary" onClick={() => setShift(sug.shift_ms)}>应用建议</Button>
+                    </>
+                  )}
+                </div>
+                {sug && sug.agree < 0.5 && (
+                  <Callout tone="warn" className="mt-3">只有不到一半的行与建议一致：歌词可能来自另一个版本（例如现场版），建议改用普通模式或逐行添加锚点。</Callout>
+                )}
               </div>
 
               <div className="rounded-xl border border-line p-4">
