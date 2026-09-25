@@ -184,6 +184,14 @@ describe('subtitle style panel in the simple-mode settings', () => {
       expect(k?.glow.enabled).toBe(true);
       expect(k?.effects.kind).toBe('petals');
     }, { timeout: 2000 });
+    // song info card: a switch and the lines to show (no free text without a song)
+    await userEvent.click(screen.getByRole('button', { name: /歌曲信息/ }));
+    await userEvent.click(screen.getByRole('switch', { name: '在开头显示歌曲信息' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: '显示作词' }));
+    await userEvent.click(screen.getByRole('radio', { name: '右上角' }));
+    expect(screen.queryByRole('textbox', { name: '歌曲信息文字' })).toBeNull();
+    await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle).info)
+      .toMatchObject({ enabled: true, position: 'top-right', fields: ['title', 'artist', 'lyricist'] }), { timeout: 2000 });
     expect(screen.getByText('已修改')).toBeInTheDocument();
     // save as a named preset
     await userEvent.click(screen.getByRole('button', { name: '另存为' }));

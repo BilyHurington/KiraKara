@@ -1,21 +1,21 @@
 // Subtitle style panel, shared by the detailed 卡拉OK字幕 page and the simple-mode
 // settings.  Top: saved styles (预设).  Then collapsible sections:
-//   配色 (every colour in one place) · 歌词 · 注音 · 翻译 · 布局 · 时间 · 特效
+//   配色 (every colour in one place) · 歌词 · 注音 · 翻译 · 歌曲信息 · 布局 · 时间 · 特效
 // Each section shows a one-line summary while closed.  Every control edits the
 // style; the parent decides how to save it.
 
 import {
-  Check, ChevronDown, Download, Languages, Palette, Save, Sparkles, Timer, Trash2, Type, X,
+  Check, ChevronDown, Download, Languages, Music, Palette, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
   LayoutTemplate, CaseSensitive,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/format';
-import type { EffectKind, FontFamily, KaraokeStyle } from '@/lib/types';
+import type { EffectKind, FontFamily, KaraokeStyle, SongInfo, SongInfoField } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { deleteStyle, loadSavedStyles, sameLook, saveStyle, useLibrary } from '@/store/styles';
-import { Badge, Button, Input, Segmented, Select, SliderField, Switch } from '@/components/ui';
+import { Badge, Button, Input, Segmented, Select, SliderField, Switch, Textarea } from '@/components/ui';
 
-export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'layout' | 'timing' | 'effects';
+export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'info' | 'layout' | 'timing' | 'effects';
 type Patch = (fn: (s: KaraokeStyle) => void) => void;
 
 export interface TranslationInfo {
@@ -23,6 +23,13 @@ export interface TranslationInfo {
   lines?: number;
   /** fetch the translation from the lyrics' music platform */
   onFetch?: () => void;
+}
+
+export interface SongInfoEditing {
+  /** the project's song data and its own card text (null while loading) */
+  data: SongInfo | null;
+  /** save the card's own text; null goes back to the chosen fields */
+  onText: (text: string | null) => void;
 }
 
 // ------------------------------------------------------------------ small building blocks
@@ -92,7 +99,7 @@ const Dot = ({ c }: { c: string }) => <span className="inline-block size-2.5 rou
 
 // ------------------------------------------------------------------ the panel
 
-export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = ['colors'], storageKey, translation }: {
+export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = ['colors'], storageKey, translation, songInfo }: {
   style: KaraokeStyle;
   onChange: (next: KaraokeStyle) => void;
   fonts: FontFamily[];
@@ -101,6 +108,8 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
   /** remember which sections are open (per place the panel is used) */
   storageKey?: string;
   translation?: TranslationInfo;
+  /** the detailed page edits the card's text; the simple mode only picks the lines */
+  songInfo?: SongInfoEditing;
 }) {
   const [open, setOpen] = useState<Set<SectionId>>(() => {
     try {
@@ -120,7 +129,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
     fn(next);
     onChange(next);
   };
-  const { layout: L, text: T, ruby: R, translation: Tr, glow: G, timing: M, effects: E } = style;
+  const { layout: L, text: T, ruby: R, translation: Tr, glow: G, timing: M, effects: E, info: I } = style;
   const posLabel = { opposite: L.position === 'bottom' ? '画面顶部' : '画面底部', block: '歌词旁', line: '每行下方' };
   const sec = (id: SectionId) => ({ id, open: open.has(id), onToggle: () => toggle(id) });
 
@@ -149,6 +158,15 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
           <ColorGroup title="翻译">
             <ColorField label="文字" value={Tr.color} onChange={(v) => patch((s) => { s.translation.color = v; })} />
             <ColorField label="描边" value={Tr.outline_color} onChange={(v) => patch((s) => { s.translation.outline_color = v; })} />
+          </ColorGroup>
+          <ColorGroup title="歌曲信息" action={<Switch checked={!I.color && !I.accent} label={<span className="text-xs text-muted">跟随歌词</span>}
+            onChange={(v) => patch((s) => { s.info.color = v ? '' : T.color_unsung; s.info.accent = v ? '' : T.color_sung; })} />}>
+            {I.color || I.accent ? (
+              <>
+                <ColorField label="文字" value={I.color || T.color_unsung} onChange={(v) => patch((s) => { s.info.color = v; })} />
+                <ColorField label="强调条" value={I.accent || T.color_sung} onChange={(v) => patch((s) => { s.info.accent = v; })} />
+              </>
+            ) : <p className="text-xs text-subtle">文字用歌词未唱颜色，强调条用已唱颜色</p>}
           </ColorGroup>
           <ColorGroup title="荧光边缘" action={!G.enabled ? <span className="text-xs text-subtle">在“歌词”中开启</span> : undefined}>
             <ColorField label="未唱时" value={G.color_unsung} disabled={!G.enabled} onChange={(v) => patch((s) => { s.glow.color_unsung = v; })} />
@@ -232,6 +250,11 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             <Row label="阴影距离"><Num name="翻译阴影" value={Tr.shadow} max={12} step={0.5} onChange={(v) => patch((s) => { s.translation.shadow = v; })} /></Row>
             <Switch checked={Tr.glow} onChange={(v) => patch((s) => { s.translation.glow = v; })} label="开启荧光边缘时，翻译也发光" />
           </div>
+        </Section>
+
+        <Section {...sec('info')} icon={<Music className="size-4" />} title="歌曲信息"
+          summary={I.enabled ? `${I.position === 'top-left' ? '左上角' : '右上角'} · ${songInfo?.data?.text != null ? '自定义文字' : I.fields.map((f) => FIELD_LABEL[f]).join(' / ')} · ${I.duration_ms / 1000}s` : '关闭'}>
+          <InfoEditor style={style} patch={patch} songInfo={songInfo} />
         </Section>
 
         <Section {...sec('layout')} icon={<LayoutTemplate className="size-4" />} title="布局"
@@ -369,6 +392,84 @@ function PresetBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: Kar
         </div>
       )}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ song info (title card)
+
+const FIELD_ORDER: SongInfoField[] = ['title', 'artist', 'album', 'lyricist', 'composer', 'arranger'];
+const FIELD_LABEL: Record<SongInfoField, string> = { title: '歌名', artist: '歌手', album: '专辑', lyricist: '作词', composer: '作曲', arranger: '编曲' };
+const CREDITS: SongInfoField[] = ['lyricist', 'composer', 'arranger'];
+
+/** The card's lines from the chosen fields (the same rule as the server). */
+export function autoInfoText(fields: SongInfoField[], data: SongInfo['fields']) {
+  return FIELD_ORDER.filter((f) => fields.includes(f) && data[f])
+    .map((f) => (CREDITS.includes(f) ? `${FIELD_LABEL[f]}：${data[f]}` : data[f]!)).join('\n');
+}
+
+function InfoEditor({ style, patch, songInfo }: { style: KaraokeStyle; patch: Patch; songInfo?: SongInfoEditing }) {
+  const I = style.info;
+  const data = songInfo?.data ?? null;
+  const custom = data?.text ?? null;
+  const toggleField = (f: SongInfoField, on: boolean) => patch((s) => {
+    const set = new Set(s.info.fields);
+    if (on) set.add(f); else set.delete(f);
+    s.info.fields = FIELD_ORDER.filter((x) => set.has(x));
+  });
+  return (
+    <>
+      <Switch checked={I.enabled} onChange={(v) => patch((s) => { s.info.enabled = v; })} label="在开头显示歌曲信息" />
+      <div className={cn('space-y-4', !I.enabled && 'pointer-events-none opacity-45')}>
+        <Row label="位置">
+          <Segmented value={I.position} onChange={(v) => patch((s) => { s.info.position = v; })}
+            options={[{ value: 'top-left', label: '左上角' }, { value: 'top-right', label: '右上角' }]} />
+        </Row>
+        <Row label="显示哪些行" hint={custom !== null ? '正在使用下面的自定义文字，勾选暂不生效'
+          : data ? '没有数据的行不会显示' : '每首歌有数据的行才会显示（来自音乐平台和歌词里的“作词：…”等行）'}>
+          <div className={cn('grid gap-1.5 @xs:grid-cols-2', custom !== null && 'opacity-45')}>
+            {FIELD_ORDER.map((f) => {
+              const value = data?.fields[f];
+              return (
+                <label key={f} className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-[13px] hover:bg-surface-2">
+                  <input type="checkbox" className="size-4 shrink-0 accent-[var(--color-accent)]" aria-label={`显示${FIELD_LABEL[f]}`}
+                    checked={I.fields.includes(f)} disabled={custom !== null} onChange={(e) => toggleField(f, e.target.checked)} />
+                  <span className="shrink-0">{FIELD_LABEL[f]}</span>
+                  {data && <span className={cn('min-w-0 truncate text-xs', value ? 'text-muted' : 'text-subtle')}>{value || '无'}</span>}
+                </label>
+              );
+            })}
+          </div>
+        </Row>
+        {songInfo && data && <InfoText auto={autoInfoText(I.fields, data.fields)} custom={custom} onText={songInfo.onText} />}
+        <Row label="标题字号" hint="其余各行约为标题的一半多一点"><Num name="标题字号" value={I.size} min={20} max={120} onChange={(v) => patch((s) => { s.info.size = v; })} /></Row>
+        <Row label="与画面边缘的距离"><Num name="信息边距" value={I.margin} max={200} onChange={(v) => patch((s) => { s.info.margin = v; })} /></Row>
+        <Row label="出现时间" hint="从音频开头算起"><Num name="信息出现时间" unit="ms" value={I.start_ms} max={10000} step={100} onChange={(v) => patch((s) => { s.info.start_ms = v; })} /></Row>
+        <Row label="显示多久" hint="顶部要出现歌词或翻译时会提前淡出（至少显示 2 秒）">
+          <Num name="信息显示时长" unit="ms" value={I.duration_ms} min={1000} max={20000} step={500} onChange={(v) => patch((s) => { s.info.duration_ms = v; })} />
+        </Row>
+      </div>
+    </>
+  );
+}
+
+function InfoText({ auto, custom, onText }: { auto: string; custom: string | null; onText: (t: string | null) => void }) {
+  const [draft, setDraft] = useState<string | null>(null); // what is being typed, saved shortly after
+  useEffect(() => {
+    if (draft === null) return;
+    const t = setTimeout(() => { if (draft !== (custom ?? auto)) onText(draft); }, 500);
+    return () => clearTimeout(t);
+  }, [draft]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <Row label={<span className="flex items-center gap-2">显示的文字{custom !== null && <Badge tone="accent">自定义</Badge>}</span>}
+      hint="每行一条，第一行是标题（大字）。可以改成任何内容，例如「赤城みりあ（CV：黒沢ともよ）」。">
+      <Textarea aria-label="歌曲信息文字" rows={4} className="min-h-24 font-sans" value={draft ?? custom ?? auto}
+        onChange={(e) => setDraft(e.target.value)} />
+      {custom !== null && (
+        <Button size="xs" variant="ghost" icon={<RotateCcw className="size-3.5" />} onClick={() => { setDraft(null); onText(null); }}>
+          恢复为按勾选自动生成
+        </Button>
+      )}
+    </Row>
   );
 }
 

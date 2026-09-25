@@ -594,6 +594,16 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         S.set_karaoke_style(h, body)
         return h.project.karaoke.model_dump(mode="json")
 
+    @app.get("/api/projects/{pid}/karaoke/info")
+    def get_song_info(pid: str):
+        return S.song_info(handle(pid))
+
+    @app.put("/api/projects/{pid}/karaoke/info")
+    def put_song_info(pid: str, body: dict):
+        h = handle(pid)
+        S.set_song_info_text(h, body.get("text"))
+        return S.song_info(h)
+
     @app.post("/api/projects/{pid}/karaoke/preview")
     def karaoke_preview(pid: str, body: dict):
         from ..karaoke.render import RenderError

@@ -76,6 +76,20 @@
    "color": "",
    "ruby": false
   },
+  "info": {
+   "enabled": false,
+   "position": "top-left",
+   "fields": [
+    "title",
+    "artist"
+   ],
+   "start_ms": 500,
+   "duration_ms": 7000,
+   "size": 56,
+   "margin": 56,
+   "color": "",
+   "accent": ""
+  },
   "output": {
    "vocal_keep_pct": 20.0
   }
@@ -156,6 +170,20 @@
    "size": 100,
    "color": "",
    "ruby": false
+  },
+  "info": {
+   "enabled": false,
+   "position": "top-left",
+   "fields": [
+    "title",
+    "artist"
+   ],
+   "start_ms": 500,
+   "duration_ms": 7000,
+   "size": 56,
+   "margin": 56,
+   "color": "",
+   "accent": ""
   },
   "output": {
    "vocal_keep_pct": 20.0

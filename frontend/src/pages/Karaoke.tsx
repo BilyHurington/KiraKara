@@ -5,7 +5,7 @@ import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, parseTime } from '@/lib/format';
-import type { FontFamily, Job, KaraokeStyle, ProjectView } from '@/lib/types';
+import type { FontFamily, Job, KaraokeStyle, ProjectView, SongInfo } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { ppath, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
@@ -22,18 +22,24 @@ export function KaraokePage() {
   const result = useResult();
   const [style, setStyle] = useState<KaraokeStyle | null>(project.karaoke ?? null);
   const [fonts, setFonts] = useState<{ default: string; families: FontFamily[] }>({ default: '', families: [] });
+  const [songInfo, setSongInfo] = useState<SongInfo | null>(null);
   const dirty = useRef(false);
 
   useEffect(() => {
     void run(async () => {
-      const [f, k] = await Promise.all([
+      const [f, k, info] = await Promise.all([
         api.get<{ default: string; families: FontFamily[] }>('/api/fonts'),
         api.get<KaraokeStyle>(ppath('/karaoke')),
+        api.get<SongInfo>(ppath('/karaoke/info')),
       ]);
       setFonts(f);
       setStyle(k);
+      setSongInfo(info);
     }, '加载字幕设置失败');
   }, [project.id]);
+  const saveInfoText = (text: string | null) => run(async () => {
+    setSongInfo(await api.put<SongInfo>(ppath('/karaoke/info'), { text }));
+  }, '保存歌曲信息失败');
 
   // autosave (debounced); exports and burn-in always use the saved style
   useEffect(() => {
@@ -95,7 +101,7 @@ export function KaraokePage() {
       {result.stale && <Callout tone="warn" className="mb-4" title="当前对齐结果已过期">{result.stale_reason}。字幕仍按该结果生成。</Callout>}
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
-          <PreviewCard style={style} lines={lines} />
+          <PreviewCard style={style} lines={lines} refreshKey={songInfo?.text ?? ''} />
           <BurnCard style={style} patch={patch} />
         </div>
         <div className="space-y-6 xl:sticky xl:top-4">
@@ -111,7 +117,8 @@ export function KaraokePage() {
             <CardBody className="pt-3">
               <StylePanel style={style} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
                 defaultOpen={['colors', 'text']} storageKey="detail"
-                translation={{ lines: translated, onFetch: canFetch ? fetchTranslation : undefined }} />
+                translation={{ lines: translated, onFetch: canFetch ? fetchTranslation : undefined }}
+                songInfo={{ data: songInfo, onText: (t) => void saveInfoText(t) }} />
             </CardBody>
           </Card>
         </div>
@@ -133,7 +140,7 @@ function Header() {
 
 // ------------------------------------------------------------------ preview
 
-function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] }) {
+function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines: LineSpan[]; refreshKey: string }) {
   const project = useProject()!;
   const [lineIdx, setLineIdx] = useState(0);
   const [pct, setPct] = useState(40);
@@ -172,7 +179,7 @@ function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] 
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [lookKey, t, bg]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lookKey, t, bg, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (i: number) => { setCustom(null); setLineIdx(Math.max(0, Math.min(lines.length - 1, i))); };
   const followPlayhead = () => {
@@ -232,6 +239,11 @@ function PreviewCard({ style, lines }: { style: KaraokeStyle; lines: LineSpan[] 
               )}
               <Tip content="使用播放器当前位置"><Button size="sm" variant="ghost" icon={<Crosshair className="size-4" />} onClick={followPlayhead}>播放头</Button></Tip>
               <Button size="sm" variant="ghost" onClick={listen}>试听本行</Button>
+              {style.info.enabled && (
+                <Tip content="跳到开头歌曲信息完全显示的时刻">
+                  <Button size="sm" variant="ghost" onClick={() => setCustom(style.info.start_ms + 1200)}>看歌曲信息</Button>
+                </Tip>
+              )}
             </div>
           </div>
         )}

@@ -204,12 +204,21 @@ export interface KaraokeStyle {
   };
   /** effects around the lyrics, fired by each syllable as it is sung */
   effects: { kind: EffectKind; amount: number; size: number; color: string; ruby: boolean };
+  /** song title card in a top corner at the start */
+  info: {
+    enabled: boolean; position: 'top-left' | 'top-right'; fields: SongInfoField[];
+    start_ms: number; duration_ms: number; size: number; margin: number; color: string; accent: string;
+  };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };
 }
 
 /** A saved subtitle style (预设); 默认 is built in and read-only. */
 export interface SavedStyle { id: string; name: string; builtin: boolean; updated: string | null; style: KaraokeStyle }
+
+export type SongInfoField = 'title' | 'artist' | 'album' | 'lyricist' | 'composer' | 'arranger';
+/** GET /api/projects/{id}/karaoke/info: what the song data fills, and the project's own text (null = automatic) */
+export interface SongInfo { fields: Partial<Record<SongInfoField, string>>; labels: Record<SongInfoField, string>; text: string | null }
 
 export type EffectKind = 'none' | 'pulse' | 'ring' | 'shine' | 'sparkle' | 'petals' | 'hearts' | 'ball';
 
@@ -232,6 +241,7 @@ export interface Project {
   mix: MixSettings;
   video?: VideoAsset | null;
   karaoke?: KaraokeStyle;
+  song_info_text?: string | null;
 }
 
 export interface ResultSummary {

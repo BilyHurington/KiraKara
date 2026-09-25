@@ -173,21 +173,29 @@ def test_saved_styles_library():
     from kara_align.karaoke import styles as ST
 
     lib = ST.list_styles()
-    assert [x["name"] for x in lib] == ["默认"] and lib[0]["builtin"]
+    assert [x["name"] for x in lib] == ["默认", "暖阳"] and lib[0]["builtin"] and lib[1]["builtin"]
     assert lib[0]["style"]["text"]["color_sung"] == "#ED35B3" and lib[0]["style"]["timing"]["fade_in_ms"] == 200
+    warm = lib[1]["style"]  # yellow / orange, with translations and the title card
+    assert (warm["text"]["color_sung"], warm["glow"]["enabled"], warm["translation"]["enabled"], warm["info"]["enabled"]) == \
+        ("#FF8A1E", True, True, True)
+    assert warm["preset"] == "暖阳" and warm["timing"]["lead_in_ms"] == 4000
     mine = KaraokeStyle()
     mine.glow.enabled = True
     a = ST.save_style("荧光", mine.model_dump(mode="json"))
     assert a["style"]["preset"] == "荧光" and a["style"]["glow"]["enabled"]
     again = ST.save_style("荧光", KaraokeStyle().model_dump(mode="json"))  # same name: replaced, not duplicated
-    assert again["id"] == a["id"] and [x["name"] for x in ST.list_styles()] == ["默认", "荧光"]
+    assert again["id"] == a["id"] and [x["name"] for x in ST.list_styles()] == ["默认", "暖阳", "荧光"]
     assert not ST.get_style(a["id"]).glow.enabled
     with pytest.raises(ST.StyleError):
         ST.save_style("默认", mine.model_dump(mode="json"))
     with pytest.raises(ST.StyleError):
+        ST.save_style("暖阳", mine.model_dump(mode="json"))
+    with pytest.raises(ST.StyleError):
         ST.delete_style("default")
+    with pytest.raises(ST.StyleError):
+        ST.delete_style("warm")
     ST.delete_style(a["id"])
-    assert [x["name"] for x in ST.list_styles()] == ["默认"]
+    assert [x["name"] for x in ST.list_styles()] == ["默认", "暖阳"]
 
 
 def test_v1_styles_migrate():
@@ -481,7 +489,7 @@ def test_styles_effects_and_translation_http_api(tmp_path):
     st["glow"]["enabled"] = True
     saved = client.post("/api/karaoke/styles", json={"name": "我的荧光", "style": st}).json()
     assert saved["name"] == "我的荧光" and saved["style"]["glow"]["enabled"]
-    assert [x["name"] for x in client.get("/api/karaoke/styles").json()] == ["默认", "我的荧光"]
+    assert [x["name"] for x in client.get("/api/karaoke/styles").json()] == ["默认", "暖阳", "我的荧光"]
     assert client.post("/api/karaoke/styles", json={"name": "", "style": st}).status_code == 400
     assert client.delete("/api/karaoke/styles/default").status_code == 400
     assert client.delete(f"/api/karaoke/styles/{saved['id']}").json() == {"ok": True}
@@ -489,3 +497,56 @@ def test_styles_effects_and_translation_http_api(tmp_path):
     pid = client.post("/api/projects", json={"name": "t", "mode": "plain"}).json()["project"]["id"]
     r = client.post(f"/api/projects/{pid}/lyrics/fetch-translation")
     assert r.status_code == 400 and "网易云" in r.json()["detail"]
+
+
+def test_song_info_title_card(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.karaoke.info import auto_lines, song_fields
+    from kara_align.models import Line
+    from kara_align.web.server import create_app
+
+    h = _project(tmp_path)
+    meta = h.project.lyrics.meta
+    meta.title, meta.artist, meta.album = "わたぐも", "赤城みりあ", "STARLIGHT MASTER 13"
+    h.project.lyrics.lines.insert(0, Line(text="作词 : 渡辺拓也", kind="meta", sing=False))
+    h.project.lyrics.lines.insert(1, Line(text="編曲：本多友紀", kind="meta", sing=False))
+    h.save()
+    f = song_fields(h.project)
+    assert f == {"title": "わたぐも", "artist": "赤城みりあ", "album": "STARLIGHT MASTER 13",
+                 "lyricist": "渡辺拓也", "arranger": "本多友紀"}
+    st = h.project.karaoke.model_copy(deep=True)
+    assert not [l for l in S.karaoke_ass(h)[0].splitlines() if ",KInfo," in l]  # off by default
+    st.info.enabled = True
+    st.info.fields = ["title", "artist", "lyricist", "composer"]  # no composer in the data: skipped
+    assert auto_lines(h.project, st) == ["わたぐも", "赤城みりあ", "作词：渡辺拓也"]
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    card = [l for l in S.karaoke_ass(h)[0].splitlines() if ",KInfo," in l]
+    texts = [l.split("}", 1)[1] for l in card if "\\p1" not in l]
+    assert texts == ["わたぐも", "赤城みりあ", "作词：渡辺拓也"]
+    assert all(l.startswith("Dialogue: 9,0:00:00.") for l in card)  # at the start, above everything
+    assert all("\\an7" in l for l in card) and any("\\p1" in l for l in card)  # top-left, with the accent bar
+    # top-right, glow copies under the text, and the project's own text
+    st.info.position = "top-right"
+    st.glow.enabled = True
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    client = TestClient(create_app(tmp_path))
+    pid = h.dir.name  # the directory name is the project's id in a workspace
+    r = client.put(f"/api/projects/{pid}/karaoke/info", json={"text": "わたぐも\n\n赤城みりあ (CV: 黒沢ともよ)\n"}).json()
+    assert r["text"].startswith("わたぐも") and r["fields"]["arranger"] == "本多友紀"
+    h2 = S.open_dir(h.dir)
+    card = [l for l in S.karaoke_ass(h2)[0].splitlines() if ",KInfo," in l]
+    assert [l.split("}", 1)[1] for l in card if l.startswith("Dialogue: 9,") and "\\p1" not in l] == \
+        ["わたぐも", "赤城みりあ (CV: 黒沢ともよ)"]
+    assert all("\\an9" in l for l in card if "\\p1" not in l) and len([l for l in card if l.startswith("Dialogue: 8,")]) == 2
+    assert client.put(f"/api/projects/{pid}/karaoke/info", json={"text": None}).json()["text"] is None
+    # translations along the top edge: the card leaves before the first one shows (but stays at least 2 s)
+    st.translation.enabled = True
+    st.info.duration_ms = 60000
+    h3 = S.open_dir(h.dir)
+    for ln in h3.project.lyrics.sung_lines():
+        ln.translation = "译文"
+    S.set_karaoke_style(h3, st.model_dump(mode="json"))
+    text = S.karaoke_ass(h3)[0].splitlines()
+    assert min(l.split(",")[1] for l in text if ",KTrans," in l) < "0:00:02.50"
+    assert max(l.split(",")[2] for l in text if ",KInfo," in l) == "0:00:02.50"  # 0.5 s + 2 s, not 60 s

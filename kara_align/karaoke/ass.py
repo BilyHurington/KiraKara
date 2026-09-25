@@ -386,8 +386,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
               time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None) -> tuple[str, list[str]]:
     """Return (ASS text, warnings)."""
     from .effects import FX_STYLE, Syllable, syllable_events
+    from .info import info_events, info_style
 
     style = style or project.karaoke
+    audio_offset_ms = time_offset_ms  # the title card keeps real time
     # show / highlight everything a little before it is sung (display only)
     time_offset_ms -= style.timing.advance_ms
     W, H = size or resolution(project)
@@ -448,8 +450,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 f"\\bord{width:.1f}\\blur{glow.blur * k:.1f}\\shad0")
 
     events: list[str] = []
+    first_shown: dict[str, float] = {}  # style -> first time an event of it shows
 
     def emit(layer: int, t_from: float, t_to: float, name: str, tags: str, body: str) -> None:
+        first_shown[name] = min(first_shown.get(name, float("inf")), t_from + time_offset_ms)
         events.append(f"Dialogue: {layer},{ass_time(t_from + time_offset_ms)},{ass_time(t_to + time_offset_ms)},"
                       f"{name},,0,0,0,,{{{tags}{fad}}}{body}")
 
@@ -531,6 +535,13 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             events.append(f"Dialogue: {layer},{ass_time(t0 + time_offset_ms)},{ass_time(t1 + time_offset_ms)},"
                           f"KFx,,0,0,0,,{{{tags}}}{body}")
 
+    # the title card leaves before anything else appears along the top edge
+    top_busy = [first_shown.get("KMain")] if lay.position == "top" else []
+    if tr.enabled and tr.position == "opposite":
+        top_busy.append(first_shown.get("KTrans"))
+    busy = [t for t in top_busy if t is not None]
+    events += info_events(project, style, W, H, k, family, audio_offset_ms, min(busy) if busy else None)
+
     shadow_back = ass_color(txt.shadow_color, 100 - txt.shadow_opacity)
 
     def style_line(name: str, font: str, size: float, sung: str, unsung: str, outline_c: str, outline: float,
@@ -563,6 +574,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         # glow layers: invisible fill, the (blurred) border is the glow; sizes set per event
         style_line("KGlow", family, main_size, "#FFFFFF", "#FFFFFF", "#FFFFFF", 0, 0, txt.bold, fill_alpha=100),
         FX_STYLE,
+        info_style(family, main_size),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",

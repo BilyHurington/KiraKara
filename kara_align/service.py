@@ -802,6 +802,22 @@ def set_karaoke_style(h: ProjectHandle, style: dict) -> None:
         h.save()
 
 
+def song_info(h: ProjectHandle) -> dict:
+    """The title card's data: every field the song data fills, and the project's own text (None = automatic)."""
+    from .karaoke.info import LABELS, song_fields
+
+    return {"fields": song_fields(h.project), "labels": LABELS, "text": h.project.song_info_text}
+
+
+def set_song_info_text(h: ProjectHandle, text: Optional[str]) -> None:
+    """The title card's own text (one line each, the first is the title); None goes back to the song data."""
+    if text is not None and not isinstance(text, str):
+        raise ServiceError("歌曲信息必须是文字")
+    with h.lock:
+        h.project.song_info_text = text[:2000] if text is not None else None
+        h.save()
+
+
 def _karaoke_inputs(h: ProjectHandle, style: Optional[dict]):
     from .models import KaraokeStyle
 

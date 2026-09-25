@@ -609,6 +609,26 @@ class KaraokeOutput(_Base):
     vocal_keep_pct: float = Field(default=20.0, ge=0.0, le=100.0)
 
 
+SongInfoField = Literal["title", "artist", "album", "lyricist", "composer", "arranger"]
+
+
+class KaraokeSongInfo(_Base):
+    """Song title card shown in a top corner at the start (see karaoke.info).
+
+    Which lines it shows is part of the style; a project can replace the text
+    with its own (``Project.song_info_text``)."""
+
+    enabled: bool = False
+    position: Literal["top-left", "top-right"] = "top-left"
+    fields: list[SongInfoField] = Field(default_factory=lambda: ["title", "artist"])
+    start_ms: int = Field(default=500, ge=0, le=60000)  # audio time
+    duration_ms: int = Field(default=7000, ge=1000, le=60000)
+    size: int = Field(default=56, ge=20, le=160)  # title size at 1080p; other lines are smaller
+    margin: int = Field(default=56, ge=0, le=400)  # from the top and side edges
+    color: str = ""  # "" = the lyrics' unsung colour
+    accent: str = ""  # accent bar; "" = the lyrics' sung colour
+
+
 class KaraokeStyle(_Base):
     version: int = 2
     preset: str = ""  # name of the saved style it was loaded from ("" = none)
@@ -619,6 +639,7 @@ class KaraokeStyle(_Base):
     glow: KaraokeGlow = Field(default_factory=KaraokeGlow)
     timing: KaraokeTiming = Field(default_factory=KaraokeTiming)
     effects: KaraokeEffects = Field(default_factory=KaraokeEffects)
+    info: KaraokeSongInfo = Field(default_factory=KaraokeSongInfo)
     output: KaraokeOutput = Field(default_factory=KaraokeOutput)
 
     @model_validator(mode="before")
@@ -663,6 +684,8 @@ class Project(_Base):
     mix: MixSettings = Field(default_factory=MixSettings)
     video: Optional[VideoAsset] = None
     karaoke: KaraokeStyle = Field(default_factory=KaraokeStyle)
+    # the karaoke title card's own text (one line each; the first is the title); None = from the song data
+    song_info_text: Optional[str] = None
 
     def asset(self, role: str) -> Optional[AudioAsset]:
         for a in self.audio:

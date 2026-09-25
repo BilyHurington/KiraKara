@@ -336,7 +336,13 @@ describe('dock track switching', () => {
 describe('karaoke subtitles page', () => {
   const DEFAULT_STYLE = plainStyle();
 
+  let info: { fields: Record<string, string>; labels: Record<string, string>; text: string | null };
+
   function karaokeServer() {
+    info = {
+      fields: { title: 'わたぐも', artist: '黒沢ともよ', album: 'STARLIGHT MASTER 13' },
+      labels: { title: '歌名', artist: '歌手', album: '专辑', lyricist: '作词', composer: '作曲', arranger: '编曲' }, text: null,
+    };
     const api = serverLike();
     const base = api.fn.getMockImplementation()!;
     api.fn.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -347,6 +353,14 @@ describe('karaoke subtitles page', () => {
       if (u.endsWith('/lyrics/fetch-translation')) {
         api.calls.push({ method: 'POST', url: u, body: null });
         return json({ ...fixturePV(), paired: 3 });
+      }
+      if (u.endsWith('/karaoke/info')) {
+        if (init?.method === 'PUT') {
+          const body = JSON.parse(String(init.body));
+          api.calls.push({ method: 'PUT', url: u, body });
+          info.text = body.text;
+        }
+        return json(info);
       }
       if (u.endsWith('/karaoke') && (!init || init.method === 'GET' || !init.method)) return json(DEFAULT_STYLE);
       if (u.endsWith('/karaoke/preview')) {
@@ -384,6 +398,36 @@ describe('karaoke subtitles page', () => {
     await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.translation.enabled).toBe(true), { timeout: 2000 });
     // this project has no translations yet: say so, and offer to fetch them from the platform
     expect(screen.getByText(/还没有翻译/)).toBeInTheDocument()
+  });
+
+  it('song info card: pick lines, then edit the text freely', async () => {
+    seedStore('karaoke');
+    const api = karaokeServer();
+    (URL as any).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = vi.fn();
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    await userEvent.click(await screen.findByRole('button', { name: /歌曲信息.*关闭/ }));
+    await userEvent.click(screen.getByRole('switch', { name: '在开头显示歌曲信息' }));
+    // the song data shows next to each line; the text follows the ticks
+    expect(screen.getByText('STARLIGHT MASTER 13')).toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: '歌曲信息文字' });
+    expect(box).toHaveValue('わたぐも\n黒沢ともよ');
+    await userEvent.click(screen.getByRole('checkbox', { name: '显示专辑' }));
+    expect(box).toHaveValue('わたぐも\n黒沢ともよ\nSTARLIGHT MASTER 13');
+    await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.info).toMatchObject({ enabled: true, fields: ['title', 'artist', 'album'] }), { timeout: 2000 });
+    // jump the preview to the card
+    await userEvent.click(screen.getByRole('button', { name: '看歌曲信息' }));
+    await waitFor(() => expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).at(-1)!.body.t_ms).toBe(1700), { timeout: 2000 });
+    // free text: saved to the project, the ticks stop applying until reset
+    await userEvent.clear(box);
+    await userEvent.type(box, 'わたぐも{Enter}赤城みりあ');
+    await waitFor(() => expect(api.find('PUT', '/karaoke/info').at(-1)?.body.text).toBe('わたぐも\n赤城みりあ'), { timeout: 2000 });
+    expect(await screen.findByText('自定义')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '显示专辑' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: /恢复为按勾选自动生成/ }));
+    await waitFor(() => expect(api.find('PUT', '/karaoke/info').at(-1)?.body.text).toBeNull());
+    expect(screen.getByRole('textbox', { name: '歌曲信息文字' })).toHaveValue('わたぐも\n黒沢ともよ\nSTARLIGHT MASTER 13');
   });
 
   it('burn sends the chosen options', async () => {
