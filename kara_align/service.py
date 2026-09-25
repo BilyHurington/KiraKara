@@ -1177,7 +1177,8 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
     emission_for(cfg.audio_role)
     previous = snap.result()
     inp = AlignInputs(
-        lyrics=snap.lyrics, mode=snap.mode, calibration=snap.calibration, config=cfg, backend_info=info,
+        # info again after the first inference: it knows the device used (and any GPU → CPU fallback)
+        lyrics=snap.lyrics, mode=snap.mode, calibration=snap.calibration, config=cfg, backend_info=backend.info(),
         tokenize=backend.tokenize, profile=profile, emission_for=emission_for, available_roles=roles,
         audio_assets={r: a for r, a in assets.items() if a is not None}, audio_duration_ms=original.duration_ms,
         energy_for=energy_for, previous=previous, line_ids=line_ids,

@@ -246,3 +246,12 @@ def test_mms_tokenize_and_info():
     assert info.model_revision == DEFAULT_REVISION and info.frame_hop_samples == 320
     assert info.license == "cc-by-nc-sa-4.0"
     assert be.hop_samples == 320 and be.sample_rate == 16000
+
+
+def test_backend_info_names_the_device_without_loading_the_model():
+    pytest.importorskip("torch")
+    from kara_align.align.backends.wav2vec2_ctc import MMSJapaneseBackend
+
+    b = MMSJapaneseBackend(device="cpu")
+    assert b.info().extra["device"] == "cpu" and b._entry is None  # recorded in results, nothing loaded
+    assert MMSJapaneseBackend(device="auto").info().extra["device"] in ("cpu", "mps", "cuda")

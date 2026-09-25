@@ -150,7 +150,9 @@ class Wav2Vec2CTCBackend:
 
     def info(self) -> BackendInfo:
         e = self._entry
-        extra: dict[str, Any] = {"device": self.device, "delimiter_as_blank": self.delimiter_as_blank,
+        # the device that ran (or will run) the model; resolved without loading it
+        device = self.device or resolve_device(self.requested_device)
+        extra: dict[str, Any] = {"device": device, "delimiter_as_blank": self.delimiter_as_blank,
                                  "chunk_s": self.chunk_s, "context_s": self.context_s,
                                  "normalization": "global zero-mean unit-variance"}
         if self.notes:
