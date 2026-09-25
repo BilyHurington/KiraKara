@@ -385,6 +385,25 @@ def prepare_readings(h: ProjectHandle, overwrite_rule: bool = True) -> dict:
         return asdict(rep)
 
 
+def fetch_translation(h: ProjectHandle) -> int:
+    """Fetch the translation track from the platform the lyrics came from and pair it."""
+    from .lyrics.fetch import fetch_song as _fetch
+
+    src = next((x for x in reversed(h.project.sources) if x.origin in ("netease", "qq") and x.platform_song_id), None)
+    if src is None:
+        raise ServiceError("歌词不是从网易云 / QQ 音乐获取的；请在“音频与歌词”页粘贴翻译进行配对")
+    song = _fetch(src.origin, src.platform_song_id)
+    text = song.tracks.get("translation")
+    if not text or not text.strip():
+        raise ServiceError("平台没有提供这首歌的翻译")
+    prev = preview_track(h, text, "translation")
+    pairs = [{"line_id": x["line_id"], "text": x["text"]} for x in prev["pairs"] if (x.get("text") or "").strip()]
+    if not pairs:
+        raise ServiceError("翻译和歌词对不上")
+    apply_track(h, "translation", pairs)
+    return len(pairs)
+
+
 def preview_track(h: ProjectHandle, text: str, kind: str) -> dict:
     from .lyrics.pairing import pair_track
 
@@ -825,9 +844,12 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
 
     r, k = _karaoke_inputs(h, style)
     text, _ = build_ass(h.project, r, k)  # audio timeline; the frame is taken at t (+offset)
+    from .karaoke.effects import overlay_for
+
     video = _video_file(h) if background != "black" else None
     off = h.project.video.audio_offset_s if video else 0.0
-    return preview_png(text, int(t_ms), resolution(h.project), video=video, audio_offset_s=off)
+    return preview_png(text, int(t_ms), resolution(h.project), video=video, audio_offset_s=off,
+                       overlay=overlay_for(k.effects))
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
@@ -871,8 +893,11 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
                 use_video_audio = True
             else:
                 audio_file = asset_path(h, orig)
+        from .karaoke.effects import overlay_for
+
         burn(text, out, size, orig.duration_ms, video=video, audio=audio_file, audio_offset_s=offset_s,
-             use_video_audio=use_video_audio, quality=quality, cancel=cancel, progress=progress)
+             use_video_audio=use_video_audio, quality=quality, cancel=cancel, progress=progress,
+             overlay=overlay_for(k.effects))
     return {"filename": out.name, "warnings": warnings}
 
 

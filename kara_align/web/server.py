@@ -550,11 +550,72 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
         return {"default": default_family(), "families": families()}
 
-    @app.get("/api/karaoke/presets")
-    def karaoke_presets():
-        from ..karaoke.presets import preset_list
+    # ---- saved subtitle styles (预设), shared by all projects and the simple mode
 
-        return preset_list()
+    @app.get("/api/karaoke/styles")
+    def list_styles():
+        from ..karaoke.styles import list_styles as _list
+
+        return _list()
+
+    @app.post("/api/karaoke/styles")
+    def save_style(body: dict):
+        from ..karaoke.styles import StyleError, save_style as _save
+
+        try:
+            return _save((body or {}).get("name", ""), (body or {}).get("style") or {}, (body or {}).get("id"))
+        except StyleError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.delete("/api/karaoke/styles/{style_id}")
+    def delete_style(style_id: str):
+        from ..karaoke.styles import StyleError, delete_style as _delete
+
+        try:
+            _delete(style_id)
+        except StyleError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True}
+
+    # ---- background effects: built-in particles + imported effect videos
+
+    @app.get("/api/effects")
+    def list_effects():
+        from ..karaoke.effects import LABELS, SOURCES, list_effects as _list
+
+        return {"particles": [{"id": k, "label": v} for k, v in LABELS.items()], "videos": _list(),
+                "sources": SOURCES}
+
+    @app.post("/api/effects")
+    async def import_effect(file: UploadFile = File(...), name: str = Form(""), blend: str = Form("auto"),
+                            source_url: str = Form(""), license: str = Form("")):
+        from ..karaoke.effects import EffectError, import_effect as _import
+
+        fname = Path(file.filename or "effect.mov").name
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / fname
+            await _save_upload(file, tmp, 2 * 1024**3)
+            try:
+                return _import(tmp, fname, name=name, blend=blend, source_url=source_url, license_note=license)
+            except (EffectError, Exception) as e:
+                raise HTTPException(400, f"无法导入动效：{e}") from e
+
+    @app.delete("/api/effects/{effect_id}")
+    def delete_effect(effect_id: str):
+        from ..karaoke.effects import EffectError, delete_effect as _delete
+
+        try:
+            _delete(effect_id)
+        except EffectError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True}
+
+    @app.post("/api/projects/{pid}/lyrics/fetch-translation")
+    def fetch_translation(pid: str):
+        """Pair the translation the lyrics' music platform provides (NetEase / QQ)."""
+        h = handle(pid)
+        n = S.fetch_translation(h)
+        return view(h, paired=n)
 
     @app.get("/api/projects/{pid}/karaoke")
     def get_karaoke(pid: str):

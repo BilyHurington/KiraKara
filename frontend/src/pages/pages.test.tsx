@@ -9,6 +9,7 @@ import { StudioDock } from '@/components/shell/StudioDock';
 import { Sidebar } from '@/components/shell/Sidebar';
 import { currentResult, useApp, WAVE_HEIGHT } from '@/store/app';
 import { fixturePV, mockApi, renderUI, seedStore } from '@/test/helpers';
+import { builtinSaved, emptyEffects, plainStyle } from '@/test/style';
 import { AlignPage } from './Align';
 import { CalibratePage } from './Calibrate';
 import { EnhancePage } from './Enhance';
@@ -333,18 +334,7 @@ describe('dock track switching', () => {
 });
 
 describe('karaoke subtitles page', () => {
-  const presets = () => ['classic', 'sakura'].map((name) => ({
-    name, label: name, description: '',
-    style: { ...structuredClone(DEFAULT_STYLE), preset: name, text: { ...DEFAULT_STYLE.text, color_sung: name === 'sakura' ? '#FF5C8A' : '#2F80ED' } },
-  }));
-  const DEFAULT_STYLE = {
-    version: 1, preset: 'classic',
-    layout: { position: 'bottom', lines: 2, arrangement: 'alternate', margin_v: 70, line_spacing: 26, margin_h: 140, alternate_indent: 240, shrink_long_lines: true, show_translation: false, translation_size_pct: 50 },
-    text: { font: '', size: 88, bold: true, color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 4.5, shadow: 2, shadow_color: '#000000', shadow_opacity: 45 },
-    ruby: { enabled: true, script: 'hiragana', target: 'kanji', size_pct: 45, gap: 2, fit: 'widen', follow_colors: true, font: '', color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 3 },
-    timing: { lead_in_ms: 1000, hold_ms: 500, highlight: 'sweep', early_show: true, early_max_ms: 4000 },
-    output: { vocal_keep_pct: 20 },
-  };
+  const DEFAULT_STYLE = plainStyle();
 
   function karaokeServer() {
     const api = serverLike();
@@ -353,7 +343,12 @@ describe('karaoke subtitles page', () => {
       const u = String(url);
       const json = (x: unknown) => new Response(JSON.stringify(x), { status: 200 });
       if (u === '/api/fonts') return json({ default: 'Hiragino Sans', families: [{ family: 'Hiragino Sans', names: ['Hiragino Sans'], bold: true }] });
-      if (u === '/api/karaoke/presets') return json(presets());
+      if (u === '/api/karaoke/styles') return json([builtinSaved()]);
+      if (u === '/api/effects') return json(emptyEffects());
+      if (u.endsWith('/lyrics/fetch-translation')) {
+        api.calls.push({ method: 'POST', url: u, body: null });
+        return json({ ...fixturePV(), paired: 3 });
+      }
       if (u.endsWith('/karaoke') && (!init || init.method === 'GET' || !init.method)) return json(DEFAULT_STYLE);
       if (u.endsWith('/karaoke/preview')) {
         api.calls.push({ method: 'POST', url: u, body: JSON.parse(String(init!.body)) });
@@ -381,10 +376,15 @@ describe('karaoke subtitles page', () => {
     expect(first.body.style.text.size).toBe(88);
     expect(first.body.t_ms).toBeGreaterThan(0);
 
-    await userEvent.click(screen.getByRole('button', { name: /sakura/ }));
-    await waitFor(() => expect(api.find('PUT', '/karaoke').length).toBeGreaterThan(0), { timeout: 2000 });
-    expect(api.find('PUT', '/karaoke').at(-1)!.body.text.color_sung).toBe('#FF5C8A');
-    expect(api.find('PUT', '/karaoke').at(-1)!.body.layout.lines).toBe(2); // layout kept
+    // turning on translations refreshes the preview (it used to look unchanged: no translation stored)
+    const n0 = api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length;
+    await userEvent.click(screen.getByRole('button', { name: /翻译.*关闭/ }));
+    await userEvent.click(screen.getByRole('switch', { name: /显示翻译字幕/ }));
+    await waitFor(() => expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length).toBeGreaterThan(n0), { timeout: 2000 });
+    expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).at(-1)!.body.style.translation.enabled).toBe(true);
+    await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.translation.enabled).toBe(true), { timeout: 2000 });
+    // this project has no translations yet: say so, and offer to fetch them from the platform
+    expect(screen.getByText(/还没有翻译/)).toBeInTheDocument()
   });
 
   it('burn sends the chosen options', async () => {

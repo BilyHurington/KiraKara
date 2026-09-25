@@ -284,25 +284,26 @@ def translation_windows(laid: list[LaidLine], style: KaraokeStyle) -> list[tuple
     return out
 
 
-def translation_events(laid: list[LaidLine], style: KaraokeStyle, W: int, H: int, block_top: float, block_h: float,
-                       size: float, measurer, margin_h: float, margin_v: float, time_offset_ms: float) -> list[str]:
-    """Translation as one line at the other edge of the frame or just outside the lyric block."""
+def translation_placements(laid: list[LaidLine], style: KaraokeStyle, W: int, H: int, block_top: float,
+                           block_h: float, size: float, measurer, margin_h: float,
+                           margin_v: float) -> list[tuple[int, int, str, str]]:
+    """(from, to, position tags, text): the translation as one line at the other
+    edge of the frame or just outside the lyric block."""
     lay = style.layout
     bottom = lay.position == "bottom"
     gap = size * 0.6
-    if lay.translation_position == "opposite":
+    if style.translation.position == "opposite":
         an, y = (8, margin_v) if bottom else (2, H - margin_v)
     else:  # "block": right outside the lyric block, on the side away from the edge
         an, y = (2, block_top - gap) if bottom else (8, block_top + block_h + gap)
     avail = W - 2 * margin_h
-    events = []
+    out = []
     for ll, t0, t1 in translation_windows(laid, style):
         text = ll.translation or ""
         w = measurer.width(text) or 1.0
         fs = f"\\fscx{avail / w * 100:.1f}\\fscy{avail / w * 100:.1f}" if w > avail else ""
-        events.append(f"Dialogue: 0,{ass_time(t0 + time_offset_ms)},{ass_time(t1 + time_offset_ms)},KTrans,,0,0,0,,"
-                      f"{{\\an{an}\\pos({W / 2:.1f},{y:.1f}){fs}}}{escape_text(text)}")
-    return events
+        out.append((t0, t1, f"\\an{an}\\pos({W / 2:.1f},{y:.1f}){fs}", text))
+    return out
 
 
 def _karaoke(parts: list[Part], t0: int, tag: str) -> str:
@@ -376,20 +377,30 @@ def resolution(project: Project) -> tuple[int, int]:
     return DEFAULT_SIZE
 
 
+# Layers, bottom to top: background motion, translation glow, translation,
+# text glow (unsung), text glow (sung), lyrics, ruby.
+L_FX, L_TRANS_GLOW, L_TRANS, L_GLOW, L_GLOW_SUNG, L_MAIN, L_RUBY = 0, 1, 2, 3, 4, 5, 6
+
+
 def build_ass(project: Project, result: AlignmentResult, style: Optional[KaraokeStyle] = None, *,
-              time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None) -> tuple[str, list[str]]:
+              time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None,
+              duration_ms: Optional[int] = None) -> tuple[str, list[str]]:
     """Return (ASS text, warnings)."""
+    from .effects import FX_STYLE, particle_events
+
     style = style or project.karaoke
+    base_offset = time_offset_ms
     # show / highlight everything a little before it is sung (display only)
     time_offset_ms -= style.timing.advance_ms
     W, H = size or resolution(project)
     k = H / REF_HEIGHT
-    lay, txt, rb = style.layout, style.text, style.ruby
+    lay, txt, rb, tr, glow, tm = style.layout, style.text, style.ruby, style.translation, style.glow, style.timing
     family = txt.font or default_family()
     ruby_family = (rb.font or family) if rb.enabled else family
+    trans_family = tr.font or family
     main_size = txt.size * k
     ruby_size = main_size * rb.size_pct / 100
-    trans_size = main_size * lay.translation_size_pct / 100
+    trans_size = main_size * tr.size_pct / 100
     gap = rb.gap * k
     trans_gap = 6 * k
     m_main = Measurer(family, txt.bold, main_size)
@@ -412,15 +423,17 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             continue
         unit_times = [times[u.id] for u in ln.units() if u.id in times and None not in times[u.id]]
         laid.append(LaidLine(ln, chunks, min(starts), max(ends),
-                             translation=ln.translation if lay.show_translation else None,
+                             translation=(ln.translation or None) if tr.enabled else None,
                              units=unit_times))  # type: ignore[arg-type]
     if skipped:
         warnings.append(f"{skipped} 行没有任何时间，未写入字幕")
+    if tr.enabled and not any(ll.translation for ll in laid):
+        warnings.append("已开启翻译字幕，但歌词里没有翻译")
     laid.sort(key=lambda x: x.start)
     schedule(laid, style)
 
     has_ruby = rb.enabled and any(c.ruby for ll in laid for c in ll.chunks)
-    per_line_trans = lay.show_translation and lay.translation_position == "line"
+    per_line_trans = tr.enabled and tr.position == "line"
     slot_h = main_size + ((ruby_size + gap) if has_ruby else 0) + ((trans_size + trans_gap) if per_line_trans else 0)
     n = max(1, lay.lines)
     spacing = lay.line_spacing * k
@@ -429,8 +442,37 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     block_h = n * slot_h + (n - 1) * spacing
     block_top = (H - margin_v - block_h) if lay.position == "bottom" else margin_v
 
+    fad = f"\\fad({tm.fade_in_ms},{tm.fade_out_ms})" if (tm.fade_in_ms or tm.fade_out_ms) else ""
+    g_alpha = f"&H{int(round(255 * (1 - glow.strength / 100))):02X}&"
+
+    def glow_tags(color: str, width: float, font: str, size: float, bold: bool) -> str:
+        return (f"\\fn{font}\\fs{size:.1f}\\b{1 if bold else 0}\\3c{_bgr_tag(color)}\\3a{g_alpha}"
+                f"\\bord{width:.1f}\\blur{glow.blur * k:.1f}\\shad0")
+
     events: list[str] = []
-    tag = "kf" if style.timing.highlight == "sweep" else "k"
+
+    def emit(layer: int, t_from: float, t_to: float, name: str, tags: str, body: str) -> None:
+        events.append(f"Dialogue: {layer},{ass_time(t_from + time_offset_ms)},{ass_time(t_to + time_offset_ms)},"
+                      f"{name},,0,0,0,,{{{tags}{fad}}}{body}")
+
+    def emit_text(layer: int, t_from: float, t_to: float, name: str, pos: str, parts: list[Part], width: float,
+                  with_glow: bool, font: str, size: float) -> None:
+        """A karaoke text event, with its glow layers when the glow is on."""
+        if glow.enabled and with_glow:
+            plain = escape_text("".join(p.text for p in parts))
+            emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, width, font, size, txt.bold), plain)
+            # \ko: the border (the glow) appears as each syllable is sung
+            emit(L_GLOW_SUNG, t_from, t_to, "KGlow", pos + glow_tags(glow.color_sung, width, font, size, txt.bold),
+                 _karaoke(parts, int(t_from), "ko"))
+        emit(layer, t_from, t_to, name, pos, _karaoke(parts, int(t_from), tag))
+
+    def emit_trans(t_from: float, t_to: float, pos: str, text: str) -> None:
+        if glow.enabled and tr.glow:
+            emit(L_TRANS_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, glow.size * k * 0.7, trans_family, trans_size, tr.bold),
+                 escape_text(text))
+        emit(L_TRANS, t_from, t_to, "KTrans", pos, escape_text(text))
+
+    tag = "kf" if tm.highlight == "sweep" else "k"
     for ll in laid:
         widths = chunk_widths(ll.chunks, m_main, m_ruby, ruby_size, rb.fit)
         line_w = sum(widths) or 1.0
@@ -453,34 +495,40 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         fs = "" if scale >= 1.0 else f"\\fscx{scale * 100:.1f}\\fscy{scale * 100:.1f}"
         spans = visible_spans(ll, style)
         if len(spans) > 1:
-            pause = (spans[1][0] - spans[0][1] + style.timing.hold_ms + style.timing.lead_in_ms) / 1000
+            pause = (spans[1][0] - spans[0][1] + tm.hold_ms + tm.lead_in_ms) / 1000
             warnings.append(f"「{ll.line.text}」中间停顿约 {pause:.0f} 秒，停顿期间暂时隐藏该行")
         for t_from, t_to in spans:
-            start, end = ass_time(t_from + time_offset_ms), ass_time(t_to + time_offset_ms)
             x = x0
             for c, w in zip(ll.chunks, widths):
                 cx = x + w * scale / 2
-                body = _karaoke(c.base, t_from, tag)
-                events.append(f"Dialogue: 1,{start},{end},KMain,,0,0,0,,{{\\an2\\pos({cx:.1f},{main_y:.1f}){fs}}}{body}")
+                emit_text(L_MAIN, t_from, t_to, "KMain", f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}", c.base,
+                          glow.size * k, True, family, main_size)
                 if c.ruby:
-                    rbody = _karaoke(c.ruby, t_from, tag)
-                    events.append(f"Dialogue: 2,{start},{end},KRuby,,0,0,0,,"
-                                  f"{{\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}}}{rbody}")
+                    emit_text(L_RUBY, t_from, t_to, "KRuby", f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c.ruby,
+                              glow.size * k * 0.55, glow.ruby, ruby_family, ruby_size)
                 x += w * scale
             if ll.translation and per_line_trans:
                 ty = main_y + trans_gap + trans_size
                 an, tx = {"left": (1, x0), "right": (3, x0 + line_w), "center": (2, W / 2)}[align]
-                events.append(f"Dialogue: 0,{start},{end},KTrans,,0,0,0,,{{\\an{an}\\pos({tx:.1f},{ty:.1f})}}"
-                              f"{escape_text(ll.translation)}")
+                emit_trans(t_from, t_to, f"\\an{an}\\pos({tx:.1f},{ty:.1f})", ll.translation)
 
-    if lay.show_translation and not per_line_trans:
-        events += translation_events(laid, style, W, H, block_top, block_h, trans_size, Measurer(family, txt.bold, trans_size),
-                                     margin_h, margin_v, time_offset_ms)
+    if tr.enabled and not per_line_trans:
+        for t0, t1, pos, text in translation_placements(laid, style, W, H, block_top, block_h, trans_size,
+                                                        Measurer(trans_family, tr.bold, trans_size), margin_h,
+                                                        margin_v):
+            emit_trans(t0, t1, pos, text)
 
-    def style_line(name: str, font: str, size: float, sung: str, unsung: str, outline_c: str, outline: float) -> str:
-        return (f"Style: {name},{font},{size:.1f},{ass_color(sung)},{ass_color(unsung)},{ass_color(outline_c)},"
-                f"{ass_color(txt.shadow_color, 100 - txt.shadow_opacity)},{-1 if txt.bold else 0},0,0,0,100,100,0,0,1,"
-                f"{outline * k:.2f},{txt.shadow * k:.2f},2,0,0,0,1")
+    if style.effects.particles != "none":
+        total = duration_ms if duration_ms is not None else _duration(project)
+        events = particle_events(style.effects, W, H, int(total + max(0.0, base_offset))) + events
+
+    shadow_back = ass_color(txt.shadow_color, 100 - txt.shadow_opacity)
+
+    def style_line(name: str, font: str, size: float, sung: str, unsung: str, outline_c: str, outline: float,
+                   shadow: float, bold: bool, fill_alpha: int = 0) -> str:
+        return (f"Style: {name},{font},{size:.1f},{ass_color(sung, fill_alpha)},{ass_color(unsung, fill_alpha)},"
+                f"{ass_color(outline_c)},{shadow_back},{-1 if bold else 0},0,0,0,100,100,0,0,1,"
+                f"{outline * k:.2f},{shadow * k:.2f},2,0,0,0,1")
 
     rc = txt if rb.follow_colors else rb
     header = [
@@ -497,13 +545,30 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
         "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding",
-        style_line("KMain", family, main_size, txt.color_sung, txt.color_unsung, txt.outline_color, txt.outline),
+        style_line("KMain", family, main_size, txt.color_sung, txt.color_unsung, txt.outline_color, txt.outline,
+                   txt.shadow, txt.bold),
         style_line("KRuby", ruby_family, ruby_size, rc.color_sung, rc.color_unsung, rc.outline_color,
-                   rb.outline if not rb.follow_colors else max(1.0, txt.outline * 0.6)),
-        style_line("KTrans", family, trans_size, txt.color_unsung, txt.color_unsung, txt.outline_color,
-                   max(1.0, txt.outline * 0.6)),
+                   rb.outline if not rb.follow_colors else max(1.0, txt.outline * 0.6), txt.shadow * 0.6, txt.bold),
+        style_line("KTrans", trans_family, trans_size, tr.color, tr.color, tr.outline_color, tr.outline, tr.shadow,
+                   tr.bold),
+        # glow layers: invisible fill, the (blurred) border is the glow; sizes set per event
+        style_line("KGlow", family, main_size, "#FFFFFF", "#FFFFFF", "#FFFFFF", 0, 0, txt.bold, fill_alpha=100),
+        FX_STYLE,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     return "\n".join(header + events) + "\n", warnings
+
+
+def _bgr_tag(hex_rgb: str) -> str:
+    """#RRGGBB -> &HBBGGRR& (colour override tag value)."""
+    h = hex_rgb.lstrip("#")
+    return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
+
+
+def _duration(project: Project) -> int:
+    orig = project.asset("original")
+    if project.video is not None and project.video.duration_ms:
+        return int(project.video.duration_ms)
+    return int(orig.duration_ms) if orig is not None else 0

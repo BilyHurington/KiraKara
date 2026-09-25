@@ -169,14 +169,36 @@ def test_style_is_saved_and_validated(tmp_path):
         S.set_karaoke_style(h, st)
 
 
-def test_presets_keep_layout_and_change_look():
-    from kara_align.karaoke.presets import make_preset, preset_list
+def test_saved_styles_library():
+    from kara_align.karaoke import styles as ST
 
-    base = KaraokeStyle()
-    base.layout.lines = 1
-    s = make_preset("sakura", keep=base)
-    assert s.layout.lines == 1 and s.text.color_sung == "#FF5C8A" and s.preset == "sakura"
-    assert {p["name"] for p in preset_list()} >= {"classic", "fresh", "sakura", "minimal"}
+    lib = ST.list_styles()
+    assert [x["name"] for x in lib] == ["默认"] and lib[0]["builtin"]
+    assert lib[0]["style"]["text"]["color_sung"] == "#ED35B3" and lib[0]["style"]["timing"]["fade_in_ms"] == 200
+    mine = KaraokeStyle()
+    mine.glow.enabled = True
+    a = ST.save_style("荧光", mine.model_dump(mode="json"))
+    assert a["style"]["preset"] == "荧光" and a["style"]["glow"]["enabled"]
+    again = ST.save_style("荧光", KaraokeStyle().model_dump(mode="json"))  # same name: replaced, not duplicated
+    assert again["id"] == a["id"] and [x["name"] for x in ST.list_styles()] == ["默认", "荧光"]
+    assert not ST.get_style(a["id"]).glow.enabled
+    with pytest.raises(ST.StyleError):
+        ST.save_style("默认", mine.model_dump(mode="json"))
+    with pytest.raises(ST.StyleError):
+        ST.delete_style("default")
+    ST.delete_style(a["id"])
+    assert [x["name"] for x in ST.list_styles()] == ["默认"]
+
+
+def test_v1_styles_migrate():
+    old = {"version": 1, "preset": "sakura", "layout": {"lines": 1, "show_translation": True,
+                                                       "translation_position": "block", "translation_size_pct": 50},
+           "text": {"color_unsung": "#EEEEEE", "outline_color": "#112233"}}
+    s = KaraokeStyle.model_validate(old)
+    assert s.version == 2 and s.layout.lines == 1 and s.preset == ""
+    assert (s.translation.enabled, s.translation.position, s.translation.size_pct) == (True, "block", 50)
+    assert (s.translation.color, s.translation.outline_color) == ("#EEEEEE", "#112233")
+    assert s.timing.fade_in_ms == 200 and not s.glow.enabled and s.effects.particles == "none"
 
 
 # ---------------------------------------------------------------- rendering
@@ -379,9 +401,9 @@ def test_translation_positions(tmp_path):
     l1, l2 = h.project.lyrics.lines
     l1.translation, l2.translation = "樱花在窗边飞舞", "你"
     st = h.project.karaoke.model_copy(deep=True)
-    st.layout.show_translation = True
+    st.translation.enabled = True
     for pos in ("opposite", "block", "line"):
-        st.layout.translation_position = pos
+        st.translation.position = pos
         S.set_karaoke_style(h, st.model_dump(mode="json"))
         text, _ = S.karaoke_ass(h)
         tr = [l for l in text.splitlines() if ",KTrans," in l]
@@ -395,6 +417,104 @@ def test_translation_positions(tmp_path):
             assert all("\\an2" in l for l in tr) and all(540 < v < 1080 - st.layout.margin_v - 200 for v in y)
         else:  # under each lyric line, inside the block
             assert all(v > 700 for v in y) and len(set(y)) == 2  # each under its own line
-    st.layout.show_translation = False
+    st.translation.enabled = False
     S.set_karaoke_style(h, st.model_dump(mode="json"))
     assert ",KTrans," not in S.karaoke_ass(h)[0].split("[Events]")[1]
+
+
+def test_fades_glow_layers_and_particles(tmp_path):
+    h = _project(tmp_path)
+    st = h.project.karaoke.model_copy(deep=True)
+    text, _ = S.karaoke_ass(h)
+    main = [l for l in text.splitlines() if ",KMain," in l]
+    assert all("\\fad(200,200)" in l for l in main)  # lines ease in and out by default
+    assert not [l for l in text.splitlines() if ",KGlow," in l or ",KFx," in l]
+    st.timing.fade_in_ms = st.timing.fade_out_ms = 0
+    st.glow.enabled = True
+    st.effects.particles = "sakura"
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    text, _ = S.karaoke_ass(h)
+    lines = text.splitlines()
+    assert not any("\\fad(" in l for l in lines)
+    glows = [l for l in lines if ",KGlow," in l]
+    main = [l for l in lines if ",KMain," in l]
+    ruby = [l for l in lines if ",KRuby," in l]
+    assert len(glows) == 2 * (len(main) + len(ruby))  # unsung + sung glow for every text event
+    assert all(l.startswith(("Dialogue: 3,", "Dialogue: 4,")) for l in glows)
+    sung = [l for l in glows if l.startswith("Dialogue: 4,")]
+    assert all("\\ko" in l and "\\3c&HB3F2FF&" in l for l in sung)  # glow turns #FFF2B3 as it is sung
+    assert all(l.startswith("Dialogue: 5,") for l in main) and all(l.startswith("Dialogue: 6,") for l in ruby)
+    fx = [l for l in lines if ",KFx," in l]
+    assert fx and all(l.startswith("Dialogue: 0,") and "\\p1" in l for l in fx)
+    again, _ = S.karaoke_ass(h)
+    assert [l for l in again.splitlines() if ",KFx," in l] == fx  # deterministic: preview == burn
+    from kara_align.karaoke.effects import particle_events
+
+    few = particle_events(st.effects.model_copy(update={"density": 20}), 1920, 1080, 60000)
+    many = particle_events(st.effects.model_copy(update={"density": 100}), 1920, 1080, 60000)
+    assert 0 < len(few) < len(many)
+
+
+@needs_ffmpeg
+def test_effect_videos_blend_over_the_picture(tmp_path):
+    import subprocess
+
+    from PIL import Image
+
+    from kara_align.audio.io import ffmpeg_path
+    from kara_align.karaoke import effects as FX
+
+    h = _project(tmp_path)
+    # a black-background effect (white square) and one with a real alpha channel (red square)
+    black = tmp_path / "white-on-black.mp4"
+    subprocess.run([ffmpeg_path(), "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=320x180:d=2:r=10",
+                    "-vf", "drawbox=x=0:y=0:w=80:h=45:color=white:t=fill", "-pix_fmt", "yuv420p", str(black)], check=True)
+    alpha = tmp_path / "red-alpha.mov"
+    box = Image.new("RGBA", (320, 180), (0, 0, 0, 0))
+    box.paste((255, 0, 0, 255), (240, 135, 320, 180))
+    box.save(tmp_path / "box.png")
+    subprocess.run([ffmpeg_path(), "-v", "error", "-y", "-loop", "1", "-i", str(tmp_path / "box.png"), "-t", "2",
+                    "-r", "10", "-c:v", "qtrle", "-pix_fmt", "argb", str(alpha)], check=True)
+    a = FX.import_effect(black, black.name, name="白块")
+    b = FX.import_effect(alpha, alpha.name)
+    assert (a["blend"], b["blend"]) == ("screen", "alpha") and b["has_alpha"]
+    assert [x["id"] for x in FX.list_effects()] == [a["id"], b["id"]]
+    st = h.project.karaoke.model_copy(deep=True)
+    for eff, corner, color in ((a, (10, 10), (255, 255, 255)), (b, (1900, 1070), (255, 0, 0))):
+        st.effects.overlay = eff["id"]
+        png = S.karaoke_preview(h, 1500, style=st.model_dump(mode="json"))
+        px = Image.open(io.BytesIO(png)).convert("RGB").getpixel(corner)
+        assert all(abs(c - e) < 40 for c, e in zip(px, color)), (eff["blend"], px)
+        mid = Image.open(io.BytesIO(png)).convert("RGB").getpixel((960, 300))
+        assert max(mid) < 30  # the rest stays black
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    out = S.karaoke_burn(h, background="black", audio="none")
+    frame = subprocess.run([ffmpeg_path(), "-v", "error", "-ss", "1", "-i", str(h.dir / "exports" / out["filename"]),
+                            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True).stdout
+    assert all(abs(c - e) < 60 for c, e in zip(Image.open(io.BytesIO(frame)).convert("RGB").getpixel((1900, 1070)),
+                                               (255, 0, 0)))
+    FX.delete_effect(a["id"])
+    assert [x["id"] for x in FX.list_effects()] == [b["id"]]
+
+
+def test_styles_effects_and_translation_http_api(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    client = TestClient(create_app(tmp_path / "projects"))
+    lib = client.get("/api/karaoke/styles").json()
+    assert lib[0]["id"] == "default" and lib[0]["builtin"]
+    st = lib[0]["style"]
+    st["glow"]["enabled"] = True
+    saved = client.post("/api/karaoke/styles", json={"name": "我的荧光", "style": st}).json()
+    assert saved["name"] == "我的荧光" and saved["style"]["glow"]["enabled"]
+    assert [x["name"] for x in client.get("/api/karaoke/styles").json()] == ["默认", "我的荧光"]
+    assert client.post("/api/karaoke/styles", json={"name": "", "style": st}).status_code == 400
+    assert client.delete("/api/karaoke/styles/default").status_code == 400
+    assert client.delete(f"/api/karaoke/styles/{saved['id']}").json() == {"ok": True}
+    fx = client.get("/api/effects").json()
+    assert [p["id"] for p in fx["particles"]] == ["none", "sakura", "snow", "stars"] and fx["videos"] == []
+    pid = client.post("/api/projects", json={"name": "t", "mode": "plain"}).json()["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/lyrics/fetch-translation")
+    assert r.status_code == 400 and "网易云" in r.json()["detail"]

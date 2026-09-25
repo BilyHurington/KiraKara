@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from .karaoke.presets import simple_default_style
+from .karaoke.styles import default_style as simple_default_style
 from .models import KaraokeStyle, _Base
 from .project.store import atomic_write_text, home_dir
 

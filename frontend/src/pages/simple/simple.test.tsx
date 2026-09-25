@@ -4,19 +4,16 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { AppSettings, KaraokeStyle, PipelineTask } from '@/lib/types';
 import { useApp } from '@/store/app';
 import { useSimple } from '@/store/simple';
+import { useLibrary } from '@/store/styles';
+
+const useLibraryReset = () => useLibrary.setState({ saved: null, effects: null });
 import { fixtureInfo, fixturePV, mockApi, renderUI } from '@/test/helpers';
+import { builtinSaved, defaultStyle, emptyEffects } from '@/test/style';
 import { detectLyrics, SimpleHome } from './SimpleHome';
 import { SimpleSettings } from './SimpleSettings';
 import { SimpleApp } from './SimpleApp';
 
-const STYLE: KaraokeStyle = {
-  version: 1, preset: 'custom',
-  layout: { position: 'bottom', lines: 2, arrangement: 'alternate', margin_v: 40, line_spacing: 0, margin_h: 240, alternate_indent: 240, shrink_long_lines: true, show_translation: false, translation_position: 'opposite', translation_size_pct: 60 },
-  text: { font: '', size: 88, bold: true, color_unsung: '#FFFFFF', color_sung: '#ED35B3', outline_color: '#0B1F3A', outline: 4.5, shadow: 2, shadow_color: '#000000', shadow_opacity: 45 },
-  ruby: { enabled: true, script: 'romaji', target: 'all', size_pct: 45, gap: 2, fit: 'widen', follow_colors: true, font: '', color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 3 },
-  timing: { lead_in_ms: 4000, hold_ms: 2000, highlight: 'sweep', early_show: true, early_max_ms: 6000, advance_ms: 0 },
-  output: { vocal_keep_pct: 20 },
-};
+const STYLE: KaraokeStyle = defaultStyle();
 
 const SETTINGS: AppSettings = {
   version: 1,
@@ -114,7 +111,9 @@ describe('simple mode settings', () => {
   it('saves each change and never shows the API key', async () => {
     seed();
     const api = mockApi({
-      'GET /api/karaoke/presets': () => [],
+      'GET /api/karaoke/styles': () => [builtinSaved()],
+      'GET /api/effects': () => emptyEffects(),
+      'GET /api/fonts': () => ({ default: '', families: [] }),
       'GET /api/ai/providers': () => [
         { id: 'claude', label: 'Claude Code', available: true, version: '2.1 (Claude Code)', detail: '/bin/claude' },
         { id: 'codex', label: 'Codex', available: false, version: null, detail: '' },
@@ -147,43 +146,80 @@ describe('simple mode settings', () => {
   });
 });
 
-describe('default subtitle style', () => {
-  it('shows the style, changes colours without touching layout or timing, resets and copies from a project', async () => {
+describe('subtitle style panel in the simple-mode settings', () => {
+  const settingsServer = (extra: Record<string, (c: any) => unknown> = {}) => mockApi({
+    'GET /api/karaoke/styles': () => [builtinSaved(), ...savedExtra],
+    'POST /api/karaoke/styles': (c) => { const x = { id: 'st1', name: c.body.name, builtin: false, updated: 'z', style: { ...c.body.style, preset: c.body.name } }; savedExtra = [x]; return x; },
+    'GET /api/effects': () => emptyEffects(),
+    'GET /api/fonts': () => ({ default: 'Hiragino Sans', families: [] }),
+    'GET /api/ai/providers': () => [],
+    'GET /api/projects/p1/karaoke': () => ({ ...defaultStyle(), ruby: { ...defaultStyle().ruby, script: 'katakana' } }),
+    'PUT /api/settings': (c) => {
+      const st = structuredClone(useSimple.getState().settings!);
+      Object.assign(st.simple, c.body.simple ?? {});
+      return st;
+    },
+    ...extra,
+  });
+  let savedExtra: any[] = [];
+  beforeEach(() => { savedExtra = []; useLibraryReset(); });
+
+  it('edits the full style, saves it as a preset and copies from a project', async () => {
     seed();
     useApp.setState({ projects: [{ id: 'p1', name: '初恋组曲 Karaoke', mode: 'lrc', updated: 'z' }] });
-    const sakura = { ...structuredClone(STYLE), preset: 'sakura', text: { ...STYLE.text, color_sung: '#FF5C8A', outline_color: '#3D0B24' }, timing: { ...STYLE.timing, lead_in_ms: 1000 } };
-    const theirs = { ...structuredClone(STYLE), ruby: { ...STYLE.ruby, script: 'katakana' as const } };
-    const api = mockApi({
-      'GET /api/karaoke/presets': () => [{ name: 'sakura', label: '樱花', description: '', style: sakura }],
-      'GET /api/ai/providers': () => [],
-      'GET /api/projects/p1/karaoke': () => theirs,
-      'PUT /api/settings': (c) => {
-        const s = structuredClone(useSimple.getState().settings!);
-        if (c.body.simple?.reset_karaoke) s.simple.karaoke = structuredClone(STYLE);
-        else Object.assign(s.simple, c.body.simple ?? {});
-        return s;
-      },
-    });
+    const api = settingsServer();
     renderUI(<SimpleSettings />);
-    expect(screen.getByText('注音：罗马音（全部）')).toBeInTheDocument();
-    expect(screen.getByText('提前 4 秒出现 · 唱完停留 2 秒')).toBeInTheDocument();
-    await userEvent.click(await screen.findByRole('radio', { name: /樱花/ }));
-    await waitFor(() => expect(api.find('PUT', '/api/settings')).toHaveLength(1));
-    const sent = api.find('PUT', '/api/settings')[0].body.simple.karaoke as KaraokeStyle;
-    expect(sent.text.color_sung).toBe('#FF5C8A');
-    expect(sent.timing.lead_in_ms).toBe(4000);  // the preset's timing is not taken
-    expect(sent.layout.margin_v).toBe(40);
-    await userEvent.click(screen.getByRole('button', { name: /恢复默认/ }));
-    await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)!.body).toEqual({ simple: { reset_karaoke: true } }));
+    // the built-in 默认 preset is selected; colours are open, other sections folded with a summary
+    expect(await screen.findByRole('combobox', { name: '预设' })).toHaveValue('default');
+    expect(screen.getByRole('button', { name: /配色/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /特效.*无/ })).toHaveAttribute('aria-expanded', 'false');
+    // effects: glow edge and falling petals
+    await userEvent.click(screen.getByRole('button', { name: /特效/ }));
+    await userEvent.click(screen.getByRole('switch', { name: /荧光边缘/ }));
+    await userEvent.click(screen.getByRole('radio', { name: '樱花花瓣' }));
+    await waitFor(() => {
+      const k = api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle | undefined;
+      expect(k?.glow.enabled).toBe(true);
+      expect(k?.effects.particles).toBe('sakura');
+    }, { timeout: 2000 });
+    expect(screen.getByText('已修改')).toBeInTheDocument();
+    // save as a named preset
+    await userEvent.click(screen.getByRole('button', { name: '另存为' }));
+    await userEvent.type(screen.getByRole('textbox', { name: '预设名称' }), '樱花荧光{Enter}');
+    await waitFor(() => expect(api.find('POST', '/api/karaoke/styles')[0]?.body.name).toBe('樱花荧光'));
+    expect(api.find('POST', '/api/karaoke/styles')[0].body.style.glow.enabled).toBe(true);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '预设' })).toHaveValue('st1'));
+    // switching back to 默认 restores it
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '预设' }), 'default');
+    await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)!.body.simple.karaoke as KaraokeStyle).glow.enabled).toBe(false), { timeout: 2000 });
+    // take a project's style
     await userEvent.selectOptions(screen.getByRole('combobox', { name: '从项目复制样式' }), 'p1');
-    await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)!.body.simple.karaoke.ruby.script).toBe('katakana'));
+    await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)!.body.simple.karaoke as KaraokeStyle).ruby.script).toBe('katakana'), { timeout: 2000 });
+  });
+
+  it('translation has its own style and the display advance / fades live under 时间', async () => {
+    seed();
+    const api = settingsServer();
+    renderUI(<SimpleSettings />);
+    await userEvent.click(await screen.findByRole('button', { name: /翻译.*关闭/ }));
+    await userEvent.click(screen.getByRole('switch', { name: /显示翻译字幕/ }));
+    await userEvent.click(screen.getByRole('radio', { name: '歌词旁' }));
+    await waitFor(() => {
+      const k = api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle | undefined;
+      expect(k?.translation).toMatchObject({ enabled: true, position: 'block', size_pct: 60 });
+    }, { timeout: 2000 });
+    expect(screen.getByRole('combobox', { name: '翻译字体' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /时间/ }));
+    expect(screen.getByRole('textbox', { name: '淡入（输入数值）' })).toHaveValue('200');
+    await userEvent.click(screen.getByRole('switch', { name: /歌词提前显示/ }));
+    await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)!.body.simple.karaoke as KaraokeStyle).timing.advance_ms).toBe(150), { timeout: 2000 });
   });
 });
 
 describe('simple mode shell', () => {
   it('switches between the pages and to the detailed mode', async () => {
     seed();
-    mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/presets': () => [], 'GET /api/ai/providers': () => [] });
+    mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/styles': () => [builtinSaved()], 'GET /api/effects': () => emptyEffects(), 'GET /api/fonts': () => ({ default: '', families: [] }), 'GET /api/ai/providers': () => [] });
     renderUI(<SimpleApp />);
     expect(await screen.findByText('做一首卡拉OK')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '设置' }));
@@ -306,31 +342,7 @@ describe('detailed calibration page', () => {
   });
 });
 
-describe('translation subtitles, display advance and the project list', () => {
-  it('turns on translations (top by default) and the 150 ms advance from the settings page', async () => {
-    seed();
-    const api = mockApi({
-      'GET /api/karaoke/presets': () => [],
-      'GET /api/ai/providers': () => [],
-      'PUT /api/settings': (c) => {
-        const st = structuredClone(useSimple.getState().settings!);
-        Object.assign(st.simple, c.body.simple ?? {});
-        return st;
-      },
-    });
-    renderUI(<SimpleSettings />);
-    expect(screen.getByText('不显示翻译')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('switch', { name: /加入翻译字幕/ }));
-    await waitFor(() => expect(useSimple.getState().settings!.simple.karaoke.layout.show_translation).toBe(true));
-    const sent = api.find('PUT', '/api/settings')[0].body.simple.karaoke as KaraokeStyle;
-    expect(sent.layout.translation_position).toBe('opposite');
-    expect(sent.layout.translation_size_pct).toBe(60);
-    expect(await screen.findByText('翻译：画面顶部')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('switch', { name: /歌词提前显示/ }));
-    await waitFor(() => expect(useSimple.getState().settings!.simple.karaoke.timing.advance_ms).toBe(150));
-    expect(screen.getByRole('textbox', { name: '歌词提前（输入数值）' })).toHaveValue('150');
-  });
-
+describe('project list', () => {
   it('entering the detailed mode reloads the project list', async () => {
     seed();
     const { setUi } = await import('@/store/simple');

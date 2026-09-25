@@ -1,18 +1,18 @@
 // Step 7: karaoke subtitles — presets, settings, a live libass preview at any
 // moment, ASS download and one-click burn-in (see docs/karaoke.md).
 
-import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, RotateCcw, Sparkles, Subtitles } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, Sparkles, Subtitles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { cn, fmtMs, parseTime } from '@/lib/format';
-import type { FontFamily, Job, KaraokePreset, KaraokeStyle } from '@/lib/types';
+import { fmtMs, parseTime } from '@/lib/format';
+import type { FontFamily, Job, KaraokeStyle, ProjectView } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
-import { ppath, run, setStep, toast, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
+import { ppath, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
-import { StyleSettings } from './karaoke/Settings';
+import { StylePanel } from '@/components/karaoke/StylePanel';
 import { saveSettings } from '@/store/simple';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number }
@@ -22,18 +22,15 @@ export function KaraokePage() {
   const result = useResult();
   const [style, setStyle] = useState<KaraokeStyle | null>(project.karaoke ?? null);
   const [fonts, setFonts] = useState<{ default: string; families: FontFamily[] }>({ default: '', families: [] });
-  const [presets, setPresets] = useState<KaraokePreset[]>([]);
   const dirty = useRef(false);
 
   useEffect(() => {
     void run(async () => {
-      const [f, p, k] = await Promise.all([
+      const [f, k] = await Promise.all([
         api.get<{ default: string; families: FontFamily[] }>('/api/fonts'),
-        api.get<KaraokePreset[]>('/api/karaoke/presets'),
         api.get<KaraokeStyle>(ppath('/karaoke')),
       ]);
       setFonts(f);
-      setPresets(p);
       setStyle(k);
     }, '加载字幕设置失败');
   }, [project.id]);
@@ -57,18 +54,19 @@ export function KaraokePage() {
     });
   };
 
-  const applyPreset = (p: KaraokePreset) => {
-    // keep the user's layout / ruby choices / timing / font; change the look
-    patch((s) => {
-      const look = p.style.text;
-      Object.assign(s.text, {
-        color_unsung: look.color_unsung, color_sung: look.color_sung, outline_color: look.outline_color,
-        outline: look.outline, shadow: look.shadow, shadow_color: look.shadow_color, shadow_opacity: look.shadow_opacity,
-      });
-      Object.assign(s.ruby, { color_unsung: look.color_unsung, color_sung: look.color_sung, outline_color: look.outline_color });
-      s.preset = p.name;
-    });
+  const change = (next: KaraokeStyle) => {
+    dirty.current = true;
+    setStyle(next);
   };
+
+  const translated = useMemo(() => project.lyrics.lines.filter((l) => l.sing && l.kind === 'lyric' && l.translation?.trim()).length,
+    [project.lyrics.lines]);
+  const canFetch = project.sources.some((x) => (x.origin === 'netease' || x.origin === 'qq') && x.platform_song_id);
+  const fetchTranslation = () => run(async () => {
+    const pv = await api.post<ProjectView & { paired: number }>(ppath('/lyrics/fetch-translation'));
+    setPV(pv);
+    toast('ok', `已获取翻译：${pv.paired} 行`);
+  }, '获取翻译失败');
 
   const lines: LineSpan[] = useMemo(() => {
     if (!result) return [];
@@ -102,42 +100,18 @@ export function KaraokePage() {
         </div>
         <div className="space-y-6 xl:sticky xl:top-4">
           <Card>
-            <CardHeader title="样式预设" description="只替换配色与描边，布局和注音设置保持不变" />
-            <CardBody className="grid grid-cols-2 gap-2">
-              {presets.map((p) => (
-                <button key={p.name} onClick={() => applyPreset(p)}
-                  className={cn('focus-ring rounded-xl border p-2.5 text-left transition hover:border-line-strong',
-                    style.preset === p.name ? 'border-accent ring-1 ring-accent' : 'border-line')}>
-                  <div className="flex h-9 items-center justify-center rounded-lg bg-[#0b0d14] text-[15px] font-bold"
-                    style={{ WebkitTextStroke: `1px ${p.style.text.outline_color}` }}>
-                    <span style={{ color: p.style.text.color_sung }}>歌</span>
-                    <span style={{ color: p.style.text.color_unsung }}>詞</span>
-                  </div>
-                  <div className="mt-1.5 text-[13px] font-medium">{p.label}</div>
-                  <div className="truncate text-[11px] text-muted" title={p.description}>{p.description}</div>
-                </button>
-              ))}
-            </CardBody>
-          </Card>
-          <Card>
-            <CardHeader title="设置" actions={
-              <>
-              <Tip content="极简模式新建的任务使用这套样式（含布局、注音与时间）">
+            <CardHeader title="字幕样式" actions={
+              <Tip content="极简模式新建的任务使用这套样式（含布局、注音、时间与特效）">
                 <Button size="xs" variant="ghost" icon={<Sparkles className="size-3.5" />}
                   onClick={() => run(async () => { await saveSettings({ simple: { karaoke: style } }); toast('ok', '已设为极简模式默认样式'); }, '保存失败')}>
                   设为极简默认
                 </Button>
               </Tip>
-              <Tip content="恢复为默认样式（经典）">
-                <Button size="xs" variant="ghost" icon={<RotateCcw className="size-3.5" />}
-                  onClick={() => { const d = presets.find((p) => p.name === 'classic'); if (d) { dirty.current = true; setStyle(structuredClone(d.style)); } }}>
-                  默认
-                </Button>
-              </Tip>
-              </>
             } />
-            <CardBody>
-              <StyleSettings style={style} patch={patch} fonts={fonts.families} defaultFont={fonts.default} />
+            <CardBody className="pt-3">
+              <StylePanel style={style} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
+                defaultOpen={['colors', 'text']} storageKey="detail"
+                translation={{ lines: translated, onFetch: canFetch ? fetchTranslation : undefined }} />
             </CardBody>
           </Card>
         </div>

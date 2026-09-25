@@ -42,8 +42,21 @@ def _subtitles_filter(ass_name: str) -> str:
     return f"subtitles={ass_name}"
 
 
+def _overlay_filter(size: tuple[int, int], overlay: dict, ov_in: str, base: str, out: str, extra: str = "") -> str:
+    """Filter graph laying an effect video over ``base``: its own alpha, or a
+    "screen" blend for effects on a black background."""
+    w, h = size
+    op = max(0.0, min(1.0, float(overlay.get("opacity", 1.0))))
+    fit = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1"
+    if overlay.get("blend") == "alpha":
+        return (f"[{ov_in}]{fit},format=rgba,colorchannelmixer=aa={op:.3f}{extra}[fxo];"
+                f"[{base}][fxo]overlay=shortest=1:format=auto[{out}]")
+    return (f"[{ov_in}]{fit},format=gbrp{extra}[fxo];[{base}]format=gbrp[fxb];"
+            f"[fxb][fxo]blend=all_mode=screen:all_opacity={op:.3f}:shortest=1,format=yuv420p[{out}]")
+
+
 def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional[Path] = None,
-                audio_offset_s: float = 0.0) -> bytes:
+                audio_offset_s: float = 0.0, overlay: Optional[dict] = None) -> bytes:
     """One frame at audio time ``t_ms``: the video frame there, or black."""
     w, h = size
     t = max(0.0, t_ms / 1000.0)
@@ -52,13 +65,22 @@ def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional
         out = Path(td, "p.png")
         # the frame gets pts = t so the subtitles filter draws the state at t
         # millisecond timebase first: a 1 fps source would round t to whole seconds
-        vf = f"settb=1/1000,setpts=PTS-STARTPTS+{t:.3f}/TB,{_subtitles_filter('k.ass')}"
+        stamp = f"settb=1/1000,setpts=PTS-STARTPTS+{t:.3f}/TB"
         if video is not None:
             inp = ["-ss", f"{t + audio_offset_s:.3f}", "-i", str(video)]
-            vf = f"scale={w}:{h},{vf}"
+            base = f"scale={w}:{h},{stamp}"
         else:
             inp = ["-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r=1:d=1"]
-        cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", *inp, "-vf", vf, "-frames:v", "1", str(out)]
+            base = stamp
+        if overlay is not None:
+            loop = max(1.0, (overlay.get("duration_ms") or 0) / 1000.0)
+            inp += ["-ss", f"{(t + audio_offset_s) % loop:.3f}", "-i", str(overlay["path"])]
+            graph = (f"[0:v]{base}[b];" + _overlay_filter(size, overlay, "1:v", "b", "m", "," + stamp)
+                     + f";[m]{_subtitles_filter('k.ass')}[v]")
+            vf_args = ["-filter_complex", graph, "-map", "[v]"]
+        else:
+            vf_args = ["-vf", f"{base},{_subtitles_filter('k.ass')}"]
+        cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", *inp, *vf_args, "-frames:v", "1", str(out)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=td)
         if r.returncode != 0 or not out.exists():
             raise RenderError(f"预览渲染失败：{r.stderr.strip()[-300:]}")
@@ -68,7 +90,7 @@ def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional
 def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int, *,
          video: Optional[Path] = None, audio: Optional[Path] = None, audio_offset_s: float = 0.0,
          use_video_audio: bool = False, quality: str = "standard", cancel=None,
-         progress: Optional[Callable[[float, str], None]] = None) -> Path:
+         progress: Optional[Callable[[float, str], None]] = None, overlay: Optional[dict] = None) -> Path:
     """Render subtitles into a video (the source video, or black at ``size``).
 
     ``audio``: a file to use as the soundtrack (placed at ``audio_offset_s``);
@@ -89,17 +111,25 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
         else:
             cmd += ["-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r=30:d={dur + audio_offset_s:.3f}"]
             vf = _subtitles_filter("k.ass")
+        vf_args = ["-vf", vf]
         maps = ["-map", "0:v:0"]
+        next_in = 1
+        if overlay is not None:  # the effect video loops for the whole length
+            cmd += ["-stream_loop", "-1", "-i", str(overlay["path"])]
+            graph = (("[0:v]" + (f"scale={w}:{h}" if video is not None else "null") + "[b];")
+                     + _overlay_filter(size, overlay, "1:v", "b", "m") + f";[m]{vf}[v]")
+            vf_args, maps = ["-filter_complex", graph], ["-map", "[v]"]
+            next_in = 2
         if audio is not None:
             if audio_offset_s > 0:
                 cmd += ["-itsoffset", f"{audio_offset_s:.6f}"]
             cmd += ["-i", str(audio)]
-            maps += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "256k"]
+            maps += ["-map", f"{next_in}:a:0", "-c:a", "aac", "-b:a", "256k"]
         elif use_video_audio and video is not None:
             maps += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "256k"]
         else:
             maps += ["-an"]
-        cmd += ["-vf", vf, *maps, *video_encoder(quality), "-movflags", "+faststart", str(out_path.resolve())]
+        cmd += [*vf_args, *maps, *video_encoder(quality), "-movflags", "+faststart", str(out_path.resolve())]
         # stderr goes to a file: an undrained pipe could block ffmpeg
         err_file = open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace")
         proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, bufsize=1)

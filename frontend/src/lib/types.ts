@@ -178,11 +178,11 @@ export interface VideoAsset {
 
 export interface KaraokeStyle {
   version: number;
+  /** name of the saved style it was loaded from ("" = none) */
   preset: string;
   layout: {
     position: 'bottom' | 'top'; lines: number; arrangement: 'alternate' | 'center';
     margin_v: number; line_spacing: number; margin_h: number; alternate_indent: number; shrink_long_lines: boolean;
-    show_translation: boolean; translation_position: 'opposite' | 'block' | 'line'; translation_size_pct: number;
   };
   text: {
     font: string; size: number; bold: boolean; color_unsung: string; color_sung: string; outline_color: string;
@@ -193,12 +193,33 @@ export interface KaraokeStyle {
     fit: 'widen' | 'overflow'; follow_colors: boolean; font: string; color_unsung: string; color_sung: string;
     outline_color: string; outline: number;
   };
-  timing: { lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number; advance_ms: number };
+  translation: {
+    enabled: boolean; position: 'opposite' | 'block' | 'line'; size_pct: number; font: string; bold: boolean;
+    color: string; outline_color: string; outline: number; shadow: number; glow: boolean;
+  };
+  glow: { enabled: boolean; color_unsung: string; color_sung: string; size: number; blur: number; strength: number; ruby: boolean };
+  timing: {
+    lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number;
+    advance_ms: number; fade_in_ms: number; fade_out_ms: number;
+  };
+  effects: {
+    particles: 'none' | 'sakura' | 'snow' | 'stars'; density: number; size: number; color: string; opacity: number;
+    overlay: string | null; overlay_opacity: number;
+  };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };
 }
 
-export interface KaraokePreset { name: string; label: string; description: string; style: KaraokeStyle }
+/** A saved subtitle style (预设); 默认 is built in and read-only. */
+export interface SavedStyle { id: string; name: string; builtin: boolean; updated: string | null; style: KaraokeStyle }
+
+export interface EffectVideo {
+  id: string; name: string; filename: string; blend: 'alpha' | 'screen'; has_alpha: boolean;
+  width: number | null; height: number | null; duration_ms: number | null; source_url: string; license: string;
+}
+export interface EffectSource { name: string; site: string; url: string; format: string; license: string }
+export interface EffectsCatalog { particles: { id: KaraokeStyle['effects']['particles']; label: string }[]; videos: EffectVideo[]; sources: EffectSource[] }
+
 export interface FontFamily { family: string; names: string[]; bold: boolean }
 
 export interface Project {
@@ -208,7 +229,7 @@ export interface Project {
   updated: string;
   mode: Mode;
   lyrics: LyricsDoc;
-  sources: { id: string; origin: string; kind: string; filename: string | null; url: string | null; created: string }[];
+  sources: { id: string; origin: string; kind: string; filename: string | null; url: string | null; platform_song_id?: string | null; created: string }[];
   calibration: Calibration;
   ai_roundtrips: AiRoundtrip[];
   config: AlignConfig;

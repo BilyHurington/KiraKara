@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -529,6 +529,35 @@ class KaraokeRuby(_Base):
     outline: float = 3.0
 
 
+class KaraokeTranslation(_Base):
+    """Translation subtitle (shown when the lyrics carry translations)."""
+
+    enabled: bool = False
+    # opposite: one line at the other edge of the frame (top when lyrics are at the
+    # bottom); block: one line just outside the lyric block; line: under each lyric line
+    position: Literal["opposite", "block", "line"] = "opposite"
+    size_pct: int = Field(default=60, ge=20, le=100)  # of the lyric size
+    font: str = ""  # "" = same as the lyric font
+    bold: bool = True
+    color: str = "#FFFFFF"
+    outline_color: str = "#0B1F3A"
+    outline: float = 3.0
+    shadow: float = 1.5
+    glow: bool = True  # also glow when the glow effect is on
+
+
+class KaraokeGlow(_Base):
+    """Soft glowing edge around the text (a blurred wide border under it)."""
+
+    enabled: bool = False
+    color_unsung: str = "#FF8AC2"
+    color_sung: str = "#FFF2B3"  # the glow changes colour as each syllable is sung
+    size: float = 9.0  # px at 1080p
+    blur: float = 7.0
+    strength: int = Field(default=85, ge=0, le=100)  # %
+    ruby: bool = True  # glow the ruby too
+
+
 class KaraokeLayout(_Base):
     position: Literal["bottom", "top"] = "bottom"
     lines: int = Field(default=2, ge=1, le=3)
@@ -540,11 +569,6 @@ class KaraokeLayout(_Base):
     # short lines are not pinned to opposite edges (long lines use the full width)
     alternate_indent: int = 240
     shrink_long_lines: bool = True  # scale down lines wider than the frame
-    show_translation: bool = False
-    # opposite: one line at the other edge of the frame (top when lyrics are at the
-    # bottom); block: one line just outside the lyric block; line: under each lyric line
-    translation_position: Literal["opposite", "block", "line"] = "opposite"
-    translation_size_pct: int = Field(default=60, ge=20, le=100)
 
 
 class KaraokeTiming(_Base):
@@ -557,6 +581,20 @@ class KaraokeTiming(_Base):
     # show (and highlight) the lyrics this much before they are sung; 0 = off.
     # Applies to every subtitle / LRC export, never to the alignment data itself.
     advance_ms: int = Field(default=0, ge=0, le=2000)
+    fade_in_ms: int = Field(default=200, ge=0, le=2000)  # lines ease in / out
+    fade_out_ms: int = Field(default=200, ge=0, le=2000)
+
+
+class KaraokeEffects(_Base):
+    """Background motion under the subtitles."""
+
+    particles: Literal["none", "sakura", "snow", "stars"] = "none"
+    density: int = Field(default=50, ge=5, le=200)  # %
+    size: int = Field(default=100, ge=30, le=300)  # %
+    color: str = ""  # "" = the effect's own palette
+    opacity: int = Field(default=80, ge=5, le=100)  # %
+    overlay: Optional[str] = None  # id of an imported effect video (see karaoke.effects)
+    overlay_opacity: int = Field(default=100, ge=5, le=100)  # %
 
 
 class KaraokeOutput(_Base):
@@ -566,13 +604,38 @@ class KaraokeOutput(_Base):
 
 
 class KaraokeStyle(_Base):
-    version: int = 1
-    preset: str = "classic"
+    version: int = 2
+    preset: str = ""  # name of the saved style it was loaded from ("" = none)
     layout: KaraokeLayout = Field(default_factory=KaraokeLayout)
     text: KaraokeText = Field(default_factory=KaraokeText)
     ruby: KaraokeRuby = Field(default_factory=KaraokeRuby)
+    translation: KaraokeTranslation = Field(default_factory=KaraokeTranslation)
+    glow: KaraokeGlow = Field(default_factory=KaraokeGlow)
     timing: KaraokeTiming = Field(default_factory=KaraokeTiming)
+    effects: KaraokeEffects = Field(default_factory=KaraokeEffects)
     output: KaraokeOutput = Field(default_factory=KaraokeOutput)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate(cls, data: Any) -> Any:
+        """v1 kept the translation switches in ``layout`` and had built-in preset names."""
+        if not isinstance(data, dict) or int(data.get("version") or 1) >= 2:
+            return data
+        data = dict(data)
+        lay = dict(data.get("layout") or {})
+        tr = dict(data.get("translation") or {})
+        for old, new in (("show_translation", "enabled"), ("translation_position", "position"),
+                         ("translation_size_pct", "size_pct")):
+            if old in lay:
+                tr.setdefault(new, lay.pop(old))
+        text = data.get("text") or {}
+        tr.setdefault("color", text.get("color_unsung", "#FFFFFF"))
+        tr.setdefault("outline_color", text.get("outline_color", "#0B1F3A"))
+        data["layout"], data["translation"] = lay, tr  # fades: the new defaults apply
+        if data.get("preset") in ("classic", "fresh", "sakura", "minimal", "custom"):
+            data["preset"] = ""
+        data["version"] = 2
+        return data
 
 
 class Project(_Base):
