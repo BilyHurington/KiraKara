@@ -20,7 +20,8 @@ Effects (``KaraokeEffects.kind``):
 * ``ball``    – 跳跃小球: a ball hops from syllable to syllable (bouncing-ball karaoke).
 
 Particle bursts are rate-limited (a burst at most every ~200 ms) so fast
-passages don't turn into noise; drawings are centred on (0, 0) and always get
+passages don't turn into noise.  Particles are drawn behind the lyrics by default
+(``behind``) so they never cover a glyph.  Drawings are centred on (0, 0) and always get
 ``\\bord0\\shad0`` (the style's outline would apply to them too).
 """
 
@@ -33,6 +34,7 @@ from dataclasses import dataclass
 from ..models import KaraokeStyle
 
 LAYER_BACK = 3  # with the glow, under the lyric text
+LAYER_UNDER_TEXT = 0  # under every subtitle: lyrics, ruby, their glow and the translations
 LAYER_FRONT = 7  # above lyrics and ruby
 
 LABELS = {"none": "无", "pulse": "光晕扩散", "ring": "光环爆开", "shine": "闪光扫过", "sparkle": "星光迸发",
@@ -88,8 +90,11 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
     fx = style.effects
     if fx.kind == "none" or not syllables:
         return []
+    # particles: behind the text (readable) or in front of it; pulse / ring always sit under the
+    # text, the shine always runs over the glyphs it lights up
+    particle_layer = LAYER_UNDER_TEXT if fx.behind else LAYER_FRONT
     if fx.kind == "ball":
-        return _ball(style, syllables, k)
+        return _ball(style, syllables, k, particle_layer)
     color = _bgr(effect_color(style))
     size = fx.size / 100
     amount = fx.amount / 100
@@ -154,7 +159,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
                 dur = rnd.uniform(500, 700)
                 sc = scale(0.5, 20) * rnd.uniform(0.7, 1.2)
                 spin = rnd.choice((-1, 1)) * 90
-                add(LAYER_FRONT, dur,
+                add(particle_layer, dur,
                     f"\\an5\\move({x0:.1f},{y0:.1f},{x1:.1f},{y1:.1f})\\bord0\\shad0\\blur{0.8 * k:.1f}\\1c{color}"
                     f"\\fscx{sc * 0.4:.0f}\\fscy{sc * 0.4:.0f}"
                     f"\\t(0,{dur * 0.3:.0f},\\fscx{sc:.0f}\\fscy{sc:.0f})"
@@ -168,7 +173,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
             y1 = y0 + s.h * rnd.uniform(0.9, 1.3)
             dur = rnd.uniform(1300, 1800)
             sc = scale(0.3, 17) * rnd.uniform(0.8, 1.1)
-            add(LAYER_BACK, dur,
+            add(particle_layer, dur,
                 f"\\an5\\move({x0:.1f},{y0:.1f},{x1:.1f},{y1:.1f})\\bord0\\shad0\\blur{0.6 * k:.1f}"
                 f"\\1c{color}\\fscx{sc:.0f}\\fscy{sc:.0f}\\frz{rnd.uniform(0, 360):.0f}\\fad(150,500)"
                 f"\\t(\\frz{rnd.choice((-1, 1)) * rnd.uniform(120, 220):.0f}\\fry{rnd.choice((-1, 1)) * 360})",
@@ -179,7 +184,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
             y1 = y0 - s.h * rnd.uniform(0.35, 0.55)
             dur = rnd.uniform(650, 850)
             sc = scale(0.34, 20) * rnd.uniform(0.85, 1.1)
-            add(LAYER_FRONT, dur,
+            add(particle_layer, dur,
                 f"\\an5\\move({x0:.1f},{y0:.1f},{x0 + rnd.uniform(-0.15, 0.15) * s.h:.1f},{y1:.1f})"
                 f"\\bord0\\shad0\\blur{0.6 * k:.1f}\\1c{color}\\fscx0\\fscy0"
                 f"\\t(0,150,\\fscx{sc * 1.15:.0f}\\fscy{sc * 1.15:.0f})\\t(150,260,\\fscx{sc:.0f}\\fscy{sc:.0f})"
@@ -188,7 +193,8 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
     return out
 
 
-def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float) -> list[tuple[int, int, int, str, str]]:
+def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
+          layer: int = LAYER_FRONT) -> list[tuple[int, int, int, str, str]]:
     """A ball that lands on each syllable as it starts and hops on to the next one.
 
     Each hop is a few straight \\move segments along a parabola (\\move is linear
@@ -213,7 +219,7 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float) -> list[tupl
         def seg(t0: float, t1: float, a: tuple[float, float], b: tuple[float, float], extra: str = "") -> None:
             t0, t1 = int(t0), int(min(t1, until))
             if t1 - t0 >= 40:
-                out.append((LAYER_FRONT, t0, t1,
+                out.append((layer, t0, t1,
                             f"{tags}\\move({a[0]:.1f},{a[1]:.1f},{b[0]:.1f},{b[1]:.1f}){extra}", body))
 
         # drops in onto the first syllable

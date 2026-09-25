@@ -593,6 +593,9 @@ class KaraokeEffects(_Base):
     size: int = Field(default=100, ge=40, le=250)  # %
     color: str = ""  # "" = the sung glow colour when the glow is on, else the sung lyric colour
     ruby: bool = False  # also fire on the ruby syllables
+    # particles (stars, petals, hearts, the ball) drawn behind the lyrics so they never cover a glyph;
+    # off: in front of the lyrics and ruby
+    behind: bool = True
 
     @model_validator(mode="before")
     @classmethod

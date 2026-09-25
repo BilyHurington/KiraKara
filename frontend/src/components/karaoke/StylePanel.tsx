@@ -485,7 +485,7 @@ const EFFECTS: Record<EffectKind, { label: string; hint: string }> = {
   hearts: { label: '爱心飘升', hint: '唱到的字上弹出小爱心并飘走' },
   ball: { label: '跳跃小球', hint: '经典卡拉OK：小球跟着演唱在字与字之间跳动（只在歌词上，不含注音）' },
 };
-const PARTICLES: EffectKind[] = ['sparkle', 'petals', 'hearts'];
+const PARTICLES: EffectKind[] = ['sparkle', 'petals', 'hearts', 'ball'];
 
 function EffectsEditor({ style, patch }: { style: KaraokeStyle; patch: Patch }) {
   const { glow: G, text: T, effects: E } = style;
@@ -498,7 +498,7 @@ function EffectsEditor({ style, patch }: { style: KaraokeStyle; patch: Patch }) 
       </Row>
       {E.kind !== 'none' && (
         <>
-          {PARTICLES.includes(E.kind) && (
+          {PARTICLES.includes(E.kind) && E.kind !== 'ball' && (
             <Row label="数量"><Num name="特效数量" unit="%" value={E.amount} min={20} max={200} step={10} onChange={(v) => patch((s) => { s.effects.amount = v; })} /></Row>
           )}
           <Row label={{ pulse: '扩散范围', ring: '光环大小', shine: '光带宽度' }[E.kind as string] ?? '大小'}>
@@ -509,6 +509,12 @@ function EffectsEditor({ style, patch }: { style: KaraokeStyle; patch: Patch }) 
               <Switch checked={!!E.color} onChange={(v) => patch((s) => { s.effects.color = v ? auto : ''; })} label="自定义颜色" />
               {E.color ? <ColorField label="特效颜色" value={E.color} onChange={(v) => patch((s) => { s.effects.color = v; })} />
                 : <p className="text-xs text-subtle">使用{G.enabled ? '荧光边缘（唱过后）' : '歌词已唱'}的颜色 <Dot c={auto} /></p>}
+            </div>
+          )}
+          {PARTICLES.includes(E.kind) && (
+            <div className="space-y-1">
+              <Switch checked={E.behind} onChange={(v) => patch((s) => { s.effects.behind = v; })} label="放在字幕后面（不遮挡文字）" />
+              <p className="text-xs text-subtle">{E.behind ? '粒子画在歌词、注音和翻译的下层，经过文字时被文字挡住' : '粒子画在最上层，可能盖住正在唱的字'}</p>
             </div>
           )}
           {E.kind !== 'ball' && <Switch checked={E.ruby} onChange={(v) => patch((s) => { s.effects.ruby = v; })} label="注音唱到时也触发" />}

@@ -377,8 +377,8 @@ def resolution(project: Project) -> tuple[int, int]:
     return DEFAULT_SIZE
 
 
-# Layers, bottom to top: background motion, translation glow, translation,
-# text glow (unsung), text glow (sung), lyrics, ruby.
+# Layers, bottom to top: effects drawn behind the text, translation glow, translation,
+# text glow (unsung), text glow (sung), lyrics, ruby; then effects in front (7) and the title card (8, 9).
 L_FX, L_TRANS_GLOW, L_TRANS, L_GLOW, L_GLOW_SUNG, L_MAIN, L_RUBY = 0, 1, 2, 3, 4, 5, 6
 
 

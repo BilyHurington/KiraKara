@@ -203,7 +203,7 @@ export interface KaraokeStyle {
     advance_ms: number; fade_in_ms: number; fade_out_ms: number;
   };
   /** effects around the lyrics, fired by each syllable as it is sung */
-  effects: { kind: EffectKind; amount: number; size: number; color: string; ruby: boolean };
+  effects: { kind: EffectKind; amount: number; size: number; color: string; ruby: boolean; behind: boolean };
   /** song title card in a top corner at the start */
   info: {
     enabled: boolean; position: 'top-left' | 'top-right'; fields: SongInfoField[];

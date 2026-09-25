@@ -178,11 +178,15 @@ describe('subtitle style panel in the simple-mode settings', () => {
     await userEvent.click(screen.getByRole('button', { name: /特效/ }));
     expect(screen.queryByRole('switch', { name: /荧光边缘/ })).toBeInTheDocument(); // only the one in 歌词
     await userEvent.click(screen.getByRole('radio', { name: '花瓣飘落' }));
+    // particles sit behind the text unless asked otherwise
+    expect(screen.getByRole('switch', { name: /放在字幕后面/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('switch', { name: /放在字幕后面/ }));
     expect(screen.getByText(/使用荧光边缘（唱过后）的颜色/)).toBeInTheDocument();
     await waitFor(() => {
       const k = api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle | undefined;
       expect(k?.glow.enabled).toBe(true);
       expect(k?.effects.kind).toBe('petals');
+      expect(k?.effects.behind).toBe(false);
     }, { timeout: 2000 });
     // song info card: a switch and the lines to show (no free text without a song)
     await userEvent.click(screen.getByRole('button', { name: /歌曲信息/ }));

@@ -74,7 +74,8 @@
    "amount": 100,
    "size": 100,
    "color": "",
-   "ruby": false
+   "ruby": false,
+   "behind": true
   },
   "info": {
    "enabled": false,
@@ -169,7 +170,8 @@
    "amount": 100,
    "size": 100,
    "color": "",
-   "ruby": false
+   "ruby": false,
+   "behind": true
   },
   "info": {
    "enabled": false,

@@ -209,6 +209,7 @@ def test_v1_styles_migrate():
     assert s.timing.fade_in_ms == 200 and not s.glow.enabled and s.effects.kind == "none"
     assert KaraokeEffects.model_validate({"particles": "sakura", "density": 40}).kind == "petals"
     assert KaraokeEffects.model_validate({"particles": "snow"}).kind == "none"
+    assert KaraokeEffects.model_validate({"kind": "hearts"}).behind  # older styles: behind the text
 
 
 # ---------------------------------------------------------------- rendering
@@ -455,10 +456,14 @@ def test_fades_glow_layers_and_syllable_effects(tmp_path):
     assert all("\\ko" in l and "\\3c&HB3F2FF&" in l for l in sung)  # glow turns #FFF2B3 as it is sung
     assert all(l.startswith("Dialogue: 5,") for l in main) and all(l.startswith("Dialogue: 6,") for l in ruby)
     fx = [l for l in lines if ",KFx," in l]
-    # stars around the sung syllables, in the sung glow colour, drawn above the lyrics
-    assert fx and all(l.startswith("Dialogue: 7,") and "\\p1" in l and "\\1c&HB3F2FF&" in l for l in fx)
+    # stars around the sung syllables, in the sung glow colour, drawn behind every subtitle by default
+    assert fx and all(l.startswith("Dialogue: 0,") and "\\p1" in l and "\\1c&HB3F2FF&" in l for l in fx)
     again, _ = S.karaoke_ass(h)
     assert [l for l in again.splitlines() if ",KFx," in l] == fx  # deterministic: preview == burn
+    st.effects.behind = False  # or in front of the lyrics and ruby
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    front = [l for l in S.karaoke_ass(h)[0].splitlines() if ",KFx," in l]
+    assert front == [l.replace("Dialogue: 0,", "Dialogue: 7,", 1) for l in fx]
 
     from kara_align.karaoke.effects import LABELS, Syllable, syllable_events
 
