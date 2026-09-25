@@ -3,7 +3,7 @@ import {
   AudioWaveform, Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Moon, Plus, Sparkles, Sun, TriangleAlert,
 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/format';
-import { closeProject, openProject, run, setStep, setTheme, STEPS, useApp, type Step } from '@/store/app';
+import { closeProject, loadProjects, openProject, run, setStep, setTheme, STEPS, useApp, type Step } from '@/store/app';
 import { stepStatus, type StepState } from '@/store/steps';
 import { setUi } from '@/store/simple';
 import { Badge } from '@/components/ui';
@@ -129,7 +129,7 @@ function ProjectSwitcher() {
   const pv = useApp((s) => s.pv);
   const projects = useApp((s) => s.projects);
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root onOpenChange={(open) => { if (open) void run(() => loadProjects()); }}>
       <DropdownMenu.Trigger asChild>
         <button className="focus-ring flex w-full items-center justify-center gap-2.5 rounded-xl border border-line bg-surface-2/60 px-2 py-2 text-left transition hover:bg-surface-2 lg:justify-start lg:px-3">
           <FolderOpen className="size-4 shrink-0 text-muted" />

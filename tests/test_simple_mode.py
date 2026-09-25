@@ -366,3 +366,13 @@ def test_automatic_offset_suggestion_for_the_detailed_page(tmp_path):
     assert sug["shift_ms"] == -500 and sug["agree"] == 1.0 and sug["lines_checked"] == 3
     assert sug["audio_role"] == "original" and sug["vocal_onset_ms"] is None
     assert h.project.calibration.model_dump() == before and not h.project.results  # nothing saved
+
+
+def test_platform_translation_is_paired_and_invisible_characters_dropped(tmp_path):
+    h = S.create_dir(tmp_path / "proj", "t", "lrc")
+    pv = S.parse_lyrics(h, "[00:01.50]きみと\ufeff\n[00:03.50]あるいた\u200b\n", origin="paste")
+    S.apply_lyrics(h, pv["preview_id"])
+    assert [ln.text for ln in h.project.lyrics.sung_lines()] == ["きみと", "あるいた"]
+    assert P.pair_translation(h, "[by:someone]\n[00:01.50]和你\n[00:03.50]一起走过\n") == 2
+    assert [ln.translation for ln in h.project.lyrics.sung_lines()] == ["和你", "一起走过"]
+    assert P.pair_translation(h, None) == 0

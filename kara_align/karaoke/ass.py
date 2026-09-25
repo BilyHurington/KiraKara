@@ -262,6 +262,49 @@ def visible_spans(ll: LaidLine, style: KaraokeStyle) -> list[tuple[int, int]]:
     return [(x, y) for x, y in spans if y > x]
 
 
+def translation_windows(laid: list[LaidLine], style: KaraokeStyle) -> list[tuple[LaidLine, int, int]]:
+    """When each line's translation is shown as a single line (not under its lyric).
+
+    One translation at a time, following the singing: from shortly before a line
+    is sung until it is done (plus the hold), cut short when the next line starts.
+    """
+    tm = style.timing
+    lead = min(tm.lead_in_ms, 800)
+    out: list[tuple[LaidLine, int, int]] = []
+    lines = [ll for ll in laid if ll.translation]
+    prev_to = 0
+    for i, ll in enumerate(lines):
+        t_to = ll.end + tm.hold_ms
+        if i + 1 < len(lines):
+            t_to = min(t_to, max(lines[i + 1].start - lead, ll.end))
+        t_from = max(ll.start - lead, prev_to, 0)
+        if t_to > t_from:
+            out.append((ll, t_from, t_to))
+            prev_to = t_to
+    return out
+
+
+def translation_events(laid: list[LaidLine], style: KaraokeStyle, W: int, H: int, block_top: float, block_h: float,
+                       size: float, measurer, margin_h: float, margin_v: float, time_offset_ms: float) -> list[str]:
+    """Translation as one line at the other edge of the frame or just outside the lyric block."""
+    lay = style.layout
+    bottom = lay.position == "bottom"
+    gap = size * 0.6
+    if lay.translation_position == "opposite":
+        an, y = (8, margin_v) if bottom else (2, H - margin_v)
+    else:  # "block": right outside the lyric block, on the side away from the edge
+        an, y = (2, block_top - gap) if bottom else (8, block_top + block_h + gap)
+    avail = W - 2 * margin_h
+    events = []
+    for ll, t0, t1 in translation_windows(laid, style):
+        text = ll.translation or ""
+        w = measurer.width(text) or 1.0
+        fs = f"\\fscx{avail / w * 100:.1f}\\fscy{avail / w * 100:.1f}" if w > avail else ""
+        events.append(f"Dialogue: 0,{ass_time(t0 + time_offset_ms)},{ass_time(t1 + time_offset_ms)},KTrans,,0,0,0,,"
+                      f"{{\\an{an}\\pos({W / 2:.1f},{y:.1f}){fs}}}{escape_text(text)}")
+    return events
+
+
 def _karaoke(parts: list[Part], t0: int, tag: str) -> str:
     out, cursor = [], 0
     for p in parts:
@@ -337,6 +380,8 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
               time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None) -> tuple[str, list[str]]:
     """Return (ASS text, warnings)."""
     style = style or project.karaoke
+    # show / highlight everything a little before it is sung (display only)
+    time_offset_ms -= style.timing.advance_ms
     W, H = size or resolution(project)
     k = H / REF_HEIGHT
     lay, txt, rb = style.layout, style.text, style.ruby
@@ -375,7 +420,8 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     schedule(laid, style)
 
     has_ruby = rb.enabled and any(c.ruby for ll in laid for c in ll.chunks)
-    slot_h = main_size + ((ruby_size + gap) if has_ruby else 0) + ((trans_size + trans_gap) if lay.show_translation else 0)
+    per_line_trans = lay.show_translation and lay.translation_position == "line"
+    slot_h = main_size + ((ruby_size + gap) if has_ruby else 0) + ((trans_size + trans_gap) if per_line_trans else 0)
     n = max(1, lay.lines)
     spacing = lay.line_spacing * k
     margin_v = lay.margin_v * k
@@ -421,11 +467,15 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                     events.append(f"Dialogue: 2,{start},{end},KRuby,,0,0,0,,"
                                   f"{{\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}}}{rbody}")
                 x += w * scale
-            if ll.translation:
+            if ll.translation and per_line_trans:
                 ty = main_y + trans_gap + trans_size
                 an, tx = {"left": (1, x0), "right": (3, x0 + line_w), "center": (2, W / 2)}[align]
                 events.append(f"Dialogue: 0,{start},{end},KTrans,,0,0,0,,{{\\an{an}\\pos({tx:.1f},{ty:.1f})}}"
                               f"{escape_text(ll.translation)}")
+
+    if lay.show_translation and not per_line_trans:
+        events += translation_events(laid, style, W, H, block_top, block_h, trans_size, Measurer(family, txt.bold, trans_size),
+                                     margin_h, margin_v, time_offset_ms)
 
     def style_line(name: str, font: str, size: float, sung: str, unsung: str, outline_c: str, outline: float) -> str:
         return (f"Style: {name},{font},{size:.1f},{ass_color(sung)},{ass_color(unsung)},{ass_color(outline_c)},"

@@ -63,8 +63,12 @@ class ParseResult:
     snapshot: Optional[SourceSnapshot] = None
 
 
+# byte-order marks and zero-width characters (music platforms sometimes leave them in lyrics)
+_INVISIBLE = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
+
+
 def normalize_text(text: str) -> str:
-    return text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
+    return text.translate(_INVISIBLE).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def detect_format(text: str, filename: Optional[str] = None) -> DetectedFormat:

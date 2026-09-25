@@ -541,7 +541,10 @@ class KaraokeLayout(_Base):
     alternate_indent: int = 240
     shrink_long_lines: bool = True  # scale down lines wider than the frame
     show_translation: bool = False
-    translation_size_pct: int = 50
+    # opposite: one line at the other edge of the frame (top when lyrics are at the
+    # bottom); block: one line just outside the lyric block; line: under each lyric line
+    translation_position: Literal["opposite", "block", "line"] = "opposite"
+    translation_size_pct: int = Field(default=60, ge=20, le=100)
 
 
 class KaraokeTiming(_Base):
@@ -551,6 +554,9 @@ class KaraokeTiming(_Base):
     early_show: bool = True
     early_max_ms: int = 4000
     highlight: Literal["sweep", "instant"] = "sweep"  # \kf or \k
+    # show (and highlight) the lyrics this much before they are sung; 0 = off.
+    # Applies to every subtitle / LRC export, never to the alignment data itself.
+    advance_ms: int = Field(default=0, ge=0, le=2000)
 
 
 class KaraokeOutput(_Base):

@@ -4,7 +4,7 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
 import type { AiProviderInfo, AppSettings, PipelineTask, SettingsPatch } from '@/lib/types';
-import { openProject, run, setStep, toast, type Step } from './app';
+import { loadProjects, openProject, run, setStep, toast, type Step } from './app';
 
 export type Ui = 'simple' | 'pro';
 export type SimplePage = 'home' | 'settings';
@@ -32,6 +32,8 @@ const get = useSimple.getState;
 export function setUi(ui: Ui) {
   set({ ui });
   try { localStorage.setItem('kara.ui', ui); } catch { /* ignore */ }
+  // simple-mode tasks create projects in the background: refresh the list for the detailed mode
+  if (ui === 'pro') void run(() => loadProjects(), '读取项目列表失败');
 }
 
 export function setSimplePage(page: SimplePage) {

@@ -11,10 +11,10 @@ import { SimpleApp } from './SimpleApp';
 
 const STYLE: KaraokeStyle = {
   version: 1, preset: 'custom',
-  layout: { position: 'bottom', lines: 2, arrangement: 'alternate', margin_v: 40, line_spacing: 0, margin_h: 240, alternate_indent: 240, shrink_long_lines: true, show_translation: false, translation_size_pct: 50 },
+  layout: { position: 'bottom', lines: 2, arrangement: 'alternate', margin_v: 40, line_spacing: 0, margin_h: 240, alternate_indent: 240, shrink_long_lines: true, show_translation: false, translation_position: 'opposite', translation_size_pct: 60 },
   text: { font: '', size: 88, bold: true, color_unsung: '#FFFFFF', color_sung: '#ED35B3', outline_color: '#0B1F3A', outline: 4.5, shadow: 2, shadow_color: '#000000', shadow_opacity: 45 },
   ruby: { enabled: true, script: 'romaji', target: 'all', size_pct: 45, gap: 2, fit: 'widen', follow_colors: true, font: '', color_unsung: '#FFFFFF', color_sung: '#2F80ED', outline_color: '#0B1F3A', outline: 3 },
-  timing: { lead_in_ms: 4000, hold_ms: 2000, highlight: 'sweep', early_show: true, early_max_ms: 6000 },
+  timing: { lead_in_ms: 4000, hold_ms: 2000, highlight: 'sweep', early_show: true, early_max_ms: 6000, advance_ms: 0 },
   output: { vocal_keep_pct: 20 },
 };
 
@@ -303,5 +303,39 @@ describe('detailed calibration page', () => {
     await userEvent.click(screen.getByRole('button', { name: '应用建议' }));
     await waitFor(() => expect(api.find('POST', '/calibration/shift')[0]?.body).toEqual({ user_shift_ms: -180 }));
     play.mockRestore();
+  });
+});
+
+describe('translation subtitles, display advance and the project list', () => {
+  it('turns on translations (top by default) and the 150 ms advance from the settings page', async () => {
+    seed();
+    const api = mockApi({
+      'GET /api/karaoke/presets': () => [],
+      'GET /api/ai/providers': () => [],
+      'PUT /api/settings': (c) => {
+        const st = structuredClone(useSimple.getState().settings!);
+        Object.assign(st.simple, c.body.simple ?? {});
+        return st;
+      },
+    });
+    renderUI(<SimpleSettings />);
+    expect(screen.getByText('不显示翻译')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('switch', { name: /加入翻译字幕/ }));
+    await waitFor(() => expect(useSimple.getState().settings!.simple.karaoke.layout.show_translation).toBe(true));
+    const sent = api.find('PUT', '/api/settings')[0].body.simple.karaoke as KaraokeStyle;
+    expect(sent.layout.translation_position).toBe('opposite');
+    expect(sent.layout.translation_size_pct).toBe(60);
+    expect(await screen.findByText('翻译：画面顶部')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('switch', { name: /歌词提前显示/ }));
+    await waitFor(() => expect(useSimple.getState().settings!.simple.karaoke.timing.advance_ms).toBe(150));
+    expect(screen.getByRole('textbox', { name: '歌词提前（输入数值）' })).toHaveValue('150');
+  });
+
+  it('entering the detailed mode reloads the project list', async () => {
+    seed();
+    const { setUi } = await import('@/store/simple');
+    mockApi({ 'GET /api/projects': () => [{ id: 'pw', name: 'わたぐも - 黒沢ともよ', mode: 'lrc', updated: 'z' }] });
+    setUi('pro');
+    await waitFor(() => expect(useApp.getState().projects.map((p) => p.name)).toEqual(['わたぐも - 黒沢ともよ']));
   });
 });

@@ -85,9 +85,23 @@ export function StyleSettings({ style, patch, fonts, defaultFont }: {
             </Row>
           )}
           <Switch checked={L.shrink_long_lines} onChange={(v) => patch((s) => { s.layout.shrink_long_lines = v; })} label="过长的行自动缩小，保证不超出边距" />
-          <Switch checked={L.show_translation} onChange={(v) => patch((s) => { s.layout.show_translation = v; })} label="在歌词下方显示翻译" />
+          <Switch checked={L.show_translation} onChange={(v) => patch((s) => { s.layout.show_translation = v; })} label="显示翻译字幕（歌词有翻译时）" />
           {L.show_translation && (
-            <Row label="翻译字号（相对歌词）"><Px name="翻译字号" unit="%" min={25} value={L.translation_size_pct} max={90} onChange={(v) => patch((s) => { s.layout.translation_size_pct = v; })} /></Row>
+            <>
+              <Row label="翻译的位置" hint={{
+                opposite: `一次一行，显示在画面${L.position === 'bottom' ? '顶部' : '底部'}，跟随正在唱的歌词`,
+                block: `一次一行，紧挨在歌词${L.position === 'bottom' ? '上方' : '下方'}`,
+                line: '每行歌词下方各自显示（占用更多高度）',
+              }[L.translation_position]}>
+                <Segmented value={L.translation_position} onChange={(v) => patch((s) => { s.layout.translation_position = v; })}
+                  options={[
+                    { value: 'opposite', label: L.position === 'bottom' ? '画面顶部' : '画面底部' },
+                    { value: 'block', label: '歌词旁' },
+                    { value: 'line', label: '每行下方' },
+                  ]} />
+              </Row>
+              <Row label="翻译字号（相对歌词）"><Px name="翻译字号" unit="%" min={25} value={L.translation_size_pct} max={100} onChange={(v) => patch((s) => { s.layout.translation_size_pct = v; })} /></Row>
+            </>
           )}
           <p className="text-xs text-subtle">像素值以 1080p 画面为准，其他分辨率按比例缩放。</p>
         </div>
@@ -157,6 +171,12 @@ export function StyleSettings({ style, patch, fonts, defaultFont }: {
             <Px name="提前显示" unit="ms" value={M.lead_in_ms} max={5000} step={100} onChange={(v) => patch((s) => { s.timing.lead_in_ms = v; })} />
           </Row>
           <Row label="唱完后停留"><Px name="唱完后停留" unit="ms" value={M.hold_ms} max={3000} step={100} onChange={(v) => patch((s) => { s.timing.hold_ms = v; })} /></Row>
+          <Switch checked={M.advance_ms > 0} onChange={(v) => patch((s) => { s.timing.advance_ms = v ? 150 : 0; })} label="歌词提前显示（扫光比实际演唱早一点）" />
+          {M.advance_ms > 0 && (
+            <Row label="提前多少" hint="一般 100–200 ms 看起来更跟手；同样作用于导出的 LRC（alignment.json / CSV 保持原始时间）">
+              <Px name="歌词提前" unit="ms" value={M.advance_ms} min={10} max={1000} step={10} onChange={(v) => patch((s) => { s.timing.advance_ms = v; })} />
+            </Row>
+          )}
           <Switch checked={M.early_show} onChange={(v) => patch((s) => { s.timing.early_show = v; })} label="位置空出后尽早显示下一行" />
           {M.early_show && (
             <Row label="最多提前" hint="长间奏时不会过早出现">

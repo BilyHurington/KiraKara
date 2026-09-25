@@ -469,7 +469,24 @@ def stage_lyrics(q, task, cfg, cancel, progress):
     S.apply_lyrics(h, pv["preview_id"])
     if not h.project.lyrics.sung_lines():
         raise S.ServiceError("歌词里没有可以演唱的行")
-    return f"{len(h.project.lyrics.sung_lines())} 行"
+    n = len(h.project.lyrics.sung_lines())
+    paired = pair_translation(h, (pv.get("extra_tracks") or {}).get("translation"))
+    return f"{n} 行" + (f" · 翻译 {paired} 行" if paired else "")
+
+
+def pair_translation(h: "S.ProjectHandle", text: Optional[str]) -> int:
+    """Store the platform's translation on the lyric lines (shown only if the
+    subtitle style turns translations on).  Returns the number of lines paired."""
+    if not text or not text.strip():
+        return 0
+    try:
+        prev = S.preview_track(h, text, "translation")
+        pairs = [{"line_id": x["line_id"], "text": x["text"]} for x in prev["pairs"] if x.get("text", "").strip()]
+        if pairs:
+            S.apply_track(h, "translation", pairs)
+        return len(pairs)
+    except Exception:  # a translation is a bonus, never a reason to fail
+        return 0
 
 
 def stage_readings(q, task, cfg, cancel, progress):

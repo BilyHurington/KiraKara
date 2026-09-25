@@ -1278,7 +1278,19 @@ def export(h: ProjectHandle, fmt: str, result_id: Optional[str] = None):
         text, warnings = karaoke_ass(h)
         return ExportOutput("karaoke.ass", "text/plain", text, warnings)
     result = get_result(h, result_id) if result_id else h.project.result()
+    advance = h.project.karaoke.timing.advance_ms
+    if fmt in ("lrc-line", "lrc-unit") and advance and result is not None:
+        # the same "show lyrics early" setting as the karaoke subtitles; data exports keep real times
+        result = result.model_copy(deep=True)
+        for u in result.units:
+            if u.start_ms is not None:
+                u.start_ms = max(0, u.start_ms - advance)
+            if u.end_ms is not None:
+                u.end_ms = max(0, u.end_ms - advance)
     try:
-        return _export(h.project, fmt, result)
+        out = _export(h.project, fmt, result)
     except ValueError as e:
         raise ServiceError(str(e)) from e
+    if fmt in ("lrc-line", "lrc-unit") and advance:
+        out.warnings.append(f"已按“歌词提前显示”把所有时间提前 {advance} ms（alignment.json / CSV 保持原始时间）")
+    return out

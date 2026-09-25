@@ -1,7 +1,7 @@
 // No project open: create, import or open one.
 
 import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, ProjectView } from '@/lib/types';
@@ -14,6 +14,7 @@ export function HomePage() {
   const [name, setName] = useState('');
   const [mode, setMode] = useState<Mode>('plain');
   const [busy, setBusy] = useState(false);
+  useEffect(() => { void run(() => loadProjects()); }, []);  // tasks may have added projects meanwhile
 
   const create = () => run(async () => {
     setBusy(true);

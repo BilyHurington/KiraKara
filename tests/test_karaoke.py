@@ -342,3 +342,59 @@ def test_burn_reduced_vocals_uses_its_own_level(tmp_path, monkeypatch):
     assert h.project.mix.vocal_keep_pct == 80.0  # Export page settings untouched
     with pytest.raises(S.ServiceError):
         S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=150)
+
+
+def _dialogue_times(text, style_name="KMain"):
+    return [l.split(",")[1:3] for l in text.splitlines() if l.startswith("Dialogue") and f",{style_name}," in l]
+
+
+def _ms(t):
+    h, m, s = t.split(":")
+    return round((int(h) * 3600 + int(m) * 60 + float(s)) * 1000)
+
+
+def test_advance_shows_everything_earlier_and_lrc_exports_follow(tmp_path):
+    h = _project(tmp_path)
+    plain, _ = S.karaoke_ass(h)
+    lrc0 = S.export(h, "lrc-unit").content
+    st = h.project.karaoke.model_copy(deep=True)
+    st.timing.advance_ms = 150
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    early, _ = S.karaoke_ass(h)
+    a, b = _dialogue_times(plain), _dialogue_times(early)
+    assert len(a) == len(b)
+    assert all(_ms(x[0]) - _ms(y[0]) in (150, 0) and _ms(x[1]) - _ms(y[1]) == 150 for x, y in zip(a, b))
+    assert any(_ms(x[0]) - _ms(y[0]) == 150 for x, y in zip(a, b))
+    # \k durations are relative to each event, so the highlight moves with it
+    assert [l.split(",,", 1)[1] for l in plain.splitlines() if ",KRuby," in l][0] == \
+        [l.split(",,", 1)[1] for l in early.splitlines() if ",KRuby," in l][0]
+    out = S.export(h, "lrc-unit")
+    assert out.content != lrc0 and "[00:00.85]" in out.content  # first unit sung at 1.000 s
+    assert any("提前 150 ms" in w for w in out.warnings)
+    assert "\"start_ms\": 1000" in S.export(h, "alignment").content  # data keeps the real time
+
+
+def test_translation_positions(tmp_path):
+    h = _project(tmp_path)
+    l1, l2 = h.project.lyrics.lines
+    l1.translation, l2.translation = "樱花在窗边飞舞", "你"
+    st = h.project.karaoke.model_copy(deep=True)
+    st.layout.show_translation = True
+    for pos in ("opposite", "block", "line"):
+        st.layout.translation_position = pos
+        S.set_karaoke_style(h, st.model_dump(mode="json"))
+        text, _ = S.karaoke_ass(h)
+        tr = [l for l in text.splitlines() if ",KTrans," in l]
+        assert len(tr) == 2, pos
+        y = [float(re.search(r"\\pos\([\d.]+,([\d.]+)\)", l).group(1)) for l in tr]
+        if pos == "opposite":  # top of the frame, one at a time, following the singing
+            assert all("\\an8" in l for l in tr) and all(v == st.layout.margin_v for v in y)
+            (s1, e1), (s2, e2) = [(_ms(a), _ms(b)) for a, b in _dialogue_times(text, "KTrans")]
+            assert e1 <= s2 and s1 <= 1000 <= e1 and s2 <= 5000 <= e2
+        elif pos == "block":  # just above the lyric block
+            assert all("\\an2" in l for l in tr) and all(540 < v < 1080 - st.layout.margin_v - 200 for v in y)
+        else:  # under each lyric line, inside the block
+            assert all(v > 700 for v in y) and len(set(y)) == 2  # each under its own line
+    st.layout.show_translation = False
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    assert ",KTrans," not in S.karaoke_ass(h)[0].split("[Events]")[1]

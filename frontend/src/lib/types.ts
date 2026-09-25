@@ -182,7 +182,7 @@ export interface KaraokeStyle {
   layout: {
     position: 'bottom' | 'top'; lines: number; arrangement: 'alternate' | 'center';
     margin_v: number; line_spacing: number; margin_h: number; alternate_indent: number; shrink_long_lines: boolean;
-    show_translation: boolean; translation_size_pct: number;
+    show_translation: boolean; translation_position: 'opposite' | 'block' | 'line'; translation_size_pct: number;
   };
   text: {
     font: string; size: number; bold: boolean; color_unsung: string; color_sung: string; outline_color: string;
@@ -193,7 +193,7 @@ export interface KaraokeStyle {
     fit: 'widen' | 'overflow'; follow_colors: boolean; font: string; color_unsung: string; color_sung: string;
     outline_color: string; outline: number;
   };
-  timing: { lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number };
+  timing: { lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number; advance_ms: number };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };
 }

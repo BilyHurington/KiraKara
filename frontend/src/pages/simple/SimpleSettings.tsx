@@ -122,7 +122,8 @@ function DefaultStyleCard({ style, presets }: { style: KaraokeStyle; presets: Ka
   const summary = [
     `${L.position === 'bottom' ? '靠底' : '靠顶'} · ${L.lines} 行${L.lines > 1 ? (L.arrangement === 'alternate' ? '左右交替' : '居中') : ''}`,
     r.enabled ? `注音：${script}（${r.target === 'all' ? '全部' : '仅汉字'}）` : '不注音',
-    `提前 ${M.lead_in_ms / 1000} 秒出现 · 唱完停留 ${M.hold_ms / 1000} 秒`,
+    `提前 ${M.lead_in_ms / 1000} 秒出现 · 唱完停留 ${M.hold_ms / 1000} 秒${M.advance_ms ? ` · 扫光提前 ${M.advance_ms} ms` : ''}`,
+    L.show_translation ? `翻译：${{ opposite: L.position === 'bottom' ? '画面顶部' : '画面底部', block: '歌词旁', line: '每行下方' }[L.translation_position]}` : '不显示翻译',
   ];
   const sample = r.script === 'romaji' ? ['hatsu', 'koi', 'no', 'shirushi'] : r.script === 'katakana' ? ['ハツ', 'コイ', 'ノ', 'シルシ'] : ['はつ', 'こい', 'の', 'しるし'];
   const words = ['初', '恋', 'の', '印'];
@@ -184,6 +185,28 @@ function DefaultStyleCard({ style, presets }: { style: KaraokeStyle; presets: Ka
           )}
         </div>
 
+        <div className="flex flex-wrap items-center gap-4">
+          <Switch checked={L.show_translation} onChange={(v) => edit((k) => { k.layout.show_translation = v; })} label="加入翻译字幕（歌词有翻译时）" />
+          {L.show_translation && (
+            <Segmented<KaraokeStyle['layout']['translation_position']> size="sm" value={L.translation_position}
+              onChange={(v) => edit((k) => { k.layout.translation_position = v; })}
+              options={[
+                { value: 'opposite', label: L.position === 'bottom' ? '画面顶部' : '画面底部' },
+                { value: 'block', label: '歌词旁' },
+                { value: 'line', label: '每行下方' },
+              ]} />
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <Switch checked={M.advance_ms > 0} onChange={(v) => edit((k) => { k.timing.advance_ms = v ? 150 : 0; })} label="歌词提前显示（扫光比实际演唱早一点）" />
+          {M.advance_ms > 0 && (
+            <div className="min-w-72 flex-1">
+              <TimingSlider name="歌词提前" value={M.advance_ms} max={1000} min={10} step={10} onCommit={(v) => edit((k) => { k.timing.advance_ms = v; })} />
+            </div>
+          )}
+        </div>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="提前出现" hint="歌词至少在开唱前这么久出现">
             <TimingSlider name="提前出现" value={M.lead_in_ms} max={8000} onCommit={(v) => edit((k) => { k.timing.lead_in_ms = v; })} />
@@ -206,10 +229,12 @@ function DefaultStyleCard({ style, presets }: { style: KaraokeStyle; presets: Ka
   );
 }
 
-function TimingSlider({ name, value, max, onCommit }: { name: string; value: number; max: number; onCommit: (v: number) => void }) {
+function TimingSlider({ name, value, max, onCommit, min = 0, step = 100 }: {
+  name: string; value: number; max: number; onCommit: (v: number) => void; min?: number; step?: number;
+}) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
-  return <SliderField name={name} value={v} onChange={setV} onCommit={onCommit} min={0} max={max} step={100} unit="ms" />;
+  return <SliderField name={name} value={v} onChange={setV} onCommit={onCommit} min={min} max={max} step={step} unit="ms" />;
 }
 
 /** Like Field, but for button groups (a <label> would rename the first button). */
