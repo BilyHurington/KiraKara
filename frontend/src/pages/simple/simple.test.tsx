@@ -188,6 +188,11 @@ describe('subtitle style panel in the simple-mode settings', () => {
       expect(k?.effects.kind).toBe('petals');
       expect(k?.effects.behind).toBe(false);
     }, { timeout: 2000 });
+    // ruby swept together with the lyric below it
+    await userEvent.click(screen.getByRole('button', { name: /注音/ }));
+    await userEvent.click(screen.getByRole('radio', { name: '与歌词对齐' }));
+    expect(screen.getByText(/上下一条竖线扫过/)).toBeInTheDocument();
+    await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle).ruby.sweep).toBe('base'), { timeout: 2000 });
     // song info card: a switch and the lines to show (no free text without a song)
     await userEvent.click(screen.getByRole('button', { name: /歌曲信息/ }));
     await userEvent.click(screen.getByRole('switch', { name: '在开头显示歌曲信息' }));

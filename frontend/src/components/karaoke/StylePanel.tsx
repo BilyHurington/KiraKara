@@ -201,7 +201,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
         </Section>
 
         <Section {...sec('ruby')} icon={<CaseSensitive className="size-4" />} title="注音"
-          summary={R.enabled ? `${{ hiragana: '平假名', katakana: '片假名', romaji: '罗马音' }[R.script]} · ${R.target === 'kanji' ? '仅汉字' : '全部'} · ${R.size_pct}%` : '关闭'}>
+          summary={R.enabled ? `${{ hiragana: '平假名', katakana: '片假名', romaji: '罗马音' }[R.script]} · ${R.target === 'kanji' ? '仅汉字' : '全部'} · ${R.size_pct}%${R.sweep === 'base' ? ' · 与歌词对齐' : ''}` : '关闭'}>
           <Switch checked={R.enabled} onChange={(v) => patch((s) => { s.ruby.enabled = v; })} label="显示注音" />
           <div className={cn('space-y-4', !R.enabled && 'pointer-events-none opacity-45')}>
             <Row label="文字">
@@ -215,6 +215,12 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             <Row label="注音过宽时">
               <Segmented value={R.fit} onChange={(v) => patch((s) => { s.ruby.fit = v; })}
                 options={[{ value: 'widen', label: '加宽歌词' }, { value: 'overflow', label: '允许超出' }]} />
+            </Row>
+            <Row label="唱过的部分" hint={R.sweep === 'base'
+              ? '注音的覆盖条和下方歌词在同一个位置，上下一条竖线扫过（注音比歌词宽时按比例拉伸）'
+              : '注音按每个读音自己的时间变色（如「き」「み」分别扫过）'}>
+              <Segmented value={R.sweep} onChange={(v) => patch((s) => { s.ruby.sweep = v; })}
+                options={[{ value: 'own', label: '按注音时间' }, { value: 'base', label: '与歌词对齐' }]} />
             </Row>
             <Row label="字号（相对歌词）"><Num name="注音字号" unit="%" min={20} value={R.size_pct} max={80} onChange={(v) => patch((s) => { s.ruby.size_pct = v; })} /></Row>
             <Row label="与歌词的间距"><Num name="注音间距" value={R.gap} min={-20} max={60} onChange={(v) => patch((s) => { s.ruby.gap = v; })} /></Row>

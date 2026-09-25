@@ -468,6 +468,55 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                  _karaoke(parts, int(t_from), "ko"))
         emit(layer, t_from, t_to, name, pos, _karaoke(parts, int(t_from), tag))
 
+    ruby_unsung = (txt if rb.follow_colors else rb).color_unsung
+
+    def follow_clip(c: Chunk, cx: float, t0: int) -> str:
+        """An animated \\clip whose right edge follows the lyric's sweep through this chunk.
+
+        The lyric's \\kf fills each piece from its left to its right edge over the piece's time
+        (\\k: at once when it starts); the ruby's sung part is cut at the same x.  A ruby wider
+        than its lyric gets the sweep stretched over its own width, so it is empty when the
+        lyric starts and full when the lyric is.
+        """
+        widths = [m_main.width(p.text) for p in c.base]
+        bw = m_main.width(c.base_text) * scale
+        norm = bw / (sum(widths) or 1.0)
+        rw = m_ruby.width(c.ruby_text) * scale if m_ruby is not None else bw
+        bl, br = cx - bw / 2, cx + bw / 2
+        ul, ur = min(bl, cx - rw / 2), max(br, cx + rw / 2)
+
+        def clip(xb: float) -> str:
+            x = ur if br <= bl else ul + (xb - bl) / (br - bl) * (ur - ul)
+            return f"\\clip(0,0,{int(round(x))},{H})"
+
+        tags, cursor, x = [clip(bl)], 0, bl
+        for p, pw in zip(c.base, widths):
+            # the same centisecond timing as _karaoke()
+            s = int(round((p.start - t0) / 10)) if p.start is not None else cursor
+            e = int(round((p.end - t0) / 10)) if p.end is not None else s
+            s = max(s, cursor)
+            e = max(e, s)
+            x += pw * norm
+            if tm.highlight == "sweep" and e > s:
+                tags.append(f"\\t({s * 10},{e * 10},{clip(x)})")
+            else:
+                tags.append(f"\\t({s * 10},{s * 10 + 1},{clip(x)})")
+            cursor = e
+        return "".join(tags)
+
+    def emit_ruby_following(t_from: float, t_to: float, pos: str, c: Chunk, cx: float) -> None:
+        """Ruby whose sung part lines up with the sung part of the lyric below it."""
+        plain = escape_text(c.ruby_text)
+        clip = follow_clip(c, cx, int(t_from))
+        if glow.enabled and glow.ruby:
+            width = glow.size * k * 0.55
+            emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, width, ruby_family, ruby_size,
+                                                                 txt.bold), plain)
+            emit(L_GLOW_SUNG, t_from, t_to, "KGlow", pos + glow_tags(glow.color_sung, width, ruby_family,
+                                                                     ruby_size, txt.bold) + clip, plain)
+        emit(L_RUBY, t_from, t_to, "KRuby", pos + f"\\1c{_bgr_tag(ruby_unsung)}", plain)
+        emit(L_RUBY, t_from, t_to, "KRuby", pos + "\\shad0" + clip, plain)  # the sung colour, cut at the sweep
+
     def emit_trans(t_from: float, t_to: float, pos: str, text: str) -> None:
         if glow.enabled and tr.glow:
             emit(L_TRANS_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, glow.size * k * 0.7, trans_family, trans_size, tr.bold),
@@ -507,7 +556,9 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 cx = x + w * scale / 2
                 emit_text(L_MAIN, t_from, t_to, "KMain", f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}", c.base,
                           glow.size * k, True, family, main_size)
-                if c.ruby:
+                if c.ruby and rb.sweep == "base":
+                    emit_ruby_following(t_from, t_to, f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c, cx)
+                elif c.ruby:
                     emit_text(L_RUBY, t_from, t_to, "KRuby", f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c.ruby,
                               glow.size * k * 0.55, glow.ruby, ruby_family, ruby_size)
                 if fx_on:

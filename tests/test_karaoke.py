@@ -555,3 +555,41 @@ def test_song_info_title_card(tmp_path):
     text = S.karaoke_ass(h3)[0].splitlines()
     assert min(l.split(",")[1] for l in text if ",KTrans," in l) < "0:00:02.50"
     assert max(l.split(",")[2] for l in text if ",KInfo," in l) == "0:00:02.50"  # 0.5 s + 2 s, not 60 s
+
+
+def test_ruby_sweep_follows_the_lyric(tmp_path):
+    h = _project(tmp_path)
+    st = h.project.karaoke.model_copy(deep=True)
+    st.timing.fade_in_ms = st.timing.fade_out_ms = 0
+    assert st.ruby.sweep == "own"
+    own = S.karaoke_ass(h)[0].splitlines()
+    assert all("\\k" in l for l in own if ",KRuby," in l)  # each reading syllable on its own timing
+    st.ruby.sweep = "base"
+    st.glow.enabled = True
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    lines = S.karaoke_ass(h)[0].splitlines()
+    main = [l for l in lines if ",KMain," in l]
+    ruby = [l for l in lines if ",KRuby," in l]
+    n_ruby_chunks = len([l for l in own if ",KRuby," in l])
+    assert len(ruby) == 2 * n_ruby_chunks and not any("\\k" in l for l in ruby)
+    unsung, sung = ruby[0::2], ruby[1::2]
+    assert all("\\1c&HFFFFFF&" in l and "\\clip" not in l for l in unsung)  # the whole reading, unsung
+    assert all("\\clip(0,0," in l and "\\t(" in l for l in sung)  # the sung colour, cut at the sweep
+    # the cut moves exactly when the lyric below is swept: 窓 (まど) is one \kf piece
+    m = next(l for l in main if "窓" in l)
+    kf = re.findall(r"\\k(\d+)\}\{\\kf(\d+)\}窓", m) or [("0", re.search(r"\\kf(\d+)\}窓", m).group(1))]
+    delay, dur = (int(x) * 10 for x in kf[0])
+    r = next(l for l in sung if "まど" in l)
+    t = re.findall(r"\\t\((\d+),(\d+),\\clip\(0,0,(\d+),", r)
+    assert (int(t[0][0]), int(t[0][1])) == (delay, delay + dur)
+    x0 = int(re.search(r"\\clip\(0,0,(\d+),", r).group(1))
+    assert int(t[-1][2]) > x0  # sweeps left to right
+    # the sung glow of the ruby follows the same cut (no \ko)
+    glows = [l for l in lines if ",KGlow," in l and ("まど" in l)]
+    assert len(glows) == 2 and "\\clip" in glows[1] and "\\ko" not in glows[1]
+    # instant highlight: the cut jumps when each piece starts
+    st.timing.highlight = "instant"
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    r = next(l for l in S.karaoke_ass(h)[0].splitlines() if ",KRuby," in l and "\\clip" in l and "まど" in l)
+    a, b = map(int, re.search(r"\\t\((\d+),(\d+),\\clip", r).groups())
+    assert b - a == 1

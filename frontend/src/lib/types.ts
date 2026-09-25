@@ -190,7 +190,7 @@ export interface KaraokeStyle {
   };
   ruby: {
     enabled: boolean; script: 'hiragana' | 'katakana' | 'romaji'; target: 'kanji' | 'all'; size_pct: number; gap: number;
-    fit: 'widen' | 'overflow'; follow_colors: boolean; font: string; color_unsung: string; color_sung: string;
+    fit: 'widen' | 'overflow'; sweep: 'own' | 'base'; follow_colors: boolean; font: string; color_unsung: string; color_sung: string;
     outline_color: string; outline: number;
   };
   translation: {

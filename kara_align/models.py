@@ -521,6 +521,9 @@ class KaraokeRuby(_Base):
     size_pct: int = 45  # of the lyric size
     gap: int = 2  # px between ruby and lyric
     fit: Literal["widen", "overflow"] = "widen"
+    # "own": each reading syllable sweeps on its own timing; "base": the sung part of the ruby is exactly
+    # the part above the sung part of the lyric (one sweep line through both)
+    sweep: Literal["own", "base"] = "own"
     follow_colors: bool = True
     font: str = ""  # "" = same as the lyric font
     color_unsung: str = "#FFFFFF"
