@@ -5,17 +5,15 @@
 // style; the parent decides how to save it.
 
 import {
-  Check, ChevronDown, Download, ExternalLink, Film, Languages, Palette, Save, Sparkles, Timer, Trash2, Type, X,
+  Check, ChevronDown, Download, Languages, Palette, Save, Sparkles, Timer, Trash2, Type, X,
   LayoutTemplate, CaseSensitive,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/format';
-import type { FontFamily, KaraokeStyle } from '@/lib/types';
+import type { EffectKind, FontFamily, KaraokeStyle } from '@/lib/types';
 import { run, toast } from '@/store/app';
-import {
-  deleteEffect, deleteStyle, importEffect, loadEffects, loadSavedStyles, sameLook, saveStyle, useLibrary,
-} from '@/store/styles';
-import { Badge, Button, DropZone, Input, Segmented, Select, SliderField, Switch } from '@/components/ui';
+import { deleteStyle, loadSavedStyles, sameLook, saveStyle, useLibrary } from '@/store/styles';
+import { Badge, Button, Input, Segmented, Select, SliderField, Switch } from '@/components/ui';
 
 export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'layout' | 'timing' | 'effects';
 type Patch = (fn: (s: KaraokeStyle) => void) => void;
@@ -127,7 +125,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
   const sec = (id: SectionId) => ({ id, open: open.has(id), onToggle: () => toggle(id) });
 
   return (
-    <div>
+    <div className="@container">
       <PresetBar style={style} onChange={onChange} />
       <div className="mt-2">
         <Section {...sec('colors')} icon={<Palette className="size-4" />} title="配色"
@@ -152,14 +150,14 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             <ColorField label="文字" value={Tr.color} onChange={(v) => patch((s) => { s.translation.color = v; })} />
             <ColorField label="描边" value={Tr.outline_color} onChange={(v) => patch((s) => { s.translation.outline_color = v; })} />
           </ColorGroup>
-          <ColorGroup title="荧光边缘" action={!G.enabled ? <span className="text-xs text-subtle">在“特效”中开启</span> : undefined}>
+          <ColorGroup title="荧光边缘" action={!G.enabled ? <span className="text-xs text-subtle">在“歌词”中开启</span> : undefined}>
             <ColorField label="未唱时" value={G.color_unsung} disabled={!G.enabled} onChange={(v) => patch((s) => { s.glow.color_unsung = v; })} />
             <ColorField label="唱过后" value={G.color_sung} disabled={!G.enabled} onChange={(v) => patch((s) => { s.glow.color_sung = v; })} />
           </ColorGroup>
         </Section>
 
         <Section {...sec('text')} icon={<Type className="size-4" />} title="歌词"
-          summary={`${T.font || defaultFont || '默认字体'} · ${T.size}px${T.bold ? ' · 粗体' : ''} · 描边 ${T.outline}`}>
+          summary={`${T.font || defaultFont || '默认字体'} · ${T.size}px${T.bold ? ' · 粗体' : ''} · 描边 ${T.outline}${G.enabled ? ' · 荧光边缘' : ''}`}>
           <Row label="字体"><FontSelect label="歌词字体" value={T.font} fonts={fonts} fallback={defaultFont} onChange={(v) => patch((s) => { s.text.font = v; })} /></Row>
           <Row label="字号"><Num name="字号" value={T.size} min={24} max={200} onChange={(v) => patch((s) => { s.text.size = v; })} /></Row>
           <Switch checked={T.bold} onChange={(v) => patch((s) => { s.text.bold = v; })} label="粗体" />
@@ -170,6 +168,18 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             <Segmented value={M.highlight} onChange={(v) => patch((s) => { s.timing.highlight = v; })}
               options={[{ value: 'sweep', label: '平滑扫光' }, { value: 'instant', label: '逐字变色' }]} />
           </Row>
+          <div className="space-y-4 rounded-xl border border-line p-3">
+            <Switch checked={G.enabled} onChange={(v) => patch((s) => { s.glow.enabled = v; })} label={<span className="font-medium">荧光边缘</span>} />
+            {G.enabled && (
+              <>
+                <Row label="大小"><Num name="荧光大小" value={G.size} min={1} max={40} step={0.5} onChange={(v) => patch((s) => { s.glow.size = v; })} /></Row>
+                <Row label="柔和"><Num name="荧光柔和" value={G.blur} min={0} max={30} step={0.5} onChange={(v) => patch((s) => { s.glow.blur = v; })} /></Row>
+                <Row label="强度"><Num name="荧光强度" unit="%" value={G.strength} min={10} max={100} onChange={(v) => patch((s) => { s.glow.strength = v; })} /></Row>
+                <Switch checked={G.ruby} onChange={(v) => patch((s) => { s.glow.ruby = v; })} label="注音也发光" />
+                <p className="text-xs text-subtle">颜色在“配色”里调整：未唱与唱过后可以用不同的光。</p>
+              </>
+            )}
+          </div>
         </Section>
 
         <Section {...sec('ruby')} icon={<CaseSensitive className="size-4" />} title="注音"
@@ -260,10 +270,8 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             <Num name="提前出现" unit="ms" value={M.lead_in_ms} max={8000} step={100} onChange={(v) => patch((s) => { s.timing.lead_in_ms = v; })} />
           </Row>
           <Row label="唱完后停留"><Num name="唱完后停留" unit="ms" value={M.hold_ms} max={5000} step={100} onChange={(v) => patch((s) => { s.timing.hold_ms = v; })} /></Row>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Row label="淡入（缓进）"><Num name="淡入" unit="ms" value={M.fade_in_ms} max={1500} step={50} onChange={(v) => patch((s) => { s.timing.fade_in_ms = v; })} /></Row>
-            <Row label="淡出（缓出）"><Num name="淡出" unit="ms" value={M.fade_out_ms} max={1500} step={50} onChange={(v) => patch((s) => { s.timing.fade_out_ms = v; })} /></Row>
-          </div>
+          <Row label="淡入（缓进）"><Num name="淡入" unit="ms" value={M.fade_in_ms} max={1500} step={50} onChange={(v) => patch((s) => { s.timing.fade_in_ms = v; })} /></Row>
+          <Row label="淡出（缓出）"><Num name="淡出" unit="ms" value={M.fade_out_ms} max={1500} step={50} onChange={(v) => patch((s) => { s.timing.fade_out_ms = v; })} /></Row>
           <Switch checked={M.early_show} onChange={(v) => patch((s) => { s.timing.early_show = v; })} label="位置空出后尽早显示下一行" />
           {M.early_show && (
             <Row label="最多提前" hint="长间奏时不会过早出现">
@@ -279,8 +287,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
         </Section>
 
         <Section {...sec('effects')} icon={<Sparkles className="size-4" />} title="特效"
-          summary={[G.enabled && '荧光边缘', E.particles !== 'none' && { sakura: '樱花花瓣', snow: '雪花', stars: '星光' }[E.particles], E.overlay && '动效视频']
-            .filter(Boolean).join(' · ') || '无'}>
+          summary={E.kind === 'none' ? '无' : `${EFFECTS[E.kind].label}${E.ruby ? ' · 注音也有' : ''}`}>
           <EffectsEditor style={style} patch={patch} />
         </Section>
       </div>
@@ -295,7 +302,7 @@ function ColorGroup({ title, action, children }: { title: string; action?: React
         <span className="text-xs font-semibold tracking-wide text-muted">{title}</span>
         {action}
       </div>
-      <div className="grid gap-2.5 sm:grid-cols-2">{children}</div>
+      <div className="grid gap-2.5 @md:grid-cols-2">{children}</div>
     </div>
   );
 }
@@ -367,102 +374,45 @@ function PresetBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: Kar
 
 // ------------------------------------------------------------------ effects
 
+const EFFECTS: Record<EffectKind, { label: string; hint: string }> = {
+  none: { label: '无', hint: '' },
+  pulse: { label: '光晕扩散', hint: '唱到的字向外扩散出一圈光晕' },
+  ring: { label: '光环爆开', hint: '唱到的字的轮廓向外爆开一圈柔和的光环' },
+  shine: { label: '闪光扫过', hint: '一道亮光扫过唱到的字' },
+  sparkle: { label: '星光迸发', hint: '唱到的字周围迸出小星星' },
+  petals: { label: '花瓣飘落', hint: '唱到的字上飘落几片樱花花瓣' },
+  hearts: { label: '爱心飘升', hint: '唱到的字上弹出小爱心并飘走' },
+  ball: { label: '跳跃小球', hint: '经典卡拉OK：小球跟着演唱在字与字之间跳动（只在歌词上，不含注音）' },
+};
+const PARTICLES: EffectKind[] = ['sparkle', 'petals', 'hearts'];
+
 function EffectsEditor({ style, patch }: { style: KaraokeStyle; patch: Patch }) {
-  const catalog = useLibrary((s) => s.effects);
-  const [busy, setBusy] = useState(false);
-  const [showSources, setShowSources] = useState(false);
-  useEffect(() => { if (!catalog) void run(() => loadEffects(), '读取动效失败'); }, [catalog]);
-  const { glow: G, effects: E } = style;
-  const video = catalog?.videos.find((v) => v.id === E.overlay) ?? null;
-
-  const upload = (f: File) => run(async () => {
-    setBusy(true);
-    try {
-      const v = await importEffect(f);
-      patch((s) => { s.effects.overlay = v.id; });
-      toast('ok', `已导入动效「${v.name}」`, v.blend === 'alpha' ? '透明背景' : '黑色背景（按“滤色”叠加）');
-    } finally {
-      setBusy(false);
-    }
-  }, '导入动效失败');
-
+  const { glow: G, text: T, effects: E } = style;
+  const auto = G.enabled ? G.color_sung : T.color_sung;
   return (
-    <div className="space-y-5">
-      <div className="space-y-3 rounded-xl border border-line p-3">
-        <Switch checked={G.enabled} onChange={(v) => patch((s) => { s.glow.enabled = v; })} label={<span className="font-medium">荧光边缘</span>} />
-        {G.enabled && (
-          <>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Row label="大小"><Num name="荧光大小" value={G.size} min={1} max={40} step={0.5} onChange={(v) => patch((s) => { s.glow.size = v; })} /></Row>
-              <Row label="柔和"><Num name="荧光柔和" value={G.blur} min={0} max={30} step={0.5} onChange={(v) => patch((s) => { s.glow.blur = v; })} /></Row>
-              <Row label="强度"><Num name="荧光强度" unit="%" value={G.strength} min={10} max={100} onChange={(v) => patch((s) => { s.glow.strength = v; })} /></Row>
-            </div>
-            <Switch checked={G.ruby} onChange={(v) => patch((s) => { s.glow.ruby = v; })} label="注音也发光" />
-            <p className="text-xs text-subtle">颜色在“配色”里调整：未唱与唱过后可以用不同的光。</p>
-          </>
-        )}
-      </div>
-
-      <div className="space-y-3 rounded-xl border border-line p-3">
-        <div className="text-[13px] font-medium">背景动效</div>
-        <Segmented value={E.particles} onChange={(v) => patch((s) => { s.effects.particles = v; })}
-          options={(catalog?.particles ?? [{ id: 'none', label: '无' }]).map((p) => ({ value: p.id, label: p.label }))} />
-        {E.particles !== 'none' && (
-          <>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Row label="数量"><Num name="动效数量" unit="%" value={E.density} min={5} max={200} step={5} onChange={(v) => patch((s) => { s.effects.density = v; })} /></Row>
-              <Row label="大小"><Num name="动效大小" unit="%" value={E.size} min={30} max={300} step={5} onChange={(v) => patch((s) => { s.effects.size = v; })} /></Row>
-              <Row label="不透明度"><Num name="动效不透明度" unit="%" value={E.opacity} min={5} max={100} onChange={(v) => patch((s) => { s.effects.opacity = v; })} /></Row>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Switch checked={!!E.color} onChange={(v) => patch((s) => { s.effects.color = v ? '#FFFFFF' : ''; })} label="统一颜色" />
-              {E.color && <ColorField label="动效颜色" value={E.color} onChange={(v) => patch((s) => { s.effects.color = v; })} />}
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="space-y-3 rounded-xl border border-line p-3">
-        <div className="flex items-center gap-2 text-[13px] font-medium"><Film className="size-4 text-muted" />动效视频（叠加在画面上）</div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select aria-label="动效视频" className="h-8 min-w-40 flex-1 text-[13px]" value={E.overlay ?? ''}
-            onChange={(e) => patch((s) => { s.effects.overlay = e.target.value || null; })}>
-            <option value="">无</option>
-            {(catalog?.videos ?? []).map((v) => <option key={v.id} value={v.id}>{v.name}（{v.blend === 'alpha' ? '透明背景' : '黑底'}）</option>)}
-          </Select>
-          {video && (
-            <Button size="xs" variant="ghost" aria-label="删除动效视频" icon={<Trash2 className="size-3.5" />}
-              onClick={() => run(async () => { await deleteEffect(video.id); patch((s) => { s.effects.overlay = null; }); })} />
+    <>
+      <Row label="唱到每个字时" hint={E.kind === 'none' ? '特效跟着演唱逐字出现在歌词周围，预览和导出的视频完全一致' : EFFECTS[E.kind].hint}>
+        <Segmented className="flex-wrap" value={E.kind} onChange={(v) => patch((s) => { s.effects.kind = v; })}
+          options={(Object.keys(EFFECTS) as EffectKind[]).map((k) => ({ value: k, label: EFFECTS[k].label }))} />
+      </Row>
+      {E.kind !== 'none' && (
+        <>
+          {PARTICLES.includes(E.kind) && (
+            <Row label="数量"><Num name="特效数量" unit="%" value={E.amount} min={20} max={200} step={10} onChange={(v) => patch((s) => { s.effects.amount = v; })} /></Row>
           )}
-        </div>
-        {E.overlay && !video && catalog && <p className="text-xs text-warn">这个动效视频已不在动效库中</p>}
-        {video && (
-          <Row label="不透明度"><Num name="动效视频不透明度" unit="%" value={E.overlay_opacity} min={5} max={100} onChange={(v) => patch((s) => { s.effects.overlay_opacity = v; })} /></Row>
-        )}
-        <DropZone compact busy={busy} accept="video/*,.mov,.mp4,.webm,.mkv"
-          title="导入动效视频" hint="透明背景（MOV / WebM）或黑色背景的视频都可以；自动循环铺满画面" onFile={upload} />
-        <button type="button" className="focus-ring flex items-center gap-1 rounded text-xs text-accent hover:underline" onClick={() => setShowSources(!showSources)}>
-          <ChevronDown className={cn('size-3.5 transition', showSources && 'rotate-180')} />去哪里找免费动效
-        </button>
-        {showSources && (
-          <div className="space-y-1.5">
-            <p className="text-xs text-muted">这些素材可以免费用在你的视频里，但许可不允许软件自带分发：点开页面下载后在上面导入即可。</p>
-            <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line">
-              {(catalog?.sources ?? []).map((src) => (
-                <li key={src.url} className="flex items-start gap-2 px-3 py-2 text-xs">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-fg">{src.name} <span className="font-normal text-subtle">· {src.site}</span></div>
-                    <div className="text-muted">{src.format} · {src.license}</div>
-                  </div>
-                  <a className="flex shrink-0 items-center gap-1 text-accent hover:underline" href={src.url} target="_blank" rel="noreferrer noopener">
-                    打开<ExternalLink className="size-3" />
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    </div>
+          <Row label={{ pulse: '扩散范围', ring: '光环大小', shine: '光带宽度' }[E.kind as string] ?? '大小'}>
+            <Num name="特效大小" unit="%" value={E.size} min={40} max={250} step={10} onChange={(v) => patch((s) => { s.effects.size = v; })} />
+          </Row>
+          {E.kind !== 'shine' && (
+            <div className="space-y-2">
+              <Switch checked={!!E.color} onChange={(v) => patch((s) => { s.effects.color = v ? auto : ''; })} label="自定义颜色" />
+              {E.color ? <ColorField label="特效颜色" value={E.color} onChange={(v) => patch((s) => { s.effects.color = v; })} />
+                : <p className="text-xs text-subtle">使用{G.enabled ? '荧光边缘（唱过后）' : '歌词已唱'}的颜色 <Dot c={auto} /></p>}
+            </div>
+          )}
+          {E.kind !== 'ball' && <Switch checked={E.ruby} onChange={(v) => patch((s) => { s.effects.ruby = v; })} label="注音唱到时也触发" />}
+        </>
+      )}
+    </>
   );
 }

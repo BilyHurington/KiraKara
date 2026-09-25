@@ -6,9 +6,9 @@ import { useApp } from '@/store/app';
 import { useSimple } from '@/store/simple';
 import { useLibrary } from '@/store/styles';
 
-const useLibraryReset = () => useLibrary.setState({ saved: null, effects: null });
+const useLibraryReset = () => useLibrary.setState({ saved: null });
 import { fixtureInfo, fixturePV, mockApi, renderUI } from '@/test/helpers';
-import { builtinSaved, defaultStyle, emptyEffects } from '@/test/style';
+import { builtinSaved, defaultStyle } from '@/test/style';
 import { detectLyrics, SimpleHome } from './SimpleHome';
 import { SimpleSettings } from './SimpleSettings';
 import { SimpleApp } from './SimpleApp';
@@ -112,7 +112,6 @@ describe('simple mode settings', () => {
     seed();
     const api = mockApi({
       'GET /api/karaoke/styles': () => [builtinSaved()],
-      'GET /api/effects': () => emptyEffects(),
       'GET /api/fonts': () => ({ default: '', families: [] }),
       'GET /api/ai/providers': () => [
         { id: 'claude', label: 'Claude Code', available: true, version: '2.1 (Claude Code)', detail: '/bin/claude' },
@@ -150,7 +149,6 @@ describe('subtitle style panel in the simple-mode settings', () => {
   const settingsServer = (extra: Record<string, (c: any) => unknown> = {}) => mockApi({
     'GET /api/karaoke/styles': () => [builtinSaved(), ...savedExtra],
     'POST /api/karaoke/styles': (c) => { const x = { id: 'st1', name: c.body.name, builtin: false, updated: 'z', style: { ...c.body.style, preset: c.body.name } }; savedExtra = [x]; return x; },
-    'GET /api/effects': () => emptyEffects(),
     'GET /api/fonts': () => ({ default: 'Hiragino Sans', families: [] }),
     'GET /api/ai/providers': () => [],
     'GET /api/projects/p1/karaoke': () => ({ ...defaultStyle(), ruby: { ...defaultStyle().ruby, script: 'katakana' } }),
@@ -173,14 +171,18 @@ describe('subtitle style panel in the simple-mode settings', () => {
     expect(await screen.findByRole('combobox', { name: '预设' })).toHaveValue('default');
     expect(screen.getByRole('button', { name: /配色/ })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: /特效.*无/ })).toHaveAttribute('aria-expanded', 'false');
-    // effects: glow edge and falling petals
-    await userEvent.click(screen.getByRole('button', { name: /特效/ }));
+    // the glow edge is part of the lyric style; effects fire around each sung syllable
+    await userEvent.click(screen.getByRole('button', { name: /歌词/ }));
     await userEvent.click(screen.getByRole('switch', { name: /荧光边缘/ }));
-    await userEvent.click(screen.getByRole('radio', { name: '樱花花瓣' }));
+    expect(screen.getByLabelText('荧光大小（输入数值）')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /特效/ }));
+    expect(screen.queryByRole('switch', { name: /荧光边缘/ })).toBeInTheDocument(); // only the one in 歌词
+    await userEvent.click(screen.getByRole('radio', { name: '花瓣飘落' }));
+    expect(screen.getByText(/使用荧光边缘（唱过后）的颜色/)).toBeInTheDocument();
     await waitFor(() => {
       const k = api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle | undefined;
       expect(k?.glow.enabled).toBe(true);
-      expect(k?.effects.particles).toBe('sakura');
+      expect(k?.effects.kind).toBe('petals');
     }, { timeout: 2000 });
     expect(screen.getByText('已修改')).toBeInTheDocument();
     // save as a named preset
@@ -219,7 +221,7 @@ describe('subtitle style panel in the simple-mode settings', () => {
 describe('simple mode shell', () => {
   it('switches between the pages and to the detailed mode', async () => {
     seed();
-    mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/styles': () => [builtinSaved()], 'GET /api/effects': () => emptyEffects(), 'GET /api/fonts': () => ({ default: '', families: [] }), 'GET /api/ai/providers': () => [] });
+    mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/styles': () => [builtinSaved()], 'GET /api/fonts': () => ({ default: '', families: [] }), 'GET /api/ai/providers': () => [] });
     renderUI(<SimpleApp />);
     expect(await screen.findByText('做一首卡拉OK')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '设置' }));

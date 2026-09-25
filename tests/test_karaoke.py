@@ -12,7 +12,7 @@ from kara_align import service as S
 from kara_align.align.backends.fake import ScriptedBackend
 from kara_align.karaoke import ass as A
 from kara_align.karaoke.fonts import Measurer, default_family
-from kara_align.models import KaraokeStyle, Line, Segment, Unit
+from kara_align.models import KaraokeEffects, KaraokeStyle, Line, Segment, Unit
 from kara_align.reading.prepare import units_from_spec
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffprobe") is None, reason="needs ffmpeg with libass")
@@ -198,7 +198,9 @@ def test_v1_styles_migrate():
     assert s.version == 2 and s.layout.lines == 1 and s.preset == ""
     assert (s.translation.enabled, s.translation.position, s.translation.size_pct) == (True, "block", 50)
     assert (s.translation.color, s.translation.outline_color) == ("#EEEEEE", "#112233")
-    assert s.timing.fade_in_ms == 200 and not s.glow.enabled and s.effects.particles == "none"
+    assert s.timing.fade_in_ms == 200 and not s.glow.enabled and s.effects.kind == "none"
+    assert KaraokeEffects.model_validate({"particles": "sakura", "density": 40}).kind == "petals"
+    assert KaraokeEffects.model_validate({"particles": "snow"}).kind == "none"
 
 
 # ---------------------------------------------------------------- rendering
@@ -422,7 +424,7 @@ def test_translation_positions(tmp_path):
     assert ",KTrans," not in S.karaoke_ass(h)[0].split("[Events]")[1]
 
 
-def test_fades_glow_layers_and_particles(tmp_path):
+def test_fades_glow_layers_and_syllable_effects(tmp_path):
     h = _project(tmp_path)
     st = h.project.karaoke.model_copy(deep=True)
     text, _ = S.karaoke_ass(h)
@@ -431,11 +433,11 @@ def test_fades_glow_layers_and_particles(tmp_path):
     assert not [l for l in text.splitlines() if ",KGlow," in l or ",KFx," in l]
     st.timing.fade_in_ms = st.timing.fade_out_ms = 0
     st.glow.enabled = True
-    st.effects.particles = "sakura"
+    st.effects.kind = "sparkle"
     S.set_karaoke_style(h, st.model_dump(mode="json"))
     text, _ = S.karaoke_ass(h)
     lines = text.splitlines()
-    assert not any("\\fad(" in l for l in lines)
+    assert not any("\\fad(" in l for l in lines if ",KFx," not in l)
     glows = [l for l in lines if ",KGlow," in l]
     main = [l for l in lines if ",KMain," in l]
     ruby = [l for l in lines if ",KRuby," in l]
@@ -445,56 +447,26 @@ def test_fades_glow_layers_and_particles(tmp_path):
     assert all("\\ko" in l and "\\3c&HB3F2FF&" in l for l in sung)  # glow turns #FFF2B3 as it is sung
     assert all(l.startswith("Dialogue: 5,") for l in main) and all(l.startswith("Dialogue: 6,") for l in ruby)
     fx = [l for l in lines if ",KFx," in l]
-    assert fx and all(l.startswith("Dialogue: 0,") and "\\p1" in l for l in fx)
+    # stars around the sung syllables, in the sung glow colour, drawn above the lyrics
+    assert fx and all(l.startswith("Dialogue: 7,") and "\\p1" in l and "\\1c&HB3F2FF&" in l for l in fx)
     again, _ = S.karaoke_ass(h)
     assert [l for l in again.splitlines() if ",KFx," in l] == fx  # deterministic: preview == burn
-    from kara_align.karaoke.effects import particle_events
 
-    few = particle_events(st.effects.model_copy(update={"density": 20}), 1920, 1080, 60000)
-    many = particle_events(st.effects.model_copy(update={"density": 100}), 1920, 1080, 60000)
+    from kara_align.karaoke.effects import LABELS, Syllable, syllable_events
+
+    syl = [Syllable("好", 1000, 1400, 900, 950, 80, 88, "Arial", 88, False, 3000),
+           Syllable("き", 1400, 1800, 980, 950, 80, 88, "Arial", 88, False, 3000)]
+    for kind in LABELS:
+        st.effects.kind = kind
+        ev = syllable_events(st, syl, 1.0)
+        assert (not ev) == (kind == "none"), kind
+        assert all(700 <= t0 < t1 <= 3300 for _, t0, t1, _, _ in ev), kind
+    st.effects.kind = "sparkle"
+    few = syllable_events(st.model_copy(update={"effects": st.effects.model_copy(update={"amount": 30})}), syl, 1.0)
+    many = syllable_events(st.model_copy(update={"effects": st.effects.model_copy(update={"amount": 200})}), syl, 1.0)
     assert 0 < len(few) < len(many)
-
-
-@needs_ffmpeg
-def test_effect_videos_blend_over_the_picture(tmp_path):
-    import subprocess
-
-    from PIL import Image
-
-    from kara_align.audio.io import ffmpeg_path
-    from kara_align.karaoke import effects as FX
-
-    h = _project(tmp_path)
-    # a black-background effect (white square) and one with a real alpha channel (red square)
-    black = tmp_path / "white-on-black.mp4"
-    subprocess.run([ffmpeg_path(), "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=320x180:d=2:r=10",
-                    "-vf", "drawbox=x=0:y=0:w=80:h=45:color=white:t=fill", "-pix_fmt", "yuv420p", str(black)], check=True)
-    alpha = tmp_path / "red-alpha.mov"
-    box = Image.new("RGBA", (320, 180), (0, 0, 0, 0))
-    box.paste((255, 0, 0, 255), (240, 135, 320, 180))
-    box.save(tmp_path / "box.png")
-    subprocess.run([ffmpeg_path(), "-v", "error", "-y", "-loop", "1", "-i", str(tmp_path / "box.png"), "-t", "2",
-                    "-r", "10", "-c:v", "qtrle", "-pix_fmt", "argb", str(alpha)], check=True)
-    a = FX.import_effect(black, black.name, name="白块")
-    b = FX.import_effect(alpha, alpha.name)
-    assert (a["blend"], b["blend"]) == ("screen", "alpha") and b["has_alpha"]
-    assert [x["id"] for x in FX.list_effects()] == [a["id"], b["id"]]
-    st = h.project.karaoke.model_copy(deep=True)
-    for eff, corner, color in ((a, (10, 10), (255, 255, 255)), (b, (1900, 1070), (255, 0, 0))):
-        st.effects.overlay = eff["id"]
-        png = S.karaoke_preview(h, 1500, style=st.model_dump(mode="json"))
-        px = Image.open(io.BytesIO(png)).convert("RGB").getpixel(corner)
-        assert all(abs(c - e) < 40 for c, e in zip(px, color)), (eff["blend"], px)
-        mid = Image.open(io.BytesIO(png)).convert("RGB").getpixel((960, 300))
-        assert max(mid) < 30  # the rest stays black
-    S.set_karaoke_style(h, st.model_dump(mode="json"))
-    out = S.karaoke_burn(h, background="black", audio="none")
-    frame = subprocess.run([ffmpeg_path(), "-v", "error", "-ss", "1", "-i", str(h.dir / "exports" / out["filename"]),
-                            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True).stdout
-    assert all(abs(c - e) < 60 for c, e in zip(Image.open(io.BytesIO(frame)).convert("RGB").getpixel((1900, 1070)),
-                                               (255, 0, 0)))
-    FX.delete_effect(a["id"])
-    assert [x["id"] for x in FX.list_effects()] == [b["id"]]
+    st.effects.color = "#00FF00"
+    assert all("\\1c&H00FF00&" in tags for *_, tags, _ in syllable_events(st, syl, 1.0))
 
 
 def test_styles_effects_and_translation_http_api(tmp_path):
@@ -513,8 +485,7 @@ def test_styles_effects_and_translation_http_api(tmp_path):
     assert client.post("/api/karaoke/styles", json={"name": "", "style": st}).status_code == 400
     assert client.delete("/api/karaoke/styles/default").status_code == 400
     assert client.delete(f"/api/karaoke/styles/{saved['id']}").json() == {"ok": True}
-    fx = client.get("/api/effects").json()
-    assert [p["id"] for p in fx["particles"]] == ["none", "sakura", "snow", "stars"] and fx["videos"] == []
+    assert client.get("/api/effects").status_code == 404  # full-screen effects are gone
     pid = client.post("/api/projects", json={"name": "t", "mode": "plain"}).json()["project"]["id"]
     r = client.post(f"/api/projects/{pid}/lyrics/fetch-translation")
     assert r.status_code == 400 and "网易云" in r.json()["detail"]

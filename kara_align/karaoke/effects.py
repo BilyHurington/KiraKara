@@ -1,44 +1,69 @@
-"""Background motion under the subtitles.
+"""Karaoke effects around the lyrics, fired by each syllable as it is sung.
 
-Two kinds:
+The lyric line itself stays one \\kf karaoke event per chunk; every effect is a
+set of extra, short events placed at the sung syllable (its centre and width
+come from the same measurement the layout uses).  This is how karaoke
+templates (Aegisub's templater, PyonFX) build their effects: \\k tags cannot
+scale or move a single syllable, so each syllable gets its own positioned
+events.  Everything is plain ASS (\\move, \\t, \\fad, \\clip, drawings), so libass
+renders the preview and the burned video identically, and the same style
+always gives the same result (random choices are seeded per syllable).
 
-* **Particles** (樱花花瓣 / 雪花 / 星光): generated as ASS vector drawings animated
-  with ``\\move`` / ``\\t``.  No files, no licences, and the preview (libass)
-  shows exactly what is burned.  Deterministic: the same style gives the same
-  petals every time.
-* **Effect videos** imported by the user (e.g. a sakura overlay downloaded from a
-  free stock site): kept in ``<KARA_ALIGN_HOME>/effects/<id>/`` with a small
-  ``meta.json``; laid over the picture with their alpha channel, or with a
-  "screen" blend when the effect is on a black background.
+Effects (``KaraokeEffects.kind``):
+
+* ``pulse``   – 光晕扩散: a copy of the syllable swells and fades behind it;
+* ``ring``    – 光环爆开: the syllable's outline bursts outward as a soft ring;
+* ``shine``   – 闪光扫过: a bright band sweeps across the syllable's glyphs;
+* ``sparkle`` – 星光迸发: small four-point stars burst out and twinkle;
+* ``petals``  – 花瓣飘落: a sakura petal now and then drifts down, tumbling;
+* ``hearts``  – 爱心飘升: small hearts pop up and float away;
+* ``ball``    – 跳跃小球: a ball hops from syllable to syllable (bouncing-ball karaoke).
+
+Particle bursts are rate-limited (a burst at most every ~200 ms) so fast
+passages don't turn into noise; drawings are centred on (0, 0) and always get
+``\\bord0\\shad0`` (the style's outline would apply to them too).
 """
 
 from __future__ import annotations
 
-import json
+import math
 import random
-import shutil
-import time
-from pathlib import Path
-from typing import Optional
+from dataclasses import dataclass
 
-from ..models import KaraokeEffects, new_id, utcnow
-from ..project.store import atomic_write_text, home_dir
+from ..models import KaraokeStyle
 
-LAYER = 0  # under every subtitle layer
+LAYER_BACK = 3  # with the glow, under the lyric text
+LAYER_FRONT = 7  # above lyrics and ruby
 
-# ---------------------------------------------------------------------------------------- particles
+LABELS = {"none": "无", "pulse": "光晕扩散", "ring": "光环爆开", "shine": "闪光扫过", "sparkle": "星光迸发",
+          "petals": "花瓣飘落", "hearts": "爱心飘升", "ball": "跳跃小球"}
 
+# shapes drawn around (0, 0), about 20 px across at 100 %
+_STAR = "m 0 -10 b 1 -2 2 -1 10 0 b 2 1 1 2 0 10 b -1 2 -2 1 -10 0 b -2 -1 -1 -2 0 -10"
 _PETAL = "m 0 -10 b 5 -12 9 -6 8 0 b 7 6 3 11 0 12 b -3 11 -7 6 -8 0 b -9 -6 -5 -12 0 -10"
-_FLAKE = "m 0 -6 b 3.3 -6 6 -3.3 6 0 b 6 3.3 3.3 6 0 6 b -3.3 6 -6 3.3 -6 0 b -6 -3.3 -3.3 -6 0 -6"
-_STAR = "m 0 -12 l 2.2 -2.2 l 12 0 l 2.2 2.2 l 0 12 l -2.2 2.2 l -12 0 l -2.2 -2.2"
+_HEART = "m 0 -3 b -2 -9 -10 -8 -10 -2 b -10 3 -4 7 0 10 b 4 7 10 3 10 -2 b 10 -8 2 -9 0 -3"
+_BALL = "m 0 -8 b 4.4 -8 8 -4.4 8 0 b 8 4.4 4.4 8 0 8 b -4.4 8 -8 4.4 -8 0 b -8 -4.4 -4.4 -8 0 -8"
 
-_KINDS = {
-    #          per minute at 100 %, base size px, palette
-    "sakura": (100, 2.2, ["#FFC4D6", "#FFB0C8", "#FFD9E6", "#FFA3BF"]),
-    "snow": (180, 1.5, ["#FFFFFF", "#F2F7FF"]),
-    "stars": (240, 1.8, ["#FFF6C8", "#FFFFFF", "#FFE9A8"]),
-}
-LABELS = {"none": "无", "sakura": "樱花花瓣", "snow": "雪花", "stars": "星光"}
+FX_STYLE = "Style: KFx,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1"
+
+_MIN_GAP = {"sparkle": 180, "petals": 320, "hearts": 260}  # ms between two bursts
+
+
+@dataclass
+class Syllable:
+    text: str
+    start: int  # ms, sung from
+    end: int
+    x: float  # centre on screen
+    y: float
+    w: float  # width of the syllable
+    h: float  # font size (px)
+    font: str
+    size: float
+    ruby: bool
+    visible_until: int  # the line disappears here: effects never outlive it
+    group: str = ""  # syllables shown together (one line while it is on screen)
+    top: float = 0.0  # top edge of the whole line, ruby included
 
 
 def _bgr(hex_rgb: str) -> str:
@@ -46,161 +71,173 @@ def _bgr(hex_rgb: str) -> str:
     return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
 
 
-def _t(ms: float) -> str:
-    cs = max(0, int(round(ms / 10)))
-    h, rem = divmod(cs, 360000)
-    m, rem = divmod(rem, 6000)
-    s, c = divmod(rem, 100)
-    return f"{h}:{m:02d}:{s:02d}.{c:02d}"
+def _alpha(visible: float) -> str:
+    return f"&H{int(round(255 * (1 - max(0.0, min(1.0, visible))))):02X}&"
 
 
-def particle_events(fx: KaraokeEffects, W: int, H: int, duration_ms: int, *, seed: int = 7) -> list[str]:
-    """ASS Dialogue lines for the particle effect over the whole video."""
-    if fx.particles == "none" or duration_ms <= 0:
-        return []
-    rate, base, palette = _KINDS[fx.particles]
+def effect_color(style: KaraokeStyle) -> str:
+    """The effect colour: its own, or the sung glow, or the sung lyric colour."""
+    fx = style.effects
     if fx.color:
-        palette = [fx.color]
-    k = H / 1080.0
-    count = max(1, int(rate * fx.density / 100 * duration_ms / 60000))
-    alpha = f"&H{int(round(255 * (1 - fx.opacity / 100))):02X}&"
-    rnd = random.Random(f"{seed}-{fx.particles}")
-    out = []
-    for _ in range(count):
-        col = _bgr(rnd.choice(palette))
-        scale = base * fx.size / 100 * k * rnd.uniform(0.7, 1.3) * 100
-        if fx.particles == "stars":  # twinkle in place
-            life = rnd.uniform(1400, 3000)
-            t0 = rnd.uniform(-life / 2, duration_ms)
-            x, y = rnd.uniform(0, W), rnd.uniform(0, H * 0.75)
-            half = int(life / 2)
-            tags = (f"\\an7\\pos({x:.0f},{y:.0f})\\bord0\\shad0\\blur{1.2 * k:.1f}\\1c{col}\\1a&HFF&"
-                    f"\\fscx{scale:.0f}\\fscy{scale:.0f}\\frz{rnd.uniform(0, 45):.0f}"
-                    f"\\t(0,{half},\\1a{alpha}\\fscx{scale * 1.25:.0f}\\fscy{scale * 1.25:.0f})"
-                    f"\\t({half},{int(life)},\\1a&HFF&\\fscx{scale * 0.6:.0f}\\fscy{scale * 0.6:.0f})")
-            shape = _STAR
-        else:  # fall across the frame, drifting sideways
-            slow = fx.particles == "snow"
-            life = rnd.uniform(9000, 15000) if slow else rnd.uniform(7000, 12000)
-            t0 = rnd.uniform(-life, duration_ms)
-            x0 = rnd.uniform(-0.1 * W, 1.1 * W)
-            x1 = x0 + rnd.uniform(-0.12, 0.12) * W + (0 if slow else rnd.uniform(-0.1, 0.25) * W)
-            y0, y1 = -40 * k, H + 40 * k
-            if t0 < 0:  # already falling when the video starts: begin mid-flight
-                f = -t0 / life
-                x0, y0 = x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
-                life, t0 = life + t0, 0.0
-            spin = rnd.choice((-1, 1)) * rnd.uniform(180, 540)
-            tags = (f"\\an7\\move({x0:.0f},{y0:.0f},{x1:.0f},{y1:.0f})\\bord0\\shad0\\blur{(1.5 if slow else 0.6) * k:.1f}"
-                    f"\\1c{col}\\1a{alpha}\\fscx{scale:.0f}\\fscy{scale:.0f}\\frz{rnd.uniform(0, 360):.0f}")
-            if not slow:  # petals tumble: spin and flip
-                tags += f"\\t(\\frz{spin:.0f}\\fry{rnd.choice((-1, 1)) * rnd.uniform(360, 900):.0f})"
-            shape = _FLAKE if slow else _PETAL
-        start, end = max(0.0, t0), t0 + life
-        if end <= 0:
-            continue
-        out.append(f"Dialogue: {LAYER},{_t(start)},{_t(end)},KFx,,0,0,0,,{{{tags}\\p1}}{shape}{{\\p0}}")
+        return fx.color
+    return style.glow.color_sung if style.glow.enabled else style.text.color_sung
+
+
+def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) -> list[tuple[int, int, int, str, str]]:
+    """(layer, start ms, end ms, override tags, body) for every effect event."""
+    fx = style.effects
+    if fx.kind == "none" or not syllables:
+        return []
+    if fx.kind == "ball":
+        return _ball(style, syllables, k)
+    color = _bgr(effect_color(style))
+    size = fx.size / 100
+    amount = fx.amount / 100
+    out: list[tuple[int, int, int, str, str]] = []
+    last_burst: dict[bool, float] = {}
+    for i, s in enumerate(sorted(syllables, key=lambda s: (s.ruby, s.start))):
+        rnd = random.Random(f"{fx.kind}-{i}-{s.start}-{s.text}")
+        t0 = s.start
+        small = 0.6 if s.ruby else 1.0
+        # shapes are sized relative to the lyric: \fscx/\fscy % that draws a shape `across` px wide
+        # at `rel` × the font size
+        def scale(rel: float, across: float) -> float:
+            return 100 * rel * s.h * size * small / across
+
+        def add(layer: int, dur: float, tags: str, body: str, delay: float = 0.0) -> None:
+            a = int(t0 + delay)
+            b = int(min(a + dur, s.visible_until + 300))
+            if b - a >= 60:
+                out.append((layer, a, b, tags, body))
+
+        gap = _MIN_GAP.get(fx.kind)
+        if gap is not None:
+            if t0 - last_burst.get(s.ruby, -1e9) < gap / max(0.5, amount):
+                continue
+            last_burst[s.ruby] = t0
+
+        text_at = f"\\an5\\pos({s.x:.1f},{s.y:.1f})\\fn{s.font}\\fs{s.size:.1f}\\b{int(style.text.bold)}"
+        if fx.kind == "pulse":
+            dur = 520
+            grow = 100 + 70 * size
+            add(LAYER_BACK, dur,
+                f"{text_at}\\1c{color}\\3c{color}\\bord{3 * k:.1f}\\shad0\\blur{2 * k:.1f}"
+                f"\\1a{_alpha(0.9)}\\3a{_alpha(0.9)}"
+                f"\\t(0,{dur},0.6,\\fscx{grow:.0f}\\fscy{grow:.0f}\\blur{6 * k:.1f}\\1a&HFF&\\3a&HFF&)",
+                _escape(s.text))
+        elif fx.kind == "ring":
+            dur = 380
+            add(LAYER_BACK, dur,
+                f"{text_at}\\1a&HFF&\\3c{color}\\3a{_alpha(0.9)}\\bord{1 * k:.1f}\\shad0\\blur{1 * k:.1f}"
+                f"\\t(0,{dur},0.7,\\bord{s.h * 0.16 * size:.1f}\\blur{4 * k:.1f}\\3a&HFF&)",
+                _escape(s.text))
+        elif fx.kind == "shine":
+            # runs once the syllable is filled, so the band shows on the sung colour
+            dur = max(300, min(450, s.w * 2.2))
+            half = s.h * 0.75
+            band = max(8 * k, s.w * 0.22) * size
+            left, right = s.x - s.w / 2, s.x + s.w / 2
+            top, bottom = s.y - half, s.y + half
+            add(LAYER_FRONT, dur,
+                f"{text_at}\\1c&HFFFFFF&\\bord0\\shad0\\blur{1 * k:.1f}\\1a{_alpha(0.9)}"
+                f"\\clip({left - band:.0f},{top:.0f},{left:.0f},{bottom:.0f})"
+                f"\\t(0,{dur:.0f},\\clip({right:.0f},{top:.0f},{right + band:.0f},{bottom:.0f}))",
+                _escape(s.text), delay=max(0, s.end - s.start - 60))
+        elif fx.kind == "sparkle":
+            n = max(2, round((2 + 2 * rnd.random()) * min(1.5, amount) * small))
+            for j in range(n):
+                x0 = s.x + rnd.uniform(-0.5, 0.5) * s.w
+                y0 = s.y - s.h * rnd.uniform(0.25, 0.5)
+                ang = rnd.uniform(-math.pi * 0.95, -math.pi * 0.05)  # upward half
+                r = s.h * rnd.uniform(0.35, 0.7) * small
+                x1, y1 = x0 + math.cos(ang) * r, y0 + math.sin(ang) * r
+                dur = rnd.uniform(500, 700)
+                sc = scale(0.5, 20) * rnd.uniform(0.7, 1.2)
+                spin = rnd.choice((-1, 1)) * 90
+                add(LAYER_FRONT, dur,
+                    f"\\an5\\move({x0:.1f},{y0:.1f},{x1:.1f},{y1:.1f})\\bord0\\shad0\\blur{0.8 * k:.1f}\\1c{color}"
+                    f"\\fscx{sc * 0.4:.0f}\\fscy{sc * 0.4:.0f}"
+                    f"\\t(0,{dur * 0.3:.0f},\\fscx{sc:.0f}\\fscy{sc:.0f})"
+                    f"\\t({dur * 0.3:.0f},{dur:.0f},\\fscx{sc * 0.25:.0f}\\fscy{sc * 0.25:.0f}\\frz{spin})"
+                    f"\\fad(0,250)",
+                    f"{{\\p1}}{_STAR}{{\\p0}}", delay=j * rnd.uniform(30, 60))
+        elif fx.kind == "petals":
+            x0 = s.x + rnd.uniform(-0.4, 0.4) * s.w
+            y0 = s.y - s.h * 0.5
+            x1 = x0 + rnd.choice((-1, 1)) * rnd.uniform(0.3, 0.7) * s.h
+            y1 = y0 + s.h * rnd.uniform(0.9, 1.3)
+            dur = rnd.uniform(1300, 1800)
+            sc = scale(0.3, 17) * rnd.uniform(0.8, 1.1)
+            add(LAYER_BACK, dur,
+                f"\\an5\\move({x0:.1f},{y0:.1f},{x1:.1f},{y1:.1f})\\bord0\\shad0\\blur{0.6 * k:.1f}"
+                f"\\1c{color}\\fscx{sc:.0f}\\fscy{sc:.0f}\\frz{rnd.uniform(0, 360):.0f}\\fad(150,500)"
+                f"\\t(\\frz{rnd.choice((-1, 1)) * rnd.uniform(120, 220):.0f}\\fry{rnd.choice((-1, 1)) * 360})",
+                f"{{\\p1}}{_PETAL}{{\\p0}}")
+        elif fx.kind == "hearts":
+            x0 = s.x + rnd.uniform(-0.25, 0.25) * s.w
+            y0 = min(s.y - s.h * 0.55, s.top + s.h * 0.1)
+            y1 = y0 - s.h * rnd.uniform(0.35, 0.55)
+            dur = rnd.uniform(650, 850)
+            sc = scale(0.34, 20) * rnd.uniform(0.85, 1.1)
+            add(LAYER_FRONT, dur,
+                f"\\an5\\move({x0:.1f},{y0:.1f},{x0 + rnd.uniform(-0.15, 0.15) * s.h:.1f},{y1:.1f})"
+                f"\\bord0\\shad0\\blur{0.6 * k:.1f}\\1c{color}\\fscx0\\fscy0"
+                f"\\t(0,150,\\fscx{sc * 1.15:.0f}\\fscy{sc * 1.15:.0f})\\t(150,260,\\fscx{sc:.0f}\\fscy{sc:.0f})"
+                f"\\fad(0,300)",
+                f"{{\\p1}}{_HEART}{{\\p0}}")
     return out
 
 
-# Free effect videos worth getting (checked 2026-09): free to use in your videos,
-# but their licences forbid redistribution, so the app only links to the pages;
-# the user downloads the file and imports it.
-SOURCES = [
-    {"name": "樱花飘落（循环，透明背景）", "site": "miirriin", "url": "https://miirriin.com/en/sakura03-en/",
-     "format": "MOV 透明 / MP4 黑底 · 1080p · 15 秒可循环", "license": "可免费商用、无需署名；不可再分发"},
-    {"name": "樱花花瓣（透明背景）", "site": "miirriin", "url": "https://miirriin.com/en/sakura01-en/",
-     "format": "MOV 透明 · 1080p · 15 秒可循环", "license": "可免费商用、无需署名；不可再分发"},
-    {"name": "雪花（透明背景）", "site": "miirriin", "url": "https://miirriin.com/en/snow01-en/",
-     "format": "MOV 透明 · 1080p · 15 秒可循环", "license": "可免费商用、无需署名；不可再分发"},
-    {"name": "星光粒子（黑底）", "site": "Pixabay", "url": "https://pixabay.com/videos/stars-particles-space-overlay-166887/",
-     "format": "MP4 黑底 · 1080p", "license": "Pixabay 许可：可免费用于视频；不可单独再分发"},
-    {"name": "粉色光尘（黑底）", "site": "Pixabay", "url": "https://pixabay.com/videos/particles-dust-pink-effect-dark-7956/",
-     "format": "MP4 黑底 · 1080p", "license": "Pixabay 许可：可免费用于视频；不可单独再分发"},
-    {"name": "雪夜（黑底）", "site": "Pexels", "url": "https://www.pexels.com/video/snowfall-in-black-background-5485148/",
-     "format": "MP4 黑底 · 1080p · 44 秒", "license": "Pexels 许可：可免费用于视频，无需署名"},
-]
+def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float) -> list[tuple[int, int, int, str, str]]:
+    """A ball that lands on each syllable as it starts and hops on to the next one.
 
-FX_STYLE = ("Style: KFx,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1")
+    Each hop is a few straight \\move segments along a parabola (\\move is linear
+    and one per event), so the arc looks round without one event per frame.
+    """
+    fx = style.effects
+    color = _bgr(effect_color(style))
+    out: list[tuple[int, int, int, str, str]] = []
+    groups: dict[str, list[Syllable]] = {}
+    for s in syllables:
+        if not s.ruby:
+            groups.setdefault(s.group, []).append(s)
+    for syl in groups.values():
+        syl.sort(key=lambda s: s.start)
+        h = syl[0].h
+        sc = 100 * 0.2 * h * fx.size / 100 / 16  # 20 % of the font size across
+        lift = h * 0.2 * fx.size / 100 + 4 * k  # the ball rests this far above the line (its ruby included)
+        tags = f"\\an5\\bord0\\shad0\\blur{0.8 * k:.1f}\\1c{color}\\fscx{sc:.0f}\\fscy{sc:.0f}"
+        body = f"{{\\p1}}{_BALL}{{\\p0}}"
+        until = syl[-1].visible_until
 
+        def seg(t0: float, t1: float, a: tuple[float, float], b: tuple[float, float], extra: str = "") -> None:
+            t0, t1 = int(t0), int(min(t1, until))
+            if t1 - t0 >= 40:
+                out.append((LAYER_FRONT, t0, t1,
+                            f"{tags}\\move({a[0]:.1f},{a[1]:.1f},{b[0]:.1f},{b[1]:.1f}){extra}", body))
 
-# ---------------------------------------------------------------------------------------- effect videos
-
-
-class EffectError(ValueError):
-    pass
-
-
-def effects_dir() -> Path:
-    p = home_dir() / "effects"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def list_effects() -> list[dict]:
-    out = []
-    for d in sorted(effects_dir().iterdir()):
-        meta = d / "meta.json"
-        if meta.exists():
-            try:
-                m = json.loads(meta.read_text(encoding="utf-8"))
-                if (d / m["filename"]).exists():
-                    out.append(m)
-            except Exception:
-                continue
-    return sorted(out, key=lambda m: (m.get("order", 0), m.get("created", "")))
-
-
-def get_effect(effect_id: str) -> tuple[dict, Path]:
-    if not effect_id or "/" in effect_id or effect_id.startswith("."):
-        raise EffectError("无效的动效 ID")
-    d = effects_dir() / effect_id
-    try:
-        m = json.loads((d / "meta.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise EffectError("没有这个动效（可能已删除）") from None
-    return m, d / m["filename"]
+        # drops in onto the first syllable
+        first = syl[0]
+        rest = (first.x, first.top - lift)
+        seg(first.start - 250, first.start, (first.x, rest[1] - h * 0.5), rest, "\\fad(150,0)")
+        for a, b in zip(syl, syl[1:]):
+            here, there = (a.x, a.top - lift), (b.x, b.top - lift)
+            hop = min(420.0, float(b.start - a.start))
+            wait_until = b.start - hop
+            if wait_until > a.start:
+                seg(a.start, wait_until, here, here)
+            height = min(h * 0.55, 12 * k + abs(b.x - a.x) * 0.25)
+            steps = 4 if hop >= 200 else 1  # very fast syllables: a straight slide
+            pts = [(here[0] + (there[0] - here[0]) * i / steps,
+                    here[1] + (there[1] - here[1]) * i / steps - height * 4 * (i / steps) * (1 - i / steps))
+                   for i in range(steps + 1)]
+            for i in range(steps):
+                seg(wait_until + hop * i / steps, wait_until + hop * (i + 1) / steps, pts[i], pts[i + 1])
+        last = syl[-1]
+        end = (last.x, last.top - lift)
+        seg(last.start, max(last.end, last.start + 200) + 250, end, end, "\\fad(0,250)")
+    return out
 
 
-def import_effect(src: Path, filename: str, name: str = "", blend: str = "auto",
-                  source_url: str = "", license_note: str = "") -> dict:
-    """Keep a copy of an effect video; blend "auto" picks alpha when the file has one."""
-    from ..audio.video import probe_media
-
-    info = probe_media(src)
-    if not info.get("width"):
-        raise EffectError("这个文件没有视频画面")
-    pix = str(info.get("pix_fmt") or "")
-    has_alpha = pix.startswith(("yuva", "rgba", "argb", "bgra", "abgr", "gbrap", "ya", "pal8"))
-    if blend == "auto":
-        blend = "alpha" if has_alpha else "screen"
-    if blend not in ("alpha", "screen"):
-        raise EffectError("混合方式只能是 alpha / screen")
-    eid = new_id("fx")
-    d = effects_dir() / eid
-    d.mkdir(parents=True)
-    safe = Path(filename).name or "effect.mov"
-    shutil.copyfile(src, d / safe)
-    meta = {"id": eid, "name": (name or Path(safe).stem).strip(), "filename": safe, "blend": blend,
-            "has_alpha": has_alpha, "width": info.get("width"), "height": info.get("height"),
-            "duration_ms": info.get("duration_ms"), "created": utcnow(), "order": time.time(), "source_url": source_url,
-            "license": license_note}
-    atomic_write_text(d / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
-    return meta
-
-
-def delete_effect(effect_id: str) -> None:
-    get_effect(effect_id)
-    shutil.rmtree(effects_dir() / effect_id, ignore_errors=True)
-
-
-def overlay_for(fx: KaraokeEffects) -> Optional[dict]:
-    """{path, blend, opacity, duration_ms} for the renderer, or None."""
-    if not fx.overlay:
-        return None
-    try:
-        meta, path = get_effect(fx.overlay)
-    except EffectError:
-        return None
-    return {"path": path, "blend": meta["blend"], "opacity": fx.overlay_opacity / 100,
-            "duration_ms": meta.get("duration_ms") or 0}
+def _escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ")

@@ -9,7 +9,7 @@ import { StudioDock } from '@/components/shell/StudioDock';
 import { Sidebar } from '@/components/shell/Sidebar';
 import { currentResult, useApp, WAVE_HEIGHT } from '@/store/app';
 import { fixturePV, mockApi, renderUI, seedStore } from '@/test/helpers';
-import { builtinSaved, emptyEffects, plainStyle } from '@/test/style';
+import { builtinSaved, plainStyle } from '@/test/style';
 import { AlignPage } from './Align';
 import { CalibratePage } from './Calibrate';
 import { EnhancePage } from './Enhance';
@@ -344,7 +344,6 @@ describe('karaoke subtitles page', () => {
       const json = (x: unknown) => new Response(JSON.stringify(x), { status: 200 });
       if (u === '/api/fonts') return json({ default: 'Hiragino Sans', families: [{ family: 'Hiragino Sans', names: ['Hiragino Sans'], bold: true }] });
       if (u === '/api/karaoke/styles') return json([builtinSaved()]);
-      if (u === '/api/effects') return json(emptyEffects());
       if (u.endsWith('/lyrics/fetch-translation')) {
         api.calls.push({ method: 'POST', url: u, body: null });
         return json({ ...fixturePV(), paired: 3 });

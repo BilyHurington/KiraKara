@@ -586,15 +586,21 @@ class KaraokeTiming(_Base):
 
 
 class KaraokeEffects(_Base):
-    """Background motion under the subtitles."""
+    """Effects around the lyrics, fired by each syllable as it is sung (see karaoke.effects)."""
 
-    particles: Literal["none", "sakura", "snow", "stars"] = "none"
-    density: int = Field(default=50, ge=5, le=200)  # %
-    size: int = Field(default=100, ge=30, le=300)  # %
-    color: str = ""  # "" = the effect's own palette
-    opacity: int = Field(default=80, ge=5, le=100)  # %
-    overlay: Optional[str] = None  # id of an imported effect video (see karaoke.effects)
-    overlay_opacity: int = Field(default=100, ge=5, le=100)  # %
+    kind: Literal["none", "pulse", "ring", "shine", "sparkle", "petals", "hearts", "ball"] = "none"
+    amount: int = Field(default=100, ge=20, le=200)  # % (how many particles per syllable)
+    size: int = Field(default=100, ge=40, le=250)  # %
+    color: str = ""  # "" = the sung glow colour when the glow is on, else the sung lyric colour
+    ruby: bool = False  # also fire on the ruby syllables
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_screen_effects(cls, data):
+        """The first version had full-screen particles; map them to the nearest lyric effect."""
+        if isinstance(data, dict) and "kind" not in data and "particles" in data:
+            data = {**data, "kind": {"sakura": "petals", "stars": "sparkle"}.get(data.get("particles"), "none")}
+        return data
 
 
 class KaraokeOutput(_Base):

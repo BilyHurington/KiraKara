@@ -383,13 +383,11 @@ L_FX, L_TRANS_GLOW, L_TRANS, L_GLOW, L_GLOW_SUNG, L_MAIN, L_RUBY = 0, 1, 2, 3, 4
 
 
 def build_ass(project: Project, result: AlignmentResult, style: Optional[KaraokeStyle] = None, *,
-              time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None,
-              duration_ms: Optional[int] = None) -> tuple[str, list[str]]:
+              time_offset_ms: float = 0.0, size: Optional[tuple[int, int]] = None) -> tuple[str, list[str]]:
     """Return (ASS text, warnings)."""
-    from .effects import FX_STYLE, particle_events
+    from .effects import FX_STYLE, Syllable, syllable_events
 
     style = style or project.karaoke
-    base_offset = time_offset_ms
     # show / highlight everything a little before it is sung (display only)
     time_offset_ms -= style.timing.advance_ms
     W, H = size or resolution(project)
@@ -473,6 +471,8 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         emit(L_TRANS, t_from, t_to, "KTrans", pos, escape_text(text))
 
     tag = "kf" if tm.highlight == "sweep" else "k"
+    fx_on = style.effects.kind != "none"
+    syllables: list[Syllable] = []
     for ll in laid:
         widths = chunk_widths(ll.chunks, m_main, m_ruby, ruby_size, rb.fit)
         line_w = sum(widths) or 1.0
@@ -506,6 +506,14 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 if c.ruby:
                     emit_text(L_RUBY, t_from, t_to, "KRuby", f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}", c.ruby,
                               glow.size * k * 0.55, glow.ruby, ruby_family, ruby_size)
+                if fx_on:
+                    group = f"{ll.line.id}@{t_from}"
+                    top = (ruby_y - ruby_size * scale) if has_ruby else (main_y - main_size * scale)
+                    syllables += _syllables(c.base, cx, main_y, main_size, scale, m_main, family, False, t_from, t_to,
+                                            group, top)
+                    if c.ruby and style.effects.ruby and m_ruby is not None:
+                        syllables += _syllables(c.ruby, cx, ruby_y, ruby_size, scale, m_ruby, ruby_family, True,
+                                                t_from, t_to, group, top)
                 x += w * scale
             if ll.translation and per_line_trans:
                 ty = main_y + trans_gap + trans_size
@@ -518,9 +526,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                                                         margin_v):
             emit_trans(t0, t1, pos, text)
 
-    if style.effects.particles != "none":
-        total = duration_ms if duration_ms is not None else _duration(project)
-        events = particle_events(style.effects, W, H, int(total + max(0.0, base_offset))) + events
+    if fx_on:
+        for layer, t0, t1, tags, body in syllable_events(style, syllables, k):
+            events.append(f"Dialogue: {layer},{ass_time(t0 + time_offset_ms)},{ass_time(t1 + time_offset_ms)},"
+                          f"KFx,,0,0,0,,{{{tags}}}{body}")
 
     shadow_back = ass_color(txt.shadow_color, 100 - txt.shadow_opacity)
 
@@ -561,14 +570,25 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     return "\n".join(header + events) + "\n", warnings
 
 
+def _syllables(parts: list[Part], cx: float, bottom_y: float, size: float, scale: float, measurer, font: str,
+               ruby: bool, t_from: float, t_to: float, group: str = "", top: float = 0.0) -> list:
+    """Where each sung piece of a chunk sits on screen (the chunk text is centred at ``cx``)."""
+    from .effects import Syllable
+
+    widths = [measurer.width(p.text) * scale for p in parts]
+    left = cx - sum(widths) / 2
+    out = []
+    for p, w in zip(parts, widths):
+        if p.start is not None and p.end is not None and p.text.strip() and t_from <= p.start < t_to:
+            out.append(Syllable(text=p.text, start=int(p.start), end=int(p.end), x=left + w / 2,
+                                y=bottom_y - size * scale * 0.55, w=max(w, size * scale * 0.4), h=size * scale,
+                                font=font, size=size * scale, ruby=ruby, visible_until=int(t_to), group=group,
+                                top=top))
+        left += w
+    return out
+
+
 def _bgr_tag(hex_rgb: str) -> str:
     """#RRGGBB -> &HBBGGRR& (colour override tag value)."""
     h = hex_rgb.lstrip("#")
     return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
-
-
-def _duration(project: Project) -> int:
-    orig = project.asset("original")
-    if project.video is not None and project.video.duration_ms:
-        return int(project.video.duration_ms)
-    return int(orig.duration_ms) if orig is not None else 0

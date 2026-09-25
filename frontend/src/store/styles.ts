@@ -1,16 +1,15 @@
-// Saved subtitle styles (预设) and background effects: app-wide libraries on the
-// server, shared by every project and the simple mode.
+// Saved subtitle styles (预设): an app-wide library on the server, shared by
+// every project and the simple mode.
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-import type { EffectsCatalog, EffectVideo, KaraokeStyle, SavedStyle } from '@/lib/types';
+import type { KaraokeStyle, SavedStyle } from '@/lib/types';
 
 interface LibState {
   saved: SavedStyle[] | null;
-  effects: EffectsCatalog | null;
 }
 
-export const useLibrary = create<LibState>(() => ({ saved: null, effects: null }));
+export const useLibrary = create<LibState>(() => ({ saved: null }));
 const set = useLibrary.setState;
 const get = useLibrary.getState;
 
@@ -27,24 +26,6 @@ export async function saveStyle(name: string, style: KaraokeStyle, id?: string) 
 export async function deleteStyle(id: string) {
   await api.del(`/api/karaoke/styles/${id}`);
   set({ saved: (get().saved ?? []).filter((x) => x.id !== id) });
-}
-
-export async function loadEffects() {
-  set({ effects: await api.get<EffectsCatalog>('/api/effects') });
-}
-
-export async function importEffect(file: File, name = '') {
-  const fd = new FormData();
-  fd.append('file', file, file.name);
-  fd.append('name', name);
-  const v = await api.post<EffectVideo>('/api/effects', fd);
-  await loadEffects();
-  return v;
-}
-
-export async function deleteEffect(id: string) {
-  await api.del(`/api/effects/${id}`);
-  await loadEffects();
 }
 
 /** Two styles look the same (the preset name and the burn-in audio level don't count). */

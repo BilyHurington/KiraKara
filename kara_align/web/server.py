@@ -577,39 +577,6 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             raise HTTPException(400, str(e)) from e
         return {"ok": True}
 
-    # ---- background effects: built-in particles + imported effect videos
-
-    @app.get("/api/effects")
-    def list_effects():
-        from ..karaoke.effects import LABELS, SOURCES, list_effects as _list
-
-        return {"particles": [{"id": k, "label": v} for k, v in LABELS.items()], "videos": _list(),
-                "sources": SOURCES}
-
-    @app.post("/api/effects")
-    async def import_effect(file: UploadFile = File(...), name: str = Form(""), blend: str = Form("auto"),
-                            source_url: str = Form(""), license: str = Form("")):
-        from ..karaoke.effects import EffectError, import_effect as _import
-
-        fname = Path(file.filename or "effect.mov").name
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td) / fname
-            await _save_upload(file, tmp, 2 * 1024**3)
-            try:
-                return _import(tmp, fname, name=name, blend=blend, source_url=source_url, license_note=license)
-            except (EffectError, Exception) as e:
-                raise HTTPException(400, f"无法导入动效：{e}") from e
-
-    @app.delete("/api/effects/{effect_id}")
-    def delete_effect(effect_id: str):
-        from ..karaoke.effects import EffectError, delete_effect as _delete
-
-        try:
-            _delete(effect_id)
-        except EffectError as e:
-            raise HTTPException(400, str(e)) from e
-        return {"ok": True}
-
     @app.post("/api/projects/{pid}/lyrics/fetch-translation")
     def fetch_translation(pid: str):
         """Pair the translation the lyrics' music platform provides (NetEase / QQ)."""

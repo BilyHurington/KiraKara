@@ -202,10 +202,8 @@ export interface KaraokeStyle {
     lead_in_ms: number; hold_ms: number; highlight: 'sweep' | 'instant'; early_show: boolean; early_max_ms: number;
     advance_ms: number; fade_in_ms: number; fade_out_ms: number;
   };
-  effects: {
-    particles: 'none' | 'sakura' | 'snow' | 'stars'; density: number; size: number; color: string; opacity: number;
-    overlay: string | null; overlay_opacity: number;
-  };
+  /** effects around the lyrics, fired by each syllable as it is sung */
+  effects: { kind: EffectKind; amount: number; size: number; color: string; ruby: boolean };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };
 }
@@ -213,12 +211,7 @@ export interface KaraokeStyle {
 /** A saved subtitle style (预设); 默认 is built in and read-only. */
 export interface SavedStyle { id: string; name: string; builtin: boolean; updated: string | null; style: KaraokeStyle }
 
-export interface EffectVideo {
-  id: string; name: string; filename: string; blend: 'alpha' | 'screen'; has_alpha: boolean;
-  width: number | null; height: number | null; duration_ms: number | null; source_url: string; license: string;
-}
-export interface EffectSource { name: string; site: string; url: string; format: string; license: string }
-export interface EffectsCatalog { particles: { id: KaraokeStyle['effects']['particles']; label: string }[]; videos: EffectVideo[]; sources: EffectSource[] }
+export type EffectKind = 'none' | 'pulse' | 'ring' | 'shine' | 'sparkle' | 'petals' | 'hearts' | 'ball';
 
 export interface FontFamily { family: string; names: string[]; bold: boolean }
 
