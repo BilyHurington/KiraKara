@@ -533,9 +533,11 @@ def test_song_info_title_card(tmp_path):
     assert auto_lines(h.project, st) == ["わたぐも", "赤城みりあ", "作词：渡辺拓也"]
     S.set_karaoke_style(h, st.model_dump(mode="json"))
     card = [l for l in S.karaoke_ass(h)[0].splitlines() if ",KInfo," in l]
-    texts = [l.split("}", 1)[1] for l in card if "\\p1" not in l]
+    texts = list(dict.fromkeys(l.split("}", 1)[1] for l in card if "\\p1" not in l))  # (in and out events)
     assert texts == ["わたぐも", "赤城みりあ", "作词：渡辺拓也"]
-    assert all(l.startswith("Dialogue: 9,0:00:00.") for l in card)  # at the start, above everything
+    # at the start (coming in at 0:00, going out before 0:10), above everything
+    assert all(l.startswith("Dialogue: 9,0:00:0") for l in card)
+    assert all(l.startswith("Dialogue: 9,0:00:00.") for l in card if "\\fad(0," not in l and "1.6," not in l)
     assert all("\\an7" in l for l in card) and any("\\p1" in l for l in card)  # top-left, with the accent bar
     # top-right, glow copies under the text, and the project's own text
     st.info.position = "top-right"
@@ -547,9 +549,10 @@ def test_song_info_title_card(tmp_path):
     assert r["text"].startswith("わたぐも") and r["fields"]["arranger"] == "本多友紀"
     h2 = S.open_dir(h.dir)
     card = [l for l in S.karaoke_ass(h2)[0].splitlines() if ",KInfo," in l]
-    assert [l.split("}", 1)[1] for l in card if l.startswith("Dialogue: 9,") and "\\p1" not in l] == \
+    assert list(dict.fromkeys(l.split("}", 1)[1] for l in card if l.startswith("Dialogue: 9,") and "\\p1" not in l)) == \
         ["わたぐも", "赤城みりあ (CV: 黒沢ともよ)"]
-    assert all("\\an9" in l for l in card if "\\p1" not in l) and len([l for l in card if l.startswith("Dialogue: 8,")]) == 2
+    # glow copies: coming in and going out for each of the two lines
+    assert all("\\an9" in l for l in card if "\\p1" not in l) and len([l for l in card if l.startswith("Dialogue: 8,")]) == 4
     assert client.put(f"/api/projects/{pid}/karaoke/info", json={"text": None}).json()["text"] is None
     # translations along the top edge: the card leaves before the first one shows (but stays at least 2 s)
     st.translation.enabled = True

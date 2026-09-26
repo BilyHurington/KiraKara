@@ -32,6 +32,7 @@ _CREDIT = {"lyricist": re.compile(r"作词|作詞|^[词詞]|lyric|written", re.I
 _LABEL = re.compile(r"^\s*([^:：]{1,16}?)\s*[:：]\s*(.+?)\s*$")
 
 L_INFO_GLOW, L_INFO = 8, 9
+_IN_MS, _OUT_MS, _STAGGER, _BAR_MS = 450, 400, 90, 380  # slide in / out, between lines, bar grow / shrink
 _BAR = 6  # accent bar width (px at 1920 wide)
 
 
@@ -168,26 +169,46 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
     x_text = (W - margin - bar_w - gap) if right else (margin + bar_w + gap)
     an = 9 if right else 7
 
+    # coming in: the bar grows down, then the lines slide in from the edge one after another;
+    # leaving is the same played backwards: the lines slide back out (the last one first), then the
+    # bar shrinks up.  (An event has one \\move: a line is one event coming in and one going out.)
     events: list[str] = []
     for i, (text, size, bold, width, y) in enumerate(placed):
         sx = f"\\fscx{max_w / width * 100:.1f}" if width > max_w else ""
-        a = t0 + 90 * i  # lines come in one after another
-        move = f"\\move({x_text + slide:.1f},{y:.1f},{x_text:.1f},{y:.1f},0,450)"
-        base = (f"\\an{an}{move}\\fn{family}\\fs{size:.1f}\\b{int(bold)}{sx}\\fad(350,500)")
+        a = t0 + _STAGGER * i  # lines come in one after another
+        out_end = t1 - 200 - _STAGGER * i  # and leave in the opposite order, before the bar
+        out_start = max(out_end - _OUT_MS, a + _IN_MS)
+        font = f"\\an{an}\\fn{family}\\fs{size:.1f}\\b{int(bold)}{sx}"
         body = _escape(text)
+        looks = []
         if glow.enabled:
-            events.append(_dialogue(L_INFO_GLOW, a, t1, f"{base}\\1a&HFF&\\3c{_bgr(glow.color_unsung)}"
-                                    f"\\3a&H{int(round(255 * (1 - glow.strength / 100))):02X}&"
-                                    f"\\bord{glow.size * k * (0.7 if i == 0 else 0.5):.1f}"
-                                    f"\\blur{glow.blur * k:.1f}\\shad0", body))
+            looks.append((L_INFO_GLOW, f"\\1a&HFF&\\3c{_bgr(glow.color_unsung)}"
+                                       f"\\3a&H{int(round(255 * (1 - glow.strength / 100))):02X}&"
+                                       f"\\bord{glow.size * k * (0.7 if i == 0 else 0.5):.1f}"
+                                       f"\\blur{glow.blur * k:.1f}\\shad0"))
         sub_alpha = "" if i == 0 else "\\1a&H18&"
-        events.append(_dialogue(L_INFO, a, t1, f"{base}\\1c{color}{sub_alpha}\\3c{outline_c}"
-                                f"\\bord{txt.outline * k * (0.7 if i == 0 else 0.55):.2f}"
-                                f"\\shad{txt.shadow * k * 0.6:.2f}", body))
+        looks.append((L_INFO, f"\\1c{color}{sub_alpha}\\3c{outline_c}"
+                              f"\\bord{txt.outline * k * (0.7 if i == 0 else 0.55):.2f}"
+                              f"\\shad{txt.shadow * k * 0.6:.2f}"))
+        move_in = f"\\move({x_text + slide:.1f},{y:.1f},{x_text:.1f},{y:.1f},0,{_IN_MS})"
+        for layer, look in looks:
+            if out_end - out_start >= 150:
+                events.append(_dialogue(layer, a, out_start, f"{font}{move_in}\\fad(350,0){look}", body))
+                move_out = f"\\move({x_text:.1f},{y:.1f},{x_text + slide:.1f},{y:.1f},0,{out_end - out_start:.0f})"
+                events.append(_dialogue(layer, out_start, out_end,
+                                        f"{font}{move_out}\\fad(0,{out_end - out_start:.0f}){look}", body))
+            else:  # too short a card for both: in, then a plain fade
+                events.append(_dialogue(layer, a, t1, f"{font}{move_in}\\fad(350,300){look}", body))
     bar_x = (W - margin - bar_w) if right else margin
     rect = f"m 0 0 l {bar_w:.1f} 0 l {bar_w:.1f} {block_h:.1f} l 0 {block_h:.1f}"
-    events.append(_dialogue(L_INFO, t0, t1, f"\\an7\\pos({bar_x:.1f},{margin:.1f})\\bord0\\shad{txt.shadow * k * 0.4:.2f}"
-                            f"\\1c{accent}\\fscy0\\t(0,380,0.6,\\fscy100)\\fad(250,500)", f"{{\\p1}}{rect}{{\\p0}}"))
+    bar = f"\\an7\\pos({bar_x:.1f},{margin:.1f})\\bord0\\shad{txt.shadow * k * 0.4:.2f}\\1c{accent}"
+    shape = f"{{\\p1}}{rect}{{\\p0}}"
+    shrink = t1 - _BAR_MS
+    if shrink >= t0 + _BAR_MS:
+        events.append(_dialogue(L_INFO, t0, shrink, f"{bar}\\fscy0\\t(0,{_BAR_MS},0.6,\\fscy100)\\fad(250,0)", shape))
+        events.append(_dialogue(L_INFO, shrink, t1, f"{bar}\\t(0,{_BAR_MS},1.6,\\fscy0)\\fad(0,250)", shape))
+    else:
+        events.append(_dialogue(L_INFO, t0, t1, f"{bar}\\fscy0\\t(0,{_BAR_MS},0.6,\\fscy100)\\fad(250,500)", shape))
     return events
 
 

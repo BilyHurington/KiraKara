@@ -591,11 +591,26 @@ def test_title_card_comes_again_at_the_end_of_the_song():
 
     def cards(style):
         text, warnings = A.build_ass(p, r, style)
-        spans = sorted({(_ms(l.split(",")[1]), _ms(l.split(",")[2])) for l in _events(text, "KInfo") if "\\p1" in l})
+        spans = []  # the accent bar's showings (growing and shrinking events joined)
+        for a, b in sorted({(_ms(l.split(",")[1]), _ms(l.split(",")[2])) for l in _events(text, "KInfo") if "\\p1" in l}):
+            if spans and spans[-1][1] == a:
+                spans[-1] = (spans[-1][0], b)
+            else:
+                spans.append((a, b))
         return spans, warnings
 
     spans, _ = cards(st)
     assert spans == [(0, 3000), (25000, 30000)]  # the opening card, and the same card until the song ends
+    # leaving mirrors coming in: the lines slide back out toward the edge (the last line first), then
+    # the bar shrinks up
+    text, _ = A.build_ass(p, r, st)
+    outs = [l for l in _events(text, "KInfo") if ",0:00:0" in l and "\\move" in l and "\\fad(0," in l]
+    assert len(outs) == 2
+    x = [re.search(r"\\move\(([\d.]+),[\d.]+,([\d.]+)", l).groups() for l in outs]
+    assert all(float(b) < float(a) for a, b in x)  # top-left card: back toward the left edge
+    title_out, artist_out = sorted(outs, key=lambda l: "\\fs56.0" not in l)
+    assert _ms(artist_out.split(",")[2]) < _ms(title_out.split(",")[2]) <= 3000 - 200
+    assert any("\\p1" in l and "\\t(0,380,1.6,\\fscy0)" in l and l.split(",")[2] == "0:00:03.00" for l in _events(text, "KInfo"))
     st.info.outro = False
     assert cards(st)[0] == [(0, 3000)]
     # lyrics along the top at the end, where the card is: it comes in after they have gone (2 s at least)
