@@ -1,62 +1,99 @@
 # Kara Align HTTP API (local WebUI)
 
-Served by `kara-align serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON.
+Served by `kara-align serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON unless noted.
 Times are integer ms on the original audio timeline, intervals `[start_ms, end_ms)`.
-Errors: HTTP 4xx/5xx with `{"detail": "<human readable message>"}`.
+Errors: HTTP 4xx/5xx with `{"detail": "<human readable message>"}` (pydantic body validation errors are FastAPI's 422 list).
 
-`Project`, `LyricsDoc`, `Line`, `Segment`, `Unit`, `Calibration`, `AudioAsset`,
-`AlignmentResult`, `UnitTiming`, `Issue`, `Candidate`, `MixSettings` are the
-pydantic models in `kara_align/models.py`, serialized as-is.
+`Project`, `LyricsDoc`, `Line`, `Segment`, `Unit`, `Calibration`, `AudioAsset`, `VideoAsset`,
+`AlignmentResult`, `UnitTiming`, `Issue`, `Candidate`, `MixSettings`, `KaraokeStyle`, `AiRoundtrip` are the
+pydantic models in `kara_align/models.py`, serialized as-is. `AppSettings` / `TaskStyleOptions` are in
+`kara_align/settings.py`, `PipelineTask` in `kara_align/pipeline.py`.
+
+## Access and status codes
+
+- **Local only.** Requests whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` get **403** (DNS rebinding);
+  more host names can be allowed with `kara-align serve --allow-host NAME` (repeatable; `--host` with a named
+  address allows that name too). A request other than GET / HEAD / OPTIONS that carries an `Origin` of another
+  site (scheme not http/https, or host:port ≠ `Host`) gets **403** (CSRF).
+- **400**: invalid input or a state that does not allow the operation (`ServiceError`, `ProjectError`, mix / fetch errors).
+- **404**: unknown or invalid project id (ids must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`), unknown result id
+  (`/results/{rid}/…`, `result_id=` of an export), job, task, exported file.
+- **409**: see [Conflicts](#conflicts-409).
+- **413**: text body > 5 MB, upload > 8 GB (media), project.json > 64 MB, package > 4 GB.
+- **422**: body does not match its schema, e.g. an unknown `kind` in `PATCH …/lines/{id}` (`lyric|translation|romanization|meta|blank`)
+  or an unknown lyrics `origin` (`paste|upload|netease|qq|project|manual`).
 
 ## General
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/info` | – | `{version, backends: [{name, description, languages, available, default_model, license}], separation_presets: [{name, filename, notes}], separation_available: bool, export_formats: {fmt: {filename, description}}}` |
+| GET | `/api/info` | – | `{version, backends: [{name, description, languages, default_model, default_revision, license, available, missing}], separation_presets: [{name, model_filename, architecture, notes, license_note, leading_padding_samples}], separation_available: bool, tasks_elsewhere: bool, export_formats: {fmt: {filename, description}}}` |
 | GET | `/api/jobs/{job_id}` | – | `Job` = `{id, kind, project_id, status: queued\|running\|succeeded\|failed\|cancelled, progress 0..1, message, error, created, finished, output}` |
 | POST | `/api/jobs/{job_id}/cancel` | – | `Job` |
 | GET | `/api/projects/{pid}/jobs` | – | `[Job]` |
+
+Job kinds: `align`, `separate`, `ai`, `calibrate`, `mix`, `video`, `burn`. Heavy jobs (align, separate, calibrate, burn)
+run one at a time and share one lock with the simple-mode queue. Cancelling a job (or stopping the server) stops its
+subprocesses: separation, AI CLI processes (the whole process group), ffmpeg. Jobs live in memory: after a restart
+they are gone (the UI shows an operation that was running as failed: the local server was restarted).
+
+`tasks_elsewhere: true` means another server process on the same workspace runs the simple-mode task queue (see below).
 
 ## Projects
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/projects` | – | `[{id, name, mode, updated}]` |
+| GET | `/api/projects` | – | `[{id, name, mode, updated}]` newest first (unreadable projects are left out) |
 | POST | `/api/projects` | `{name, mode: "plain"\|"lrc"}` | `ProjectView` |
 | GET | `/api/projects/{pid}` | – | `ProjectView` |
-| PATCH | `/api/projects/{pid}` | `{name?, mode?, config?: AlignConfig (partial ok), mix?: MixSettings}` | `ProjectView` |
+| PATCH | `/api/projects/{pid}` | `{name?, mode?, config?: AlignConfig (partial ok), mix?: MixSettings (partial ok)}` | `ProjectView`; every value is checked before anything changes (NaN / ∞ → 400) |
 | DELETE | `/api/projects/{pid}` | – | `{ok}`; deletes the project folder (audio, stems, exports). 409 while a simple-mode task or a job works on it |
-| POST | `/api/projects/import` | multipart `file` (project.json or .kara.zip) | `ProjectView` |
-| GET | `/api/projects/{pid}/package?include_audio=1` | – | zip download |
+| POST | `/api/projects/import` | multipart `file` (project.json or .kara.zip) | `ProjectView`; the imported project always gets a **new id** (an id in the file is never used as a folder name) |
+| GET | `/api/projects/{pid}/package?include_audio=1` | – | zip download (built in a temporary folder, not kept in `exports/`) |
 
-`ProjectView` = `{project: Project, view: {effective_starts: {line_id: {ms, kind: "soft"|"hard"}}, calibration_issues: [Issue], mode_notice: str|null, results: [{id, created, mode, stale, stale_reason, coverage, parent_result_id, n_units, n_failed, n_issues, n_manual}], capability_warnings: [str], audio: {role: {asset_id, available: bool, duration_ms}}}}`.
+`ProjectView` = `{project: Project, view: {effective_starts: {line_id: {ms, kind: "soft"|"hard"}}, calibration_issues: [Issue], mode_notice: str|null, results: [ResultSummary], capability_warnings: [str], audio: {role: {asset_id, duration_ms, sample_rate, available: bool, outdated: bool}}}}`.
 
-Result staleness is recomputed on every read: results whose input snapshot no longer
-matches the current lyrics text / readings / calibration / mode / audio get
-`stale: true` with a reason (still viewable).
+- `ResultSummary` = `{id, created, mode, stale, stale_reason, coverage, parent_result_id, n_units, n_failed, n_issues, n_manual, audio_role, backend}`.
+- `audio.*.outdated`: a vocals / instrumental stem separated from an original that has since been replaced; such stems are
+  not `available` (not used for alignment, listening, mixes or reduced-vocal videos) until separated again.
+- Some endpoints add fields to the `ProjectView`: `messages` (lyrics/apply), `report` (readings/prepare),
+  `summary` (ai/apply), `result_id` (results/import), `paired` (lyrics/fetch-translation).
+
+Result staleness is recomputed on every read: results whose input snapshot no longer matches the current
+lyrics text / readings / voices, unit flags, segment languages, anchor tolerances, end marks (`stats.detail_revision`) /
+calibration / mode / audio get `stale: true` with a reason (still viewable).
+
+Stored data is read leniently: `MixSettings` values outside their ranges go back to the default, a damaged
+`project.json` is replaced by `project.json.bak` (the damaged file is kept as `project.broken-<time>.json`).
+Content hashes (`sha256`) must be 64 lowercase hex characters.
 
 ## Lyrics input (paste and upload share the same path: uploads are read as text by the browser and sent with `origin: "upload"` + `filename`)
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | POST | `/api/projects/{pid}/lyrics/parse` | `{text, origin: "paste"\|"upload", filename?}` | `LyricsPreview` |
-| POST | `/api/projects/{pid}/lyrics/apply` | `{preview_id}` | `ProjectView` (replaces lyrics doc; old results become stale) |
-| POST | `/api/projects/{pid}/lyrics/track/preview` | `{text, kind: "translation"\|"romanization", origin, filename?}` | `{preview_id, pairs: [{line_id, line_text, text, method}], unmatched: [text]}` |
+| POST | `/api/projects/{pid}/lyrics/apply` | `{preview_id}` | `ProjectView` + `messages: [str]` (replaces the lyrics doc; old results become stale) |
+| POST | `/api/projects/{pid}/lyrics/track/preview` | `{text, kind: "translation"\|"romanization", origin, filename?}` | `{kind, pairs: [{line_id, line_text, text, method: "time"\|"nearest"\|"order", delta_ms}], unmatched_line_ids: [str], unmatched: [text]}` |
 | POST | `/api/projects/{pid}/lyrics/track/apply` | `{kind, pairs: [{line_id, text}]}` | `ProjectView` |
-| POST | `/api/lyrics/link` | `{text}` (URL / share text / short link / `netease:123` / `qq:mid`) | `{kind: "song", song: FetchedSong}` or `{kind: "collection", platform, songs: [{platform, song_id, title, artists, album, duration_ms}]}` |
+| POST | `/api/projects/{pid}/lyrics/fetch-translation` | – | `ProjectView` + `paired: int` (the translation of the NetEase / QQ song the lyrics came from; 400 when there is none) |
+| POST | `/api/lyrics/link` | `{text}` (URL / share text / short link / `netease:123` / `qq:mid`) | `{kind: "song", song: FetchedSong}` or `{kind: "collection", platform, title, songs: [{platform, song_id, title, artists, album, duration_ms}]}` |
 | POST | `/api/lyrics/song` | `{platform, song_id}` | `{kind: "song", song: FetchedSong}` |
-| POST | `/api/projects/{pid}/lyrics/from-song` | `{platform, song_id}` | `LyricsPreview` (original track; translation/romanization offered as `extra_tracks`) |
+| POST | `/api/projects/{pid}/lyrics/from-song` | `{platform, song_id}` | `LyricsPreview` (original track; translation/romanization offered as `extra_tracks`; plus `song` without `tracks`) |
 
 `lyrics/parse` also accepts `prepared.json` (lyrics with readings). For project / alignment / reading-patch JSON it returns an `error` plus `route` naming where that file belongs.
 
 `LyricsPreview` = `{preview_id, detected, warnings: [str], error: str|null, doc: LyricsDoc, extra_tracks: {kind: text}}`. When `error` is set (e.g. LRC mode without valid times) the preview cannot be applied; the UI must offer to add times or switch mode.
-`FetchedSong` = `{platform, song_id, title, artists: [str], album, duration_ms, tracks: {original?, translation?, romanization?}, has_timestamps: {track: bool}}`.
+`FetchedSong` = `{platform, song_id, title, artists: [str], album, duration_ms, tracks: {original?, translation?, romanization?}, has_timestamps: {track: bool}, …}`.
+
+Applying other lyrics un-confirms the LRC calibration (unless every timed line and `[offset]` is unchanged); the reference
+mark and check marks stay only on lines with the same text and time, and a shift that belonged to other lyrics is reset
+to 0 with a message (undo: `calibration/undo`). QQ Music's `//` placeholder lines never become translations.
 
 ## Lines and readings
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| PATCH | `/api/projects/{pid}/lines/{line_id}` | `{text?, sing?, kind?, translation?, voice?}` | `ProjectView` |
+| PATCH | `/api/projects/{pid}/lines/{line_id}` | `{text?, sing?, kind?, translation?, voice?}` | `ProjectView` (a line edited, or switched back to a sung lyric without units, gets rule readings at once) |
 | POST | `/api/projects/{pid}/lines/merge` | `{line_ids}` | `ProjectView` |
 | POST | `/api/projects/{pid}/lines/{line_id}/split` | `{at: int (char index)}` | `ProjectView` |
 | PUT | `/api/projects/{pid}/lines/{line_id}/anchor` | `{abs_ms: int\|null, hard: bool, tolerance_ms}` | `ProjectView` |
@@ -64,9 +101,14 @@ matches the current lyrics text / readings / calibration / mode / audio get
 | PUT | `/api/projects/{pid}/lines/{line_id}/segments/{segment_id}` | `{reading, units?: [str], confirm: bool}` | `ProjectView` |
 | POST | `/api/projects/{pid}/ai/prompt` | `{line_ids?: [str]}` | `{prompt, snapshot_id, roundtrip_id}` |
 | POST | `/api/projects/{pid}/ai/validate` | `{text}` (raw chat reply or JSON) | `{report_id, report: PatchReport}` |
-| POST | `/api/projects/{pid}/ai/apply` | `{report_id, line_ids?: [str]}` | `ProjectView` |
+| POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = the `/ai/validate` response + `meta {provider, attempts: [{provider, model, elapsed_s, cost_usd}], cost_usd}`; nothing applied). 400 when no AI is set up |
+| POST | `/api/projects/{pid}/ai/apply` | `{report_id, line_ids?: [str]}` | `ProjectView` + `summary`. 409 when a line of the report no longer exists (lines merged / split since the validation) |
 
-`PatchReport` = `{ok: bool, snapshot_match: bool, warnings: [str], errors: [str], lines: [{line_id, status: "ok"\|"stale_text"\|"unknown_line"\|"locked_skipped"\|"invalid"\|"unchanged", reasons: [str], diff: [{surface, old_reading, new_reading, old_units: [str], new_units: [str]}]}]}`.
+`PatchReport` = `{ok: bool, snapshot, roundtrip_id, errors: [str], warnings: [str], missing_line_ids: [str], lines: [{line_id, status: "ok"|"stale_text"|"stale_reading"|"unknown_line"|"locked_skipped"|"invalid"|"duplicate", reasons: [str], segments: [..], diff: [{surface, old_reading, new_reading, old_units: [str], new_units: [str], changed, locked}]}]}`.
+
+The project keeps each round trip as an `AiRoundtrip`; its `report` is `{line_hashes, line_texts, validation}`: the
+per-line reading hashes and texts taken when the prompt was made (so a later validation still sees readings changed since)
+and the last `PatchReport`.
 
 ## Audio
 
@@ -75,13 +117,25 @@ matches the current lyrics text / readings / calibration / mode / audio get
 | POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`). The file may be a **video**: its first audio track is extracted losslessly (FLAC) and used; a video uploaded as the original is kept as `project.video` (with `audio_offset_s`) for re-muxing. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/playback.wav` | – | decoded PCM WAV (same decoder as alignment → identical time origin). Supports Range. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/peaks?per_second=200` | – | `{sample_rate, duration_ms, per_second, mins: [float], maxs: [float]}` (mono, first peak at 0 ms) |
-| POST | `/api/projects/{pid}/separate` | `{preset, device?: "auto"\|"cpu"}` | `Job` (on success adds vocals + instrumental assets) |
-| POST | `/api/projects/{pid}/mix/export` | `MixSettings` | `Job`; output `{filename, url, report}`; `url` downloads the WAV |
+| POST | `/api/projects/{pid}/separate` | `{preset, device?: "auto"\|"cpu"}` | `Job` (on success adds vocals + instrumental assets). `preset` must be one of `/api/info.separation_presets` (`melband-roformer`, `bs-roformer`, `mdx-fast`, `demucs-htdemucs`), else 400. Stopped after duration × 5 + 10 min |
+| POST | `/api/projects/{pid}/mix/preview-gain` | `MixSettings` | `{bus_gain, peak_before}` |
+| POST | `/api/projects/{pid}/mix/export` | `MixSettings` | `Job` (kind `mix`); output `{filename, url, report}`; `url` downloads the WAV |
+| POST | `/api/projects/{pid}/video/export` | `MixSettings` | `Job` (kind `video`); output `{filename, url, report}`: the original video's picture copied unchanged, the mix as its only soundtrack, at the original audio offset. Needs `project.video` and current stems. |
+
+`MixSettings` = `{vocal_keep_pct: 0–100, instrumental_pct: 0–100, master: 0–4, limiter: "none"|"normalize_peak"}`; a value out of
+range, NaN or not a number is refused with 400 (before a job starts).
 
 Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; bus gain `min(1, 10^(-0.3/20)/peak)` when `limiter = normalize_peak`. Browser playback computes it with GainNodes; only the export applies a precomputed bus gain from the full-file peak (the UI shows the same number from `/mix/preview-gain`).
 
-| POST | `/api/projects/{pid}/video/export` | `MixSettings` | `Job` (kind `video`); output `{filename, url, report}`: the original video's picture copied unchanged, the mix as its only soundtrack, at the original audio offset. Needs `project.video` and both stems. |
-| POST | `/api/projects/{pid}/mix/preview-gain` | `MixSettings` | `{bus_gain, peak_before}` |
+## Exported files
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/projects/{pid}/exports` | `[{filename, url, size, modified}]`: files in the project's `exports/` folder, newest first (partial files whose name starts with `.` are left out) |
+| GET | `/api/projects/{pid}/exports/{filename}` | the file (download); 404 for anything that is not a plain file name in `exports/` |
+
+Every `url` returned for an exported file (mix, video, burn, task video, this list) is
+`/api/projects/{pid}/exports/{filename}` with both parts URL-encoded (names may contain `#`, `?`, `%`, spaces …).
 
 ## Calibration (LRC mode)
 
@@ -92,6 +146,7 @@ Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; 
 | POST | `/api/projects/{pid}/calibration/confirm-zero` | – | `ProjectView` |
 | POST | `/api/projects/{pid}/calibration/check` | `{line_id, marked_ms}` | `ProjectView` (check residual in `calibration.checks`, warnings in `view.calibration_issues`) |
 | POST | `/api/projects/{pid}/calibration/undo` | – | `ProjectView` |
+| POST | `/api/projects/{pid}/calibration/suggest` | – | `Job` (kind `calibrate`; output `{shift_ms, agree, lines_checked, line_starts, vocal_onset_ms, audio_role}`; nothing is saved). Uses the vocals only when the stems are current |
 
 ## Alignment and results
 
@@ -103,40 +158,104 @@ Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; 
 | POST | `/api/projects/{pid}/results/{rid}/activate` | – | `ProjectView` |
 | PUT | `/api/projects/{pid}/results/{rid}/units/{uid}` | `{start_ms, end_ms, locked}` | `UnitTiming` |
 | DELETE | `/api/projects/{pid}/results/{rid}/units/{uid}/manual` | – | `UnitTiming` |
-| POST | `/api/projects/{pid}/results/{rid}/units/{uid}/lock` | `{locked}` | `UnitTiming` |
+| POST | `/api/projects/{pid}/results/{rid}/units/{uid}/lock` | `{locked}` | `UnitTiming`; 400 when the unit has no times to lock |
 | POST | `/api/projects/{pid}/results/{rid}/units/{uid}/restore` | `{manual: ManualEdit\|null}` | `UnitTiming` (undo/redo support) |
 | POST | `/api/projects/{pid}/results/{rid}/adopt` | `{from_result_id?, candidate_id?, line_ids: [str]}` | `AlignmentResult` (copies non-locked unit times of the lines from a local rerun or a candidate; locked units untouched) |
 
-A local rerun (`align` with `line_ids`) creates a new partial result with `parent_result_id`; it never overwrites the parent. The UI compares and adopts per line.
+A local rerun (`align` with `line_ids`) creates a new partial result with `parent_result_id`; it never overwrites the parent.
+In plain mode it decodes only the stretch between the neighbouring lines' times in the previous result. The UI compares and adopts per line.
+
+`AlignmentResult.stats` includes `algorithm` (currently `"kara-align-decoder/2"`), `original_sha256` (the original recording the
+times refer to) and `detail_revision`. Manual edits of the previous result are applied before the checks run; they are not
+carried to a different original (issue `manual_audio_changed`, the edits stay in the unit's `manual_history`), follow a reading
+change by position inside the segment (`manual_reading_changed`) or are reported as dropped (`manual_dropped`). A segment with
+letters / digits but no reading gives `segment_no_reading`; lines whose LRC time is after the end of the audio are left out
+(`lines_after_audio`).
 
 ## Export
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/api/projects/{pid}/export/{fmt}?result_id=&download=1` | file download (Content-Disposition) |
+| GET | `/api/projects/{pid}/export/{fmt}?result_id=&download=1` | file download (Content-Disposition with a UTF-8 file name; `X-Export-Warnings: <count>` when there are warnings) |
 | GET | `/api/projects/{pid}/export/{fmt}?result_id=` | `{filename, media_type, content, warnings}` |
 
-`fmt` ∈ `alignment, prepared, project, csv, lrc-line, lrc-unit, lrc-calibrated`; stems via `/audio/{asset_id}/playback.wav`, mix via `/mix/export`.
+`fmt` ∈ `alignment, prepared, project, csv, lrc-line, lrc-unit, lrc-calibrated, karaoke-ass`; stems via `/audio/{asset_id}/playback.wav`, mix via `/mix/export`.
+Warnings say when the result is stale or partial and how many lines were skipped because they are after the end of the audio.
+`karaoke-ass` always uses the active result and the project's saved style (see below).
 
-## App settings, AI and the simple-mode task queue
+## Karaoke subtitles
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `/api/fonts` | – | `{default, families: [{family, names, bold}]}` (fonts that can render Japanese, via fontconfig) |
+| GET | `/api/karaoke/styles` | – | `[{id, name, builtin, updated, style: KaraokeStyle}]` (built-in 默认 / 暖阳 first, then the saved ones) |
+| POST | `/api/karaoke/styles` | `{name, style, id?}` | the saved entry (`id` given: overwrite it; else a new one, or the one with this name). 400 for a built-in name / id or an invalid style |
+| DELETE | `/api/karaoke/styles/{style_id}` | – | `{ok}` (built-ins cannot be deleted) |
+| GET | `/api/karaoke/themes` | – | `{templates: [{id: "plain"\|"glow", label}], swatches}` |
+| POST | `/api/karaoke/theme` | `{template, color, secondary?, base?: KaraokeStyle}` | `{palette, style}`: the colour template applied on top of `base` (default: the simple mode's style) |
+| GET | `/api/projects/{pid}/karaoke` | – | `KaraokeStyle` |
+| PUT | `/api/projects/{pid}/karaoke` | `KaraokeStyle` | `KaraokeStyle` (validated strictly, see below) |
+| GET | `/api/projects/{pid}/karaoke/info` | – | `{fields: {field: text}, labels, text: str\|null}` (title card data; `text` = the project's own text) |
+| PUT | `/api/projects/{pid}/karaoke/info` | `{text: str\|null}` | same as GET (`null` goes back to the song data) |
+| POST | `/api/projects/{pid}/karaoke/preview` | `{t_ms, style?, background?: "auto"\|"black"}` | `image/png` of the whole frame at `t_ms` (libass, the video's displayed size) |
+| POST | `/api/projects/{pid}/karaoke/burn` | `{background?: "auto"\|"black", audio?: "original"\|"mix"\|"none", quality?: "standard"\|"high", vocal_keep_pct?: 0–100}` | `Job` (kind `burn`); output `{filename, url, warnings}` |
+
+Styles are validated strictly when saved (`PUT …/karaoke`, `POST /api/karaoke/styles`: 400 for a colour that is not
+`#RRGGBB` / `#RGB` or a number out of range); styles read from projects, `styles.json` or `settings.json`, the style of
+`PUT /api/settings` and the `style` of a preview are clamped / fixed up instead (`#RGB` → `#RRGGBB`, numbers into their range,
+unknown values → default). See `docs/karaoke.md`.
+
+## App settings and AI
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | GET | `/api/settings` | – | `AppSettings` (`ai.api_key` is never returned; `ai.has_api_key`, `ai.env_key_present` instead) |
-| PUT | `/api/settings` | partial `{ai?, simple?}`; `ai.api_key` replaces the key only when non-empty, `ai.clear_api_key: true` removes it | `AppSettings` |
+| PUT | `/api/settings` | partial `{ai?, simple?}` (nested merge); `ai.api_key` replaces the key only when non-empty, `ai.clear_api_key: true` removes it, `simple.reset_karaoke: true` resets the simple mode's style to the built-in 暖阳 | `AppSettings`; 400 `设置无效：…` for an invalid value |
 | GET | `/api/ai/providers?refresh=0` | – | `[{id: "claude"\|"codex"\|"openai", label, available, version, detail}]` |
 | POST | `/api/ai/test` | optional overrides of the AI settings | `{ok, reply?, model?, elapsed_s?, cost_usd?, error?}` |
-| POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = `/ai/validate` response + `meta {provider, attempts, cost_usd}`; nothing applied) |
-| GET | `/api/tasks` | – | `[PipelineTask]` newest first |
+
+- `ai.base_url` must be an `http://` or `https://` URL without user / password; `ai.api_key_env` must match
+  `^[A-Z][A-Z0-9_]*(KEY|TOKEN)$`; `simple.separation_preset` must be a known preset.
+- `/api/ai/test` with a `base_url` other than the saved one needs the `api_key` for it in the same request: the saved key
+  (or the key variable) is only ever sent to the saved address.
+- `settings.json` (`<KARA_ALIGN_HOME>/settings.json`, default `~/.kara_align`, mode 600): a field that is no longer valid
+  falls back to its default, every other field (the API key above all) is kept; an unreadable file is kept as
+  `settings.broken-<time>.json` and the defaults are used. An unreadable `styles.json` (saved styles) is kept as
+  `styles.broken.json` (or `styles.broken-<time>-<id>.json` when that exists); a saved entry this version cannot read is
+  skipped and written back unchanged.
+
+## Simple-mode task queue
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `/api/tasks` | – | `[PipelineTask]` newest first (without `karaoke`, `detail`, `warning_stage`) |
 | POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?`, `style?` (JSON `TaskStyleOptions`: source / template / colours / saved preset / translation / title card / ruby / video sound; omitted = the last choices) | `PipelineTask` (with its `karaoke`, `video` and `processing` snapshots) |
 | POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
 | POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
 | POST | `/api/tasks/{id}/calibration` | `{marked_ms}` (first sung onset of `calibration.line_id`) or `{plain: true}` | `PipelineTask` (only while `waiting`; the task continues) |
-| POST | `/api/projects/{pid}/calibration/suggest` | – | `Job` (kind `calibrate`; output `{shift_ms, agree, lines_checked, line_starts, vocal_onset_ms, audio_role}`; nothing is saved) |
 | DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
 
-`PipelineTask`: `{id, name, mode, status: preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted, calibration (while waiting: {line_id, line_text, lrc_ms, lines, check_line, asset_id, duration_ms}), project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, calibrate, readings, separate, align, export` (stage status may be `waiting`). See `docs/simple-mode.md`.
+`PipelineTask` = `{id, created, finished, name, mode, media_filename, lyrics_kind: "link"|"text", lyrics_input, status, project_id, project_deleted, progress, message, error, warnings: [str], current_stage, stages: [{key, label, status, progress, message, failed_soft}], outputs: {video?: {filename, url}}, calibration, calibration_confirmed, video: TaskVideo, processing: TaskProcessing, style_label, style_colors: [str], style_applied, name_auto}` (+ `karaoke: KaraokeStyle`, `detail` (traceback) and `warning_stage` in the responses of the POST endpoints, not in the list).
 
-While a simple-mode task is working on a project (preparing / waiting / queued / running), `POST .../align`,
-`.../separate`, `.../ai/auto`, `.../karaoke/burn` and `.../audio` answer 409 with the task's name in `detail`;
-conversely `POST /api/tasks/{id}/retry` and `/calibration` answer 409 while a detailed-mode job runs on the task's project.
+- `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export`, stage status `pending|running|waiting|done|skipped|failed`.
+- `calibration` (LRC mode, while `waiting`): `{line_id, line_text, lrc_ms, lines: [{id, text, lrc_ms}], check_line, asset_id, duration_ms, lines_after_audio, lines_total}`; the list adds `current_ms` (the project's current offset applied to `lrc_ms`, when one was set in the detailed mode, else `null`); after a confirmation it holds `confirmed_ms`.
+- `video` = `{auto_export, video_audio, vocal_keep_pct, quality}`, `processing` = `{ai_provider, ai_model, ai_readings, separate, separation_preset, separation_device}`, both fixed when the task is added. `style_label` / `style_colors` describe the task's subtitle style for the list.
+- `project_deleted: true`: the project was deleted in the detailed mode; the task stays listed without links and cannot be retried.
+- When `tasks.json` cannot be written (disk full …) the running task gets a warning.
+
+One server process per workspace runs the queue: it holds an exclusive lock on `<workspace>/.tasks/lock`. Another process
+on the same workspace only shows the tasks (`/api/info.tasks_elsewhere: true`) and answers 409 to every change.
+Stopping the server: tasks that had not started yet go back to `queued` / `preparing` (continued after the restart), running
+ones become `interrupted` (retry continues them). An unreadable `tasks.json` is kept as `tasks.broken-<time>.json`.
+See `docs/simple-mode.md`.
+
+## Conflicts (409)
+
+- Task queue: removing a running task; retrying a task that is not failed / cancelled / interrupted; any change
+  (add / cancel / retry / confirm / remove) while another server process runs the queue.
+- While a simple-mode task is working on a project (preparing / waiting / queued / running), `POST …/align`, `…/separate`,
+  `…/ai/auto`, `…/karaoke/burn`, `…/audio`, `…/calibration/suggest` and `DELETE /api/projects/{pid}` answer 409 with the task's name in `detail`.
+- Conversely `POST /api/tasks/{id}/retry` and `/calibration` answer 409 while a detailed-mode `align`, `separate` or `ai` job
+  runs on the task's project (jobs that only read the project — burns, exports, the offset suggestion — do not block them).
+- `DELETE /api/projects/{pid}` while any job of the project is queued or running.
+- `POST …/ai/apply` with a report whose lines no longer exist (lyrics merged / split since the validation).
