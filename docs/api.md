@@ -1,6 +1,6 @@
-# Kara Align HTTP API (local WebUI)
+# KiraKara HTTP API (local WebUI)
 
-Served by `kara-align serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON unless noted.
+Served by `kirakara serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON unless noted.
 Times are integer ms on the original audio timeline, intervals `[start_ms, end_ms)`.
 Errors: HTTP 4xx/5xx with `{"detail": "<human readable message>"}` (pydantic body validation errors are FastAPI's 422 list).
 
@@ -9,10 +9,80 @@ Errors: HTTP 4xx/5xx with `{"detail": "<human readable message>"}` (pydantic bod
 pydantic models in `kara_align/models.py`, serialized as-is. `AppSettings` / `TaskStyleOptions` are in
 `kara_align/settings.py`, `PipelineTask` in `kara_align/pipeline.py`.
 
+## 快速上手：用脚本提交任务
+
+下面是用脚本驱动极简模式的完整流程（服务默认在 `http://127.0.0.1:8765`；脚本请求不需要浏览器的 `Origin` 头，只要发往本机地址）。完整的接口说明在后面的英文参考里。
+
+**1. 添加任务**：`file` 是视频或音频；`lyrics` 是网易云 / QQ 音乐的歌曲链接或 LRC / 纯文本歌词；`background`（可选）是背景图片或循环播放的背景视频；`style`（可选）是这首歌的字幕选项（JSON，不给则用上次的选择）。
+
+```bash
+curl -F file=@song.mp3 -F background=@cover.jpg \
+     -F lyrics='https://music.163.com/song?id=505665083' -F mode=lrc \
+     http://127.0.0.1:8765/api/tasks
+```
+
+返回的 `PipelineTask` 里有任务 `id`。
+
+**2. 查看进度**：`GET /api/tasks` 返回所有任务（新的在前）。`status` 为 `preparing` / `queued` / `running` 时继续等待；`succeeded` 时 `outputs.video.url` 就是成品视频的下载地址；`failed` 时看 `error`。
+
+**3. 任务在等你（`status` 为 `waiting`）**：看哪个步骤的 `status` 是 `waiting`。
+
+- `calibrate`（确认第一句从哪里开始唱）：`task.calibration` 里有第一句的歌词和它在 LRC 里的时间 `lrc_ms`。
+  `POST /api/tasks/{id}/calibration`，body `{"marked_ms": 14684}`（第一句实际开始唱的毫秒数），或 `{"plain": true}` 改用普通模式。
+  设置里把“歌词开头对齐”改成自动检测（`simple.calibration: "auto"`）后，只有没把握时才会停在这里。
+- `readings`（AI 注音选了“手动（网页聊天）”）：`GET /api/tasks/{id}/readings/prompt` 取提示词，发给任意 AI，
+  再 `POST /api/tasks/{id}/readings`，body `{"text": "<AI 的完整回复>"}`；不想注音就 `{"skip": true}`。回复完全不能用时返回 400 和原因，任务继续等待。
+
+**4. 下载视频**：`GET` 第 2 步里的 `outputs.video.url`。
+
+只用 Python 标准库的例子（添加任务后一直等到完成，第一句的位置已知时自动确认）：
+
+```python
+import json, time, urllib.request, uuid
+
+BASE = "http://127.0.0.1:8765"
+
+def call(method, path, body=None):
+    req = urllib.request.Request(BASE + path, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)
+
+def add_task(media, lyrics, background=None, mode="lrc"):
+    boundary, body = uuid.uuid4().hex, b""
+    for k, v in {"lyrics": lyrics, "mode": mode}.items():
+        body += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    for k, path in {"file": media, "background": background}.items():
+        if path:
+            name = path.rsplit("/", 1)[-1]
+            body += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; filename="{name}"\r\n\r\n'.encode()
+            body += open(path, "rb").read() + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    req = urllib.request.Request(BASE + "/api/tasks", data=body, method="POST",
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)
+
+task = add_task("song.mp3", "https://music.163.com/song?id=505665083", background="cover.jpg")
+while True:
+    t = next(x for x in call("GET", "/api/tasks") if x["id"] == task["id"])
+    if t["status"] == "waiting":
+        waiting = next(s["key"] for s in t["stages"] if s["status"] == "waiting")
+        if waiting == "calibrate":
+            call("POST", f"/api/tasks/{t['id']}/calibration", {"marked_ms": 14684})
+        elif waiting == "readings":
+            call("POST", f"/api/tasks/{t['id']}/readings", {"skip": True})
+    elif t["status"] in ("succeeded", "failed", "cancelled"):
+        print(t["status"], t.get("outputs"), t.get("error"))
+        break
+    time.sleep(2)
+```
+
 ## Access and status codes
 
 - **Local only.** Requests whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` get **403** (DNS rebinding);
-  more host names can be allowed with `kara-align serve --allow-host NAME` (repeatable; `--host` with a named
+  more host names can be allowed with `kirakara serve --allow-host NAME` (repeatable; `--host` with a named
   address allows that name too). A request other than GET / HEAD / OPTIONS that carries an `Origin` of another
   site (scheme not http/https, or host:port ≠ `Host`) gets **403** (CSRF).
 - **400**: invalid input or a state that does not allow the operation (`ServiceError`, `ProjectError`, mix / fetch errors).
@@ -168,7 +238,7 @@ Every `url` returned for an exported file (mix, video, burn, task video, this li
 A local rerun (`align` with `line_ids`) creates a new partial result with `parent_result_id`; it never overwrites the parent.
 In plain mode it decodes only the stretch between the neighbouring lines' times in the previous result. The UI compares and adopts per line.
 
-`AlignmentResult.stats` includes `algorithm` (currently `"kara-align-decoder/2"`), `original_sha256` (the original recording the
+`AlignmentResult.stats` includes `algorithm` (currently `"kara-align-decoder/3"`), `original_sha256` (the original recording the
 times refer to) and `detail_revision`. Manual edits of the previous result are applied before the checks run; they are not
 carried to a different original (issue `manual_audio_changed`, the edits stay in the unit's `manual_history`), follow a reading
 change by position inside the segment (`manual_reading_changed`) or are reported as dropped (`manual_dropped`). A segment with
