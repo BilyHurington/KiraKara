@@ -204,6 +204,8 @@ export interface KaraokeStyle {
   };
   /** effects around the lyrics, fired by each syllable as it is sung */
   effects: { kind: EffectKind; amount: number; size: number; color: string; ruby: boolean; behind: boolean };
+  /** the colour template the colours came from; null once a colour or effect is changed by hand */
+  theme?: { template: 'plain' | 'glow'; color: string; secondary: string } | null;
   /** song title card in a top corner at the start */
   info: {
     enabled: boolean; position: 'top-left' | 'top-right'; fields: SongInfoField[];

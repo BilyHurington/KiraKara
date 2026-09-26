@@ -3,15 +3,14 @@
 // switches that change from song to song.  The choices are bound to the task when
 // it is added and remembered for the next one.
 
-import { Palette, Plus, X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { cn } from '@/lib/format';
 import type { AppSettings, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
 import { loadSavedStyles, useLibrary } from '@/store/styles';
 import { Segmented, Select, Switch } from '@/components/ui';
+import { ColorRow } from '@/components/karaoke/ThemeColors';
 
-export const SWATCHES = ['#ED35B3', '#FF4D6D', '#FF8A1E', '#F5C400', '#3CC46A', '#1FB5C9', '#2F80ED', '#8B5CF6'];
 const TEMPLATE_HINT = {
   plain: '朴素：只有扫光变色和描边，干净清楚',
   glow: '荧光：带荧光边缘、翻译发光和字幕后面的小星光',
@@ -121,29 +120,6 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
         </div>
         <StyleMock style={shown} />
       </div>
-    </div>
-  );
-}
-
-function ColorRow({ label, value, onChange, extra }: { label: string; value: string; onChange: (c: string) => void; extra?: React.ReactNode }) {
-  const custom = !SWATCHES.includes(value.toUpperCase());
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="w-9 shrink-0 text-[13px] text-muted">{label}</span>
-      {SWATCHES.map((c) => (
-        <button key={c} type="button" aria-label={`${label} ${c}`} aria-pressed={value.toUpperCase() === c}
-          onClick={() => onChange(c)} style={{ background: c }}
-          className={cn('focus-ring size-6 rounded-full ring-1 ring-black/10 transition',
-            value.toUpperCase() === c ? 'ring-2 ring-fg ring-offset-2 ring-offset-surface' : 'hover:scale-110')} />
-      ))}
-      <label title="自定义颜色" className={cn('relative grid size-6 cursor-pointer place-items-center overflow-hidden rounded-full ring-1 ring-line-strong',
-        custom && 'ring-2 ring-fg ring-offset-2 ring-offset-surface')} style={custom ? { background: value } : undefined}>
-        {!custom && <Palette className="size-3.5 text-muted" />}
-        <input type="color" aria-label={`自定义${label}`} value={value} onChange={(e) => onChange(e.target.value.toUpperCase())}
-          className="absolute inset-0 cursor-pointer opacity-0" />
-      </label>
-      <span className="ml-1 font-mono text-xs text-subtle">{value.toUpperCase()}</span>
-      {extra}
     </div>
   );
 }

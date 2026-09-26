@@ -92,6 +92,7 @@
    "color": "",
    "accent": ""
   },
+  "theme": null,
   "output": {
    "vocal_keep_pct": 20.0
   }
@@ -189,6 +190,7 @@
    "color": "",
    "accent": ""
   },
+  "theme": null,
   "output": {
    "vocal_keep_pct": 20.0
   }

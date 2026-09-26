@@ -60,3 +60,25 @@ def test_templates():
     assert (glow.layout, glow.timing, glow.ruby.script) == (base.layout, base.timing, base.ruby.script)
     with pytest.raises(ValueError):
         theme_style("neon", "#FFFFFF", base)
+
+
+def test_style_remembers_its_template_and_the_editor_can_apply_one(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.models import KaraokeStyle
+    from kara_align.web.server import create_app
+
+    st = theme_style("glow", "#ff8a1e", default_style(), "#ffc53d")
+    assert st.theme.model_dump() == {"template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D"}
+    assert st.preset == default_style().preset  # the preset bar shows "默认 · 已修改"
+    assert KaraokeStyle().theme is None and KaraokeStyle.model_validate(st.model_dump(mode="json")).theme == st.theme
+    # the detailed editor applies a template on top of its current style
+    base = default_style()
+    base.text.size, base.layout.lines = 70, 1
+    client = TestClient(create_app(tmp_path / "projects"))
+    r = client.post("/api/karaoke/theme", json={"template": "plain", "color": "#2F80ED",
+                                                 "base": base.model_dump(mode="json")}).json()["style"]
+    assert (r["text"]["size"], r["layout"]["lines"], r["theme"]["template"]) == (70, 1, "plain")
+    assert r["text"]["color_sung"] == palette("#2F80ED")["sung"]
+    assert client.post("/api/karaoke/theme", json={"template": "plain", "color": "#2F80ED",
+                                                    "base": {"text": {"size": "big"}}}).status_code == 400

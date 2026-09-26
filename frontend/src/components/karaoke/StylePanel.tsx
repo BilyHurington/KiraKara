@@ -5,15 +5,17 @@
 // style; the parent decides how to save it.
 
 import {
-  Check, ChevronDown, Download, Languages, Music, Palette, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
+  Check, ChevronDown, Download, Languages, Music, Palette, Plus, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
   LayoutTemplate, CaseSensitive,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/format';
-import type { EffectKind, FontFamily, KaraokeStyle, SongInfo, SongInfoField } from '@/lib/types';
+import { api } from '@/lib/api';
+import type { EffectKind, FontFamily, KaraokeStyle, SongInfo, SongInfoField, ThemePreview } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { deleteStyle, loadSavedStyles, sameLook, saveStyle, useLibrary } from '@/store/styles';
 import { Badge, Button, Input, Segmented, Select, SliderField, Switch, Textarea } from '@/components/ui';
+import { ColorRow, TEMPLATE_LABEL } from './ThemeColors';
 
 export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'info' | 'layout' | 'timing' | 'effects';
 type Patch = (fn: (s: KaraokeStyle) => void) => void;
@@ -127,6 +129,8 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
   const patch: Patch = (fn) => {
     const next = structuredClone(style);
     fn(next);
+    // a colour or effect changed by hand: no longer the template's colours
+    if (next.theme && themedLook(next) !== themedLook(style)) next.theme = null;
     onChange(next);
   };
   const { layout: L, text: T, ruby: R, translation: Tr, glow: G, timing: M, effects: E, info: I } = style;
@@ -138,8 +142,9 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
       <PresetBar style={style} onChange={onChange} />
       <div className="mt-2">
         <Section {...sec('colors')} icon={<Palette className="size-4" />} title="配色"
-          summary={<span className="flex items-center gap-1.5">歌词 <Dot c={T.color_unsung} /><Dot c={T.color_sung} /><Dot c={T.outline_color} />
+          summary={<span className="flex items-center gap-1.5">{style.theme ? `${TEMPLATE_LABEL[style.theme.template]}模版 · ` : ''}歌词 <Dot c={T.color_unsung} /><Dot c={T.color_sung} /><Dot c={T.outline_color} />
             {G.enabled && <>· 荧光 <Dot c={G.color_unsung} /><Dot c={G.color_sung} /></>}</span>}>
+          <ThemeBar style={style} onChange={onChange} />
           <ColorGroup title="歌词">
             <ColorField label="未唱" value={T.color_unsung} onChange={(v) => patch((s) => { s.text.color_unsung = v; })} />
             <ColorField label="已唱（扫光）" value={T.color_sung} onChange={(v) => patch((s) => { s.text.color_sung = v; })} />
@@ -320,6 +325,50 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
           <EffectsEditor style={style} patch={patch} />
         </Section>
       </div>
+    </div>
+  );
+}
+
+/** The fields a colour template sets; changing any of them by hand makes the style "自定义". */
+function themedLook(s: KaraokeStyle) {
+  const { text: t, ruby: r, translation: tr, info: i } = s;
+  return JSON.stringify([t.color_unsung, t.color_sung, t.outline_color, t.shadow_color, r.follow_colors, r.color_unsung,
+    r.color_sung, r.outline_color, tr.color, tr.outline_color, tr.glow, i.color, i.accent, s.glow, s.effects]);
+}
+
+/** Colour template + one or two theme colours; every colour below is re-derived from them. */
+function ThemeBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: KaraokeStyle) => void }) {
+  const th = style.theme ?? null;
+  const template = th?.template ?? (style.glow.enabled ? 'glow' : 'plain');
+  const color = th?.color ?? style.text.color_sung.toUpperCase();
+  const secondary = th?.secondary ?? '';
+  const apply = (t: 'plain' | 'glow', c: string, c2: string) => run(async () => {
+    const r = await api.post<ThemePreview>('/api/karaoke/theme', { template: t, color: c, secondary: c2 || null, base: style });
+    onChange({ ...r.style, output: style.output });
+  }, '应用配色失败');
+  return (
+    <div className="space-y-2.5 rounded-xl border border-line p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold tracking-wide text-muted">配色模版</span>
+        <Segmented<'plain' | 'glow'> size="sm" value={(th?.template ?? '') as 'plain'} onChange={(v) => apply(v, color, secondary)}
+          options={[{ value: 'plain', label: '朴素' }, { value: 'glow', label: '荧光' }]} />
+        {!th && <Badge tone="warn">自定义</Badge>}
+      </div>
+      <ColorRow label="主色" value={color} onChange={(c) => apply(template, c, secondary)} />
+      {secondary ? (
+        <ColorRow label="辅色" value={secondary} onChange={(c) => apply(template, color, c)}
+          extra={<button type="button" aria-label="去掉辅色" onClick={() => apply(template, color, '')}
+            className="focus-ring grid size-6 place-items-center rounded-full text-subtle hover:bg-surface-2 hover:text-fg"><X className="size-3.5" /></button>} />
+      ) : (
+        <button type="button" onClick={() => apply(template, color, '#F5C400')}
+          className="focus-ring flex items-center gap-1 rounded text-xs text-accent hover:underline">
+          <Plus className="size-3.5" />加一个辅色
+        </button>
+      )}
+      <p className="text-xs text-subtle">
+        {th ? '选模版或主题色会重新搭配下面所有颜色和荧光 / 特效；之后在下面单独修改会变为“自定义”。'
+          : '当前颜色是单独调整的。选一个模版或主题色会按它重新搭配下面所有颜色。'}
+      </p>
     </div>
   );
 }

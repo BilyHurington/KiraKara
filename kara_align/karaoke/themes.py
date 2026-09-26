@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import math
 
-from ..models import KaraokeStyle
+from ..models import KaraokeStyle, KaraokeTheme
 
 TEMPLATES = {"plain": "朴素", "glow": "荧光"}
 DEFAULT_COLOR = "#ED35B3"
@@ -202,7 +202,7 @@ def theme_style(template: str, color: str, base: KaraokeStyle, secondary: str | 
         raise ValueError(f"没有这个模版：{template}")
     p = palette(color, secondary)
     st = base.model_copy(deep=True)
-    st.preset = ""
+    st.theme = KaraokeTheme(template=template, color=color.upper(), secondary=(secondary or "").upper())
     t = st.text
     t.color_unsung, t.color_sung, t.outline_color, t.shadow_color = p["unsung"], p["sung"], p["outline"], p["shadow"]
     st.ruby.follow_colors = True

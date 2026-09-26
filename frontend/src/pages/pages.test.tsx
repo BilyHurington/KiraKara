@@ -354,6 +354,12 @@ describe('karaoke subtitles page', () => {
         api.calls.push({ method: 'POST', url: u, body: null });
         return json({ ...fixturePV(), paired: 3 });
       }
+      if (u === '/api/karaoke/theme') {
+        const b = JSON.parse(String(init!.body));
+        api.calls.push({ method: 'POST', url: u, body: b });
+        return json({ palette: {}, style: { ...b.base, text: { ...b.base.text, color_sung: b.color }, glow: { ...b.base.glow, enabled: b.template === 'glow' },
+          theme: { template: b.template, color: b.color, secondary: b.secondary ?? '' } } });
+      }
       if (u.endsWith('/karaoke/info')) {
         if (init?.method === 'PUT') {
           const body = JSON.parse(String(init.body));
@@ -400,6 +406,33 @@ describe('karaoke subtitles page', () => {
     expect(screen.getByText(/还没有翻译/)).toBeInTheDocument()
   });
 
+  it('colour template: re-derives the colours, and shows 自定义 after a colour is changed by hand', async () => {
+    seedStore('karaoke');
+    const api = karaokeServer();
+    (URL as any).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = vi.fn();
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    await screen.findByRole('heading', { level: 1, name: '卡拉OK字幕' });
+    // a new project's colours were set by hand
+    expect(await screen.findByText('自定义')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: '荧光' }));
+    await waitFor(() => expect(api.find('POST', '/api/karaoke/theme').at(-1)?.body).toMatchObject({ template: 'glow', secondary: null }));
+    expect(api.find('POST', '/api/karaoke/theme').at(-1)!.body.base.text.size).toBe(88);  // applied on top of this style
+    await userEvent.click(screen.getByRole('button', { name: '主色 #2F80ED' }));
+    await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.theme).toEqual({ template: 'glow', color: '#2F80ED', secondary: '' }), { timeout: 2000 });
+    expect(screen.queryByText('自定义')).toBeNull();
+    expect(screen.getByRole('radio', { name: '荧光' })).toBeChecked();
+    // a layout change keeps the template …
+    await userEvent.click(screen.getAllByRole('switch', { name: '粗体' })[0]);
+    expect(screen.queryByText('自定义')).toBeNull();
+    // … a colour changed by hand does not
+    fireEvent.change(screen.getByLabelText('已唱（扫光）'), { target: { value: '#00ff00' } });
+    expect(await screen.findByText('自定义')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '荧光' })).not.toBeChecked();
+    await waitFor(() => expect(api.find('PUT', '/karaoke').at(-1)?.body.theme).toBeNull(), { timeout: 2000 });
+  });
+
   it('song info card: pick lines, then edit the text freely', async () => {
     seedStore('karaoke');
     const api = karaokeServer();
@@ -423,7 +456,8 @@ describe('karaoke subtitles page', () => {
     await userEvent.clear(box);
     await userEvent.type(box, 'わたぐも{Enter}赤城みりあ');
     await waitFor(() => expect(api.find('PUT', '/karaoke/info').at(-1)?.body.text).toBe('わたぐも\n赤城みりあ'), { timeout: 2000 });
-    expect(await screen.findByText('自定义')).toBeInTheDocument();
+    const infoSection = document.querySelector('section[data-section=info]') as HTMLElement;
+    expect(await within(infoSection).findByText('自定义')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: '显示专辑' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: /恢复为按勾选自动生成/ }));
     await waitFor(() => expect(api.find('PUT', '/karaoke/info').at(-1)?.body.text).toBeNull());

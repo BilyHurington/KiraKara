@@ -635,6 +635,15 @@ class KaraokeSongInfo(_Base):
     accent: str = ""  # accent bar; "" = the lyrics' sung colour
 
 
+class KaraokeTheme(_Base):
+    """The colour template a style's colours came from (karaoke.themes).  The editor clears it
+    as soon as a colour or effect is changed by hand ("自定义")."""
+
+    template: Literal["plain", "glow"]
+    color: str
+    secondary: str = ""
+
+
 class KaraokeStyle(_Base):
     version: int = 2
     preset: str = ""  # name of the saved style it was loaded from ("" = none)
@@ -646,6 +655,7 @@ class KaraokeStyle(_Base):
     timing: KaraokeTiming = Field(default_factory=KaraokeTiming)
     effects: KaraokeEffects = Field(default_factory=KaraokeEffects)
     info: KaraokeSongInfo = Field(default_factory=KaraokeSongInfo)
+    theme: Optional[KaraokeTheme] = None  # None = colours set by hand (or a preset)
     output: KaraokeOutput = Field(default_factory=KaraokeOutput)
 
     @model_validator(mode="before")

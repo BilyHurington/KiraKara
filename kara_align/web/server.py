@@ -569,12 +569,15 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from .. import settings as app_settings
         from ..karaoke.themes import palette, theme_style
 
+        from ..models import KaraokeStyle
+
         b = body or {}
         try:
             secondary = b.get("secondary") or None
             pal = palette(b.get("color") or "", secondary)
-            st = theme_style(b.get("template") or "plain", b.get("color") or "", app_settings.load().simple.karaoke,
-                             secondary)
+            # on top of the given style (the editor's current one), else the simple mode's default
+            base = KaraokeStyle.model_validate(b["base"]) if b.get("base") else app_settings.load().simple.karaoke
+            st = theme_style(b.get("template") or "plain", b.get("color") or "", base, secondary)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         return {"palette": pal, "style": st.model_dump(mode="json")}
