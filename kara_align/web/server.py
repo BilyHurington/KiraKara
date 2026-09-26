@@ -826,6 +826,19 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
 
         return jm.submit("video", run, project_id=pid, heavy=False).to_dict()
 
+    @app.get("/api/projects/{pid}/exports")
+    def list_exports(pid: str):
+        """Files in the project's exports folder, newest first (partial ".…" files left out)."""
+        from datetime import datetime, timezone
+
+        from ..pipeline import export_url
+
+        d = handle(pid).dir / "exports"
+        files = [f for f in d.iterdir() if f.is_file() and not f.name.startswith(".")] if d.is_dir() else []
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return [{"filename": f.name, "url": export_url(pid, f.name), "size": f.stat().st_size,
+                 "modified": datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat()} for f in files]
+
     @app.get("/api/projects/{pid}/exports/{filename}")
     def exported_file(pid: str, filename: str):
         h = handle(pid)

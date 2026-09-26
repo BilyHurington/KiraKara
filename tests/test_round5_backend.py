@@ -630,3 +630,22 @@ def test_package_download_leaves_nothing_in_the_project(tmp_path, monkeypatch):
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         assert "project.json" in zf.namelist()
     assert not list((tmp_path / "projects" / pid).rglob("*.kara.zip"))
+
+
+def test_exports_folder_listing(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    client = TestClient(create_app(tmp_path / "projects"))
+    pid = client.post("/api/projects", json={"name": "x", "mode": "plain"}).json()["project"]["id"]
+    assert client.get(f"/api/projects/{pid}/exports").json() == []
+    d = tmp_path / "projects" / pid / "exports"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "My Song #2-karaoke.mp4").write_bytes(b"123")
+    (d / ".My Song-karaoke.part.mp4").write_bytes(b"partial")
+    listed = client.get(f"/api/projects/{pid}/exports").json()
+    assert [x["filename"] for x in listed] == ["My Song #2-karaoke.mp4"] and listed[0]["size"] == 3
+    assert "%23" in listed[0]["url"]
+    assert client.get(listed[0]["url"]).content == b"123"
+    client.app.state.tasks.shutdown()

@@ -298,7 +298,12 @@ export interface Info {
   separation_presets: { name: string; model_filename: string; architecture: string; notes: string; license_note: string }[];
   separation_available: boolean;
   export_formats: Record<string, { filename: string; description: string }>;
+  /** another server process on the same workspace runs the task queue (this one only shows it) */
+  tasks_elsewhere?: boolean;
 }
+
+/** GET /api/projects/{pid}/exports */
+export interface ExportFile { filename: string; url: string; size: number; modified: string }
 
 export interface LyricsPreview {
   preview_id: string | null;

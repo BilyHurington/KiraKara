@@ -5,7 +5,7 @@ import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileTex
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
-import type { ExportInline, Job } from '@/lib/types';
+import type { ExportFile, ExportInline, Job } from '@/lib/types';
 import { player, usePlayer } from '@/audio/player';
 import { ppath, resumeJobs, run, toast, trackJob, useApp, useFinishedJobs, useJob, useProject, useView } from '@/store/app';
 import { DownloadButton } from '@/components/DownloadButton';
@@ -208,22 +208,38 @@ function PreviewDialog({ preview, onClose, downloadUrl }: {
 
 // ------------------------------------------------------------------ recent exports
 
-const EXPORT_KIND: Record<string, string> = { burn: '带字幕的视频', mix: '混音 WAV', video: '降低人声的视频' };
 
-/** Videos and mixes made for this project (while the server runs), with their download links. */
+/** Files in the project's exports folder (kept across server restarts), with their download links. */
 function RecentExports() {
-  const jobs = useFinishedJobs(['burn', 'mix', 'video']).filter((j) => j.output?.url);
-  if (!jobs.length) return null;
+  const pid = useApp((st) => st.pid);
+  const done = useFinishedJobs(['burn', 'mix', 'video']).filter((j) => j.output?.url);
+  const [files, setFiles] = useState<ExportFile[] | null>(null);
+  const latest = done[0]?.id;
+  useEffect(() => {
+    if (!pid) return;
+    let stop = false;
+    api.get<ExportFile[]>(`/api/projects/${pid}/exports`)
+      .then((f) => { if (!stop) setFiles(Array.isArray(f) ? f : []); }).catch(() => undefined);
+    return () => { stop = true; };
+  }, [pid, latest]);  // listed again when a new export finishes
+  // the folder's files, plus outputs of this run's operations not listed yet
+  const listed = (files ?? []).filter((f) => /\.(mp4|wav|ass|lrc|csv|json)$/i.test(f.filename));
+  const fromJobs: ExportFile[] = done
+    .filter((j) => !listed.some((f) => f.filename === j.output.filename))
+    .map((j) => ({ filename: j.output.filename, url: j.output.url, size: -1, modified: j.finished ?? j.created }));
+  const shown = [...fromJobs, ...listed];
+  if (!shown.length) return null;
+  const kind = (name: string) => /-karaoke/.test(name) ? '带字幕的视频' : /\.wav$/i.test(name) ? '混音 WAV' : /\.mp4$/i.test(name) ? '降低人声的视频' : '导出文件';
   return (
     <Card>
       <CardHeader icon={<History className="size-4" />} title="最近导出"
-        description="本次运行服务以来生成的视频和混音；文件保存在项目的 exports 文件夹里，重启服务后仍在。" />
+        description="项目 exports 文件夹里的视频、混音等文件（重启服务后仍在）。" />
       <div className="p-2">
-        {jobs.slice(0, 8).map((j) => (
-          <Row key={j.id}
-            title={<span className="flex flex-wrap items-center gap-2">{EXPORT_KIND[j.kind] ?? j.kind}<span className="font-mono text-xs font-normal text-muted">{j.output.filename}</span></span>}
-            sub={fmtRelative(j.finished ?? j.created)}
-            action={<DownloadButton href={j.output.url} big filename={j.output.filename} size="xs" variant="outline" icon={<Download className="size-3.5" />}>下载</DownloadButton>}
+        {shown.slice(0, 10).map((f) => (
+          <Row key={f.filename}
+            title={<span className="flex flex-wrap items-center gap-2">{kind(f.filename)}<span className="font-mono text-xs font-normal text-muted">{f.filename}</span></span>}
+            sub={f.size >= 0 ? `${fmtRelative(f.modified)} · ${(f.size / 1024 / 1024).toFixed(1)} MB` : fmtRelative(f.modified)}
+            action={<DownloadButton href={f.url} big filename={f.filename} size="xs" variant="outline" icon={<Download className="size-3.5" />}>下载</DownloadButton>}
           />
         ))}
       </div>

@@ -9,13 +9,13 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
-import { run, toast } from '@/store/app';
+import { run, toast, useApp } from '@/store/app';
 import {
   addTask, forgetOwnTask, getTaskStyleDraft, hasActiveTasks, markOwnTask, openInDetail, saveSettings, saveTaskStyle, setSimplePage, taskAction,
   useSimple,
 } from '@/store/simple';
 import {
-  Badge, Button, Card, CardBody, CardHeader, ConfirmButton, DropZone, EmptyState, Input, Progress, Segmented, Textarea,
+  Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, DropZone, EmptyState, Input, Progress, Segmented, Textarea,
 } from '@/components/ui';
 import { DownloadLink } from '@/components/DownloadButton';
 import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
@@ -147,8 +147,14 @@ export function SimpleHome() {
     s.auto_export ? '完成后生成视频' : '不自动生成视频',
   ] : [];
 
+  const elsewhere = useApp((st) => st.info?.tasks_elsewhere);
   return (
     <div className="space-y-6">
+      {elsewhere && (
+        <Callout tone="warn" title="另一个服务进程正在运行任务队列">
+          同一个项目目录下还开着另一个 Kara Align 服务，任务由它执行；这里只能查看，不能添加、取消或重试任务。请关掉其中一个后刷新页面。
+        </Callout>
+      )}
       <Card>
         <CardHeader icon={<Sparkles className="size-4" />} title="做一首卡拉OK" description="放入视频和歌词，其余全部自动完成：注音、人声分离、对齐、生成带字幕的视频。" />
         <CardBody className="space-y-6">
