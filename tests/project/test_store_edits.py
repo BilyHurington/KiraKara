@@ -58,7 +58,7 @@ def test_package_roundtrip_and_missing_audio(tmp_path):
     src = tmp_path / "src"
     (src / "assets").mkdir(parents=True)
     (src / "assets" / "abc.wav").write_bytes(b"RIFF....")
-    p.audio.append(AudioAsset(role="original", sha256="abc", path="assets/abc.wav", duration_ms=1,
+    p.audio.append(AudioAsset(role="original", sha256="ab" * 32, path="assets/abc.wav", duration_ms=1,
                               sample_rate=16000, channels=1, num_samples=16))
     store.save_project(p, src)
     z = store.export_package(p, src, tmp_path / "p.kara.zip")

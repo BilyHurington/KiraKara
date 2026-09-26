@@ -130,20 +130,38 @@ def mix_stems(vocals: Optional[np.ndarray], instrumental: Optional[np.ndarray], 
 
 def export_mix_wav(vocals_path, instrumental_path, out_path, p: float, q: float = 100.0,
                    master: float = 1.0, limiter: Limiter = "normalize_peak", ceiling_dbfs: float = -0.3,
-                   original_num_samples: Optional[int] = None, subtype: str = "PCM_16") -> MixReport:
+                   original_num_samples: Optional[int] = None, subtype: str = "PCM_16",
+                   cancel=None) -> MixReport:
     """Render the mix at normal speed, keeping the original duration and origin.
 
     ``original_num_samples`` (at the stems' rate) fixes the output length to
-    the original's; otherwise the longer stem's length is used.
+    the original's; otherwise the longer stem's length is used.  The file is
+    written under a temporary name and moved into place when complete.
     """
+    import os
+
     if vocals_path is None or instrumental_path is None:
         raise MixError("导出人声保留混音需要人声和伴奏两条分轨")
-    v, sr_v = load_audio(vocals_path)
-    i, sr_i = load_audio(instrumental_path)
+
+    def check() -> None:
+        if cancel is not None:
+            cancel.check()
+
+    v, sr_v = load_audio(vocals_path, cancel=cancel)
+    check()
+    i, sr_i = load_audio(instrumental_path, cancel=cancel)
+    check()
     if sr_v != sr_i:
         raise MixError(f"分轨采样率不同（{sr_v} vs {sr_i}），请先统一采样率")
     mix, report = mix_stems(v, i, sr_v, p, q, master, limiter, ceiling_dbfs, length=original_num_samples)
-    write_wav(out_path, mix, sr_v, subtype=subtype)
+    check()
+    out_path = Path(out_path)
+    part = out_path.with_name(out_path.name + ".part")
+    try:
+        write_wav(part, mix, sr_v, subtype=subtype)
+        os.replace(part, out_path)
+    finally:
+        part.unlink(missing_ok=True)
     report.tracks = {
         "vocals": {"path": str(vocals_path), "sha256": file_sha256(vocals_path), "gain": p / 100.0},
         "instrumental": {"path": str(instrumental_path), "sha256": file_sha256(instrumental_path), "gain": q / 100.0},

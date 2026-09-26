@@ -247,7 +247,7 @@ def test_separation_stores_each_stems_own_sync_report(tmp_path, monkeypatch):
 
     h = _project(tmp_path, "plain")
 
-    def fake_separate(src, out_dir, preset, cancel=None, progress=None, device="auto"):
+    def fake_separate(src, out_dir, preset, cancel=None, progress=None, device="auto", timeout_s=None):
         v, i = out_dir / "v.wav", out_dir / "i.wav"
         _wav(v)
         _wav(i)

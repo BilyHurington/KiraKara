@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -32,6 +33,13 @@ FMT_PROJECT = "kara-align/project"
 FMT_ALIGNMENT = "kara-align/alignment"
 FMT_PREPARED = "kara-align/prepared"
 FMT_READING_PATCH = "kara-align/reading-patch"
+
+
+# content hashes end up in file names (assets/<sha>.ext, cache files): only a real sha256 is accepted
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+Sha256 = Annotated[str, StringConstraints(pattern=SHA256_PATTERN)]
+# a project id is the name of its folder in the workspace: no path separators, no dots
+PROJECT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
 
 
 def new_id(prefix: str = "") -> str:
@@ -222,14 +230,14 @@ class AudioSource(_Base):
     model: Optional[str] = None  # separation model file / id
     model_version: Optional[str] = None
     config: dict[str, Any] = Field(default_factory=dict)
-    parent_sha256: Optional[str] = None
+    parent_sha256: Optional[Sha256] = None
     notes: list[str] = Field(default_factory=list)
 
 
 class AudioAsset(_Base):
     id: str = Field(default_factory=lambda: new_id("a"))
     role: AudioRole
-    sha256: str
+    sha256: Sha256
     path: Optional[str] = None  # relative to the project directory, or None when missing
     duration_ms: int
     sample_rate: int
@@ -468,18 +476,37 @@ class AiRoundtrip(_Base):
     applied_at: Optional[str] = None
 
 
+MIX_LIMITS = {"vocal_keep_pct": (0.0, 100.0), "instrumental_pct": (0.0, 100.0), "master": (0.0, 4.0)}
+
+
 class MixSettings(_Base):
-    vocal_keep_pct: float = 100.0
-    instrumental_pct: float = 100.0
-    master: float = 1.0
+    vocal_keep_pct: float = Field(default=100.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    instrumental_pct: float = Field(default=100.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    master: float = Field(default=1.0, ge=0.0, le=4.0, allow_inf_nan=False)
     limiter: Literal["none", "normalize_peak"] = "normalize_peak"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unusable(cls, data: Any) -> Any:
+        # a project saved before these ranges existed still loads: an unusable stored value goes back to
+        # its default (new input is checked strictly by the service before it gets here)
+        if isinstance(data, dict):
+            data = dict(data)
+            for k, (lo, hi) in MIX_LIMITS.items():
+                v = data.get(k)
+                if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool)
+                                          and math.isfinite(v) and lo <= v <= hi):
+                    data.pop(k)
+            if data.get("limiter") not in (None, "none", "normalize_peak"):
+                data.pop("limiter")
+        return data
 
 
 class VideoAsset(_Base):
     """A video uploaded as the original; its audio track became the original asset."""
 
     id: str = Field(default_factory=lambda: new_id("v"))
-    sha256: str
+    sha256: Sha256
     path: Optional[str] = None  # relative to the project directory, None when missing
     filename: Optional[str] = None
     container: str  # file extension, e.g. ".mp4"
@@ -494,7 +521,7 @@ class VideoAsset(_Base):
     # width / height are the displayed (rotation applied) size; False on videos imported before that
     upright: bool = False
     # sha256 of the audio extracted from it (= the original asset it produced)
-    audio_sha256: str
+    audio_sha256: Sha256
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +713,7 @@ class KaraokeStyle(_Base):
 class Project(_Base):
     format: str = FMT_PROJECT
     version: int = SCHEMA_VERSION
-    id: str = Field(default_factory=lambda: new_id("p"))
+    id: str = Field(default_factory=lambda: new_id("p"), pattern=PROJECT_ID_PATTERN)
     name: str = "untitled"
     created: str = Field(default_factory=utcnow)
     updated: str = Field(default_factory=utcnow)

@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from ..models import FMT_PROJECT, SCHEMA_VERSION, Project, utcnow
+from ..models import FMT_PROJECT, PROJECT_ID_PATTERN, SCHEMA_VERSION, SHA256_PATTERN, Project, utcnow
 
 PROJECT_FILE = "project.json"
 MAX_PROJECT_JSON_BYTES = 64 * 1024 * 1024
@@ -48,12 +50,40 @@ def projects_root() -> Path:
     return p
 
 
+def is_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(SHA256_PATTERN, value) is not None
+
+
+def is_project_id(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(PROJECT_ID_PATTERN, value) is not None
+
+
+def inside(root: Path, path: Path) -> bool:
+    """``path`` resolves to somewhere below ``root`` (never ``root`` itself or outside it)."""
+    r, p = Path(root).resolve(), Path(path).resolve()
+    return r in p.parents
+
+
+def timestamped(path: Path, label: str = "broken") -> Path:
+    """A free name next to ``path`` for keeping a copy aside (never overwrites an earlier one)."""
+    path = Path(path)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stem, suffix = (path.name[: -len(path.suffix)], path.suffix) if path.suffix else (path.name, "")
+    for n in range(1000):
+        cand = path.with_name(f"{stem}.{label}-{stamp}{'-' + str(n) if n else ''}{suffix}")
+        if not cand.exists():
+            return cand
+    return path.with_name(f"{stem}.{label}-{stamp}-{os.getpid()}-{time.time_ns()}{suffix}")
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())  # the data is on disk before the name points at it (power loss)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
@@ -65,7 +95,7 @@ def project_to_json(project: Project) -> str:
     return project.model_dump_json(indent=2)
 
 
-def parse_project_json(text: str) -> Project:
+def parse_project_json(text: str, project_id: Optional[str] = None) -> Project:
     """Parse (untrusted) project JSON, checking format and version."""
     if len(text.encode("utf-8")) > MAX_PROJECT_JSON_BYTES:
         raise ProjectError("项目文件过大")
@@ -79,6 +109,8 @@ def parse_project_json(text: str) -> Project:
     if not isinstance(version, int) or version > SCHEMA_VERSION:
         raise ProjectError(f"不支持的项目版本: {version!r}（当前支持 ≤ {SCHEMA_VERSION}）")
     data = migrate(data)
+    if project_id is not None:  # an imported project gets its own id (never the one in the file)
+        data["id"] = project_id
     try:
         return Project.model_validate(data)
     except Exception as e:  # pydantic.ValidationError
@@ -109,13 +141,42 @@ def save_project(project: Project, project_dir: Path) -> Path:
     return path
 
 
+def read_project_file(path: Path, project_id: Optional[str] = None) -> Project:
+    """Parse a project file; every way it can be unreadable is a :class:`ProjectError`."""
+    try:
+        if path.stat().st_size > MAX_PROJECT_JSON_BYTES:
+            raise ProjectError("项目文件过大")
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ProjectError(f"项目文件不是 UTF-8 文本：{path.name}") from e
+    except OSError as e:
+        raise ProjectError(f"无法读取项目文件 {path.name}：{e.strerror or e}") from e
+    return parse_project_json(text, project_id)
+
+
 def load_project(project_dir: Path) -> Project:
     path = Path(project_dir)
     if path.is_dir():
         path = path / PROJECT_FILE
     if not path.exists():
         raise ProjectError(f"找不到项目文件: {path}")
-    project = parse_project_json(path.read_text(encoding="utf-8"))
+    try:
+        project = read_project_file(path)
+    except ProjectError as first:
+        # a damaged project.json (e.g. cut off by a crash): the copy kept by the previous save is used;
+        # the damaged file is set aside (never overwritten) so the next save does not replace the backup
+        bak = path.with_name(PROJECT_FILE + ".bak")
+        if path.name != PROJECT_FILE or not bak.exists():
+            raise
+        try:
+            project = read_project_file(bak)
+        except ProjectError:
+            raise first from None
+        try:
+            path.replace(timestamped(path))
+            shutil.copyfile(bak, path)
+        except OSError:
+            pass
     refresh_asset_paths(project, path.parent)
     return project
 
@@ -164,11 +225,16 @@ def export_package(project: Project, project_dir: Path, out_path: Path, include_
     return out_path
 
 
-def import_package(zip_path: Path, dest_dir: Path, max_total_bytes: int = 4 * 1024**3) -> Project:
+def import_package(zip_path: Path, dest_dir: Path, max_total_bytes: int = 4 * 1024**3,
+                   project_id: Optional[str] = None) -> Project:
     """Extract a portable package safely (no path traversal, size-capped)."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
+    try:
+        zf = zipfile.ZipFile(zip_path)
+    except (zipfile.BadZipFile, OSError) as e:
+        raise ProjectError("不是有效的项目包（.zip 文件无法读取）") from e
+    with zf:
         total = 0
         names = zf.namelist()
         if PROJECT_FILE not in names:
@@ -188,6 +254,7 @@ def import_package(zip_path: Path, dest_dir: Path, max_total_bytes: int = 4 * 10
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
-    project = load_project(dest_dir)
+    project = read_project_file(dest_dir / PROJECT_FILE, project_id)
+    refresh_asset_paths(project, dest_dir)
     save_project(project, dest_dir)
     return project

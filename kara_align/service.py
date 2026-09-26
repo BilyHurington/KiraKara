@@ -7,6 +7,7 @@ which operate on a :class:`ProjectHandle` (project + its directory).
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import threading
 from dataclasses import asdict, dataclass, field
@@ -38,19 +39,66 @@ class LrcTimesError(ServiceError):
 # ---------------------------------------------------------------------------
 
 
+class _Previews(dict):
+    """Parse previews / AI reports kept for a later apply: only the most recent few (they were
+    never removed when not applied, so a long session kept every one of them)."""
+
+    MAX = 32
+
+    def __setitem__(self, key, value) -> None:
+        super().pop(key, None)
+        super().__setitem__(key, value)
+        while len(self) > self.MAX:
+            super().pop(next(iter(self)))
+
+
+# AI round trips keep the model's raw reply for inspection: only the last few, and capped
+MAX_RAW_REPLIES = 5
+MAX_RAW_REPLY_CHARS = 200_000
+
+
 @dataclass
 class ProjectHandle:
     dir: Path
     project: Project
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
-    previews: dict[str, Any] = field(default_factory=dict, repr=False)
+    previews: dict[str, Any] = field(default_factory=_Previews, repr=False)
     deleted: bool = False
 
     def save(self) -> None:
         with self.lock:
             if self.deleted:  # a request still holding the handle must not bring the folder back
                 raise ServiceError("这个项目已被删除")
-            store.save_project(self.project, self.dir)
+            self._trim()
+            try:
+                store.save_project(self.project, self.dir)
+            except ProjectError:
+                # invalid data was refused: it must not stay in memory either, or every later save of
+                # this project would be refused too — go back to what is on disk
+                self._restore()
+                raise
+
+    def _trim(self) -> None:
+        rts = self.project.ai_roundtrips
+        for i, rt in enumerate(rts):
+            if rt.response_raw is None:
+                continue
+            if i < len(rts) - MAX_RAW_REPLIES:
+                rt.response_raw = None
+            elif len(rt.response_raw) > MAX_RAW_REPLY_CHARS:
+                rt.response_raw = rt.response_raw[:MAX_RAW_REPLY_CHARS]
+
+    def _restore(self) -> None:
+        if not (self.dir / store.PROJECT_FILE).exists():
+            return  # never saved: nothing to go back to
+        try:
+            saved = store.load_project(self.dir)
+        except ProjectError:
+            return
+        # in place: code holding ``h.project`` keeps a valid object; the id stays the workspace's
+        for name in type(self.project).model_fields:
+            if name != "id":
+                setattr(self.project, name, getattr(saved, name))
 
     @property
     def assets_dir(self) -> Path:
@@ -66,13 +114,22 @@ class Workspace:
         self._handles: dict[str, ProjectHandle] = {}
         self._lock = threading.Lock()
 
+    def _dir(self, pid: str) -> Path:
+        """The folder of a project id: only ids that stay a plain folder of the workspace."""
+        if not store.is_project_id(pid):
+            raise ProjectError("非法项目 ID")
+        d = self.root / pid
+        if not store.inside(self.root, d):
+            raise ProjectError("非法项目 ID")
+        return d
+
     def list(self) -> list[dict]:
         out = []
         for d in sorted(self.root.iterdir()):
-            if (d / store.PROJECT_FILE).exists():
+            if store.is_project_id(d.name) and (d / store.PROJECT_FILE).exists():
                 try:
                     h = self.get(d.name)
-                except ProjectError:
+                except ProjectError:  # an unreadable project is left out, never a failed listing
                     continue
                 p = h.project
                 out.append({"id": d.name, "name": p.name, "mode": p.mode, "updated": p.updated})
@@ -80,19 +137,17 @@ class Workspace:
 
     def create(self, name: str, mode: str = "plain") -> ProjectHandle:
         p = Project(name=name or "untitled", mode=mode)  # type: ignore[arg-type]
-        h = ProjectHandle(self.root / p.id, p)
+        h = ProjectHandle(self._dir(p.id), p)
         h.save()
         with self._lock:
             self._handles[p.id] = h
         return h
 
     def get(self, pid: str) -> ProjectHandle:
-        if not pid or "/" in pid or pid.startswith("."):
-            raise ProjectError("非法项目 ID")
+        d = self._dir(pid)
         with self._lock:
             h = self._handles.get(pid)
             if h is None:
-                d = self.root / pid
                 h = ProjectHandle(d, store.load_project(d))
                 # the directory name is the project's identity inside a workspace
                 h.project.id = pid
@@ -102,32 +157,40 @@ class Workspace:
     def delete(self, pid: str) -> None:
         """Remove a project with everything in it (audio, stems, exports)."""
         h = self.get(pid)  # validates the id
-        with self._lock:
-            self._handles.pop(pid, None)
+        trash = self.root / f".deleted-{pid}-{new_id()}"
         with h.lock:
-            h.deleted = True
-            shutil.rmtree(h.dir)
+            # the folder is first moved out of the way (one step), while the handle is marked deleted and
+            # dropped from the cache: a concurrent get() finds the deleted handle or no project, and never
+            # loads it again; a failed move leaves the project as it was
+            with self._lock:
+                try:
+                    h.dir.rename(trash)
+                except OSError as e:
+                    raise ServiceError(f"无法删除项目：{e.strerror or e}") from e
+                h.deleted = True
+                self._handles.pop(pid, None)
+        shutil.rmtree(trash, ignore_errors=True)  # anything left over stays hidden, outside the project list
 
     def import_file(self, path: Path, filename: str) -> ProjectHandle:
-        tmp_id = new_id("p")
-        dest = self.root / tmp_id
-        if filename.endswith(".zip"):
-            project = store.import_package(path, dest)
-        else:
-            project = store.parse_project_json(Path(path).read_text(encoding="utf-8"))
-            store.save_project(project, dest)
-        # the directory name is the project id
-        final = self.root / project.id
-        if final.exists():
-            project.id = tmp_id
-            final = dest
-        else:
-            dest.rename(final)
-        h = ProjectHandle(final, store.load_project(final))
-        h.project.id = final.name
-        h.save()
+        """Import a project.json or a .kara.zip package as a new project.
+
+        The project always gets a fresh id (= its folder): an id from the file is never used as a
+        path.  A failed import leaves nothing behind."""
+        pid = new_id("p")
+        dest = self._dir(pid)
+        try:
+            if filename.endswith(".zip"):
+                store.import_package(path, dest, project_id=pid)
+            else:
+                # read_project_file checks the size before reading anything
+                store.save_project(store.read_project_file(Path(path), pid), dest)
+            h = ProjectHandle(dest, store.load_project(dest))
+            h.project.id = pid
+        except BaseException:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise
         with self._lock:
-            self._handles[h.project.id] = h
+            self._handles[pid] = h
         return h
 
 
@@ -251,21 +314,63 @@ def project_view(h: ProjectHandle) -> dict:
 
 def update_settings(h: ProjectHandle, *, name: Optional[str] = None, mode: Optional[str] = None,
                     config: Optional[dict] = None, mix: Optional[dict] = None) -> None:
-    """Mode switches keep all inputs and manual edits; results get staleness markers."""
+    """Mode switches keep all inputs and manual edits; results get staleness markers.
+
+    Everything is checked before anything changes: a refused value never reaches the project."""
+    if name is not None and not isinstance(name, str):
+        raise ServiceError("项目名称必须是文字")
+    if mode is not None and mode not in ("plain", "lrc"):
+        raise ServiceError("模式只能是 plain 或 lrc")
+    _check_finite(config, "对齐设置")
     with h.lock:
         p = h.project
+        new_config = None
+        if config:
+            try:
+                new_config = AlignConfig.model_validate(_deep_merge(p.config.model_dump(mode="json"), config))
+            except ValueError as e:
+                raise ServiceError(f"对齐设置无效：{e}") from e
+        new_mix = mix_settings(p.mix, mix) if mix else None
         if name is not None:
             p.name = name
         if mode is not None:
-            if mode not in ("plain", "lrc"):
-                raise ServiceError("模式只能是 plain 或 lrc")
             p.mode = mode  # type: ignore[assignment]
-        if config:
-            merged = _deep_merge(p.config.model_dump(mode="json"), config)
-            p.config = AlignConfig.model_validate(merged)
-        if mix:
-            p.mix = MixSettings.model_validate({**p.mix.model_dump(), **mix})
+        if new_config is not None:
+            p.config = new_config
+        if new_mix is not None:
+            p.mix = new_mix
         h.save()
+
+
+def _check_finite(obj: Any, what: str) -> None:
+    """NaN / infinity (which JSON bodies may carry) are refused: they cannot be saved."""
+    if isinstance(obj, float) and not np.isfinite(obj):
+        raise ServiceError(f"{what}中有无效的数值（NaN / 无穷大）")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_finite(v, what)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _check_finite(v, what)
+
+
+def mix_settings(base: MixSettings, patch: Optional[dict]) -> MixSettings:
+    """``base`` with the changes in ``patch``, every value checked (numbers within range, finite)."""
+    from .models import MIX_LIMITS
+
+    if patch is not None and not isinstance(patch, dict):
+        raise ServiceError("混音设置必须是对象")
+    patch = dict(patch or {})
+    for k, (lo, hi) in MIX_LIMITS.items():
+        if k not in patch:
+            continue
+        v = patch[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or not lo <= v <= hi:
+            unit = "%" if k.endswith("_pct") else ""
+            raise ServiceError(f"混音设置 {k} 必须是 {lo:g}–{hi:g}{unit} 之间的数字")
+    if "limiter" in patch and patch["limiter"] not in ("none", "normalize_peak"):
+        raise ServiceError("防削波方式只能是 none 或 normalize_peak")
+    return MixSettings.model_validate({**base.model_dump(), **patch})
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -471,19 +576,23 @@ def _song_dict(song) -> dict:
     return d
 
 
-def parse_from_song(h: ProjectHandle, platform: str, song_id: str) -> dict:
-    """Fetch lyrics of one song and parse its original track into a preview."""
+def parse_from_song(h: ProjectHandle, platform: str, song_id: str, *, mode: Optional[str] = None,
+                    song=None) -> dict:
+    """Fetch lyrics of one song and parse its original track into a preview.
+
+    ``mode`` parses for another mode than the project's (nothing in the project changes);
+    ``song`` reuses a song already fetched."""
     from .lyrics.fetch import fetch_song as _fetch
     from .lyrics.parse import LyricsModeError, parse_lyrics_text
 
-    song = _fetch(platform, song_id)
+    song = song or _fetch(platform, song_id)
     original = song.tracks.get("original")
     if not original:
         return {"preview_id": None, "detected": "unknown", "warnings": [], "doc": None, "extra_tracks": {},
                 "error": "该歌曲没有可用的原文歌词，请手动输入"}
     snap = song.to_snapshot("original")
     try:
-        res = parse_lyrics_text(original, mode=h.project.mode, origin=platform, source_id=snap.id)
+        res = parse_lyrics_text(original, mode=mode or h.project.mode, origin=platform, source_id=snap.id)
     except LyricsModeError as e:
         return {"preview_id": None, "detected": "plain", "warnings": [], "doc": None, "error": str(e),
                 "extra_tracks": {k: v for k, v in song.tracks.items() if k != "original"}}
@@ -715,6 +824,14 @@ def add_audio(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
         raise ServiceError("音轨角色只能是 original / vocals / instrumental")
     src = AudioSource(kind=source_kind, filename=filename or Path(src_path).name)  # type: ignore[arg-type]
     asset = import_asset(src_path, role, h.assets_dir, src, project_dir=h.dir)  # type: ignore[arg-type]
+    # the sync check decodes whole files: done before taking the project lock, which views and edits
+    # of this project wait for
+    checked = None
+    if role != "original":
+        with h.lock:
+            orig0 = h.project.asset("original")
+        if orig0 is not None:
+            checked = (orig0.sha256, _sync_report(h, orig0, asset))
     with h.lock:
         p = h.project
         if role != "original":
@@ -722,7 +839,8 @@ def add_audio(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
             if orig is None:
                 asset.source.notes.append("导入时没有原曲，无法检查同步")
             else:
-                asset.sync_report = _sync_report(h, orig, asset)
+                asset.sync_report = checked[1] if checked and checked[0] == orig.sha256 \
+                    else _sync_report(h, orig, asset)  # the original changed meanwhile: check again
                 asset.sync_checked = True
                 asset.source.parent_sha256 = orig.sha256
         # a new original invalidates stems derived from another original
@@ -785,7 +903,7 @@ def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
     return asset
 
 
-def export_video(h: ProjectHandle, settings: dict) -> dict:
+def export_video(h: ProjectHandle, settings: dict, cancel: Optional[CancelToken] = None) -> dict:
     """Mux the reduced-vocal mix under the original video's picture."""
     import tempfile
 
@@ -801,11 +919,13 @@ def export_video(h: ProjectHandle, settings: dict) -> dict:
     if vpath is None or not vpath.exists():
         raise ServiceError("视频文件缺失，请重新上传视频")
     with tempfile.TemporaryDirectory() as td:
-        mix = export_mix(h, settings, Path(td) / "mix.wav")
+        mix = export_mix(h, settings, Path(td) / "mix.wav", cancel=cancel)
         s = h.project.mix
         stem = Path(video.filename or "video").stem
+        # the extension is added by mux_audio (a name with dots, "My.Song", stays whole)
         base = h.dir / "exports" / f"{stem}-vocal{int(round(s.vocal_keep_pct))}"
-        out = mux_audio(vpath, Path(mix["path"]), base, offset_s=video.audio_offset_s, container=video.container)
+        out = mux_audio(vpath, Path(mix["path"]), base, offset_s=video.audio_offset_s, container=video.container,
+                        cancel=cancel)
     return {"filename": out.name, "report": {**mix["report"], "video": {"container": out.suffix,
             "audio_offset_s": video.audio_offset_s, "video_codec": video.video_codec, "copied_video": True}}}
 
@@ -902,6 +1022,15 @@ def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bo
 
 
 def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, background: str = "auto") -> bytes:
+    try:
+        t_ms = int(t_ms)
+    except (TypeError, ValueError, OverflowError):
+        raise ServiceError("t_ms 必须是毫秒数") from None
+    t_ms = max(0, t_ms)
+    if style is not None and not isinstance(style, dict):
+        raise ServiceError("字幕样式必须是对象")
+    if background not in ("auto", "black"):
+        raise ServiceError("background 只能是 auto 或 black")
     ensure_upright_video(h)
     from .karaoke.ass import build_ass, resolution
     from .karaoke.render import preview_png
@@ -1004,16 +1133,31 @@ def get_asset(h: ProjectHandle, asset_id: str) -> AudioAsset:
     raise ServiceError(f"没有音频 {asset_id}")
 
 
+def _cache_file(kind: str, asset: AudioAsset, suffix: str) -> Path:
+    """A cache file named after the asset's content hash — only a real sha256 (an imported project
+    could carry anything there) and only inside the cache folder."""
+    if not store.is_sha256(asset.sha256):
+        raise ServiceError("音频的内容校验值无效，请重新上传")
+    root = store.cache_dir(kind)
+    out = root / f"{asset.sha256}{suffix}"
+    if not store.inside(root, out):
+        raise ServiceError("缓存路径无效")
+    return out
+
+
 def playback_wav(h: ProjectHandle, asset: AudioAsset) -> Path:
     """Decoded PCM WAV made by the same decoder the aligner uses (same origin)."""
     from .audio.io import load_audio, write_wav
 
-    out = store.cache_dir("playback") / f"{asset.sha256}.wav"
+    out = _cache_file("playback", asset, ".wav")
     if not out.exists():
         data, sr = load_audio(asset_path(h, asset))
         tmp = out.with_suffix(f".{new_id()}.tmp.wav")
-        write_wav(tmp, data, sr)
-        tmp.replace(out)
+        try:
+            write_wav(tmp, data, sr)
+            tmp.replace(out)
+        finally:
+            tmp.unlink(missing_ok=True)
     return out
 
 
@@ -1022,43 +1166,79 @@ def peaks(h: ProjectHandle, asset: AudioAsset, per_second: int = 200) -> dict:
     from .audio.io import load_audio
 
     per_second = max(10, min(int(per_second), 2000))
-    cache = store.cache_dir("peaks") / f"{asset.sha256}-{per_second}.npz"
+    cache = _cache_file("peaks", asset, f"-{per_second}.npz")
+    got = None
     if cache.exists():
-        z = np.load(cache)
-        mins, maxs, sr = z["mins"], z["maxs"], int(z["sr"])
-    else:
+        try:
+            with np.load(cache) as z:
+                got = z["mins"], z["maxs"], int(z["sr"])
+        except Exception:  # a damaged cache file (e.g. cut off): made again below
+            got = None
+    if got is None:
         data, sr = load_audio(asset_path(h, asset), mono=True)
         spp = max(1, int(round(sr / per_second)))
         mins, maxs = waveform_peaks(data[0], sr, spp)
-        np.savez(cache, mins=mins, maxs=maxs, sr=sr)
+        # written aside and moved into place: a reader never sees half a file
+        tmp = cache.with_name(f"{cache.stem}.{new_id()}.tmp.npz")
+        try:
+            np.savez(tmp, mins=mins, maxs=maxs, sr=sr)
+            os.replace(tmp, cache)
+        except OSError:
+            pass  # the cache is only a speed-up
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        mins, maxs, sr = got
     return {"sample_rate": sr, "duration_ms": asset.duration_ms, "per_second": per_second,
             "mins": np.round(mins, 4).tolist(), "maxs": np.round(maxs, 4).tolist()}
+
+
+# a separation that takes longer than this has hung (e.g. the MPS backend): generous for slow CPUs
+SEPARATION_TIMEOUT_FACTOR = 5.0
+SEPARATION_TIMEOUT_EXTRA_S = 600.0
 
 
 def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] = None,
                    progress: Optional[Callable[[float, str], None]] = None, device: str = "auto") -> dict:
     """Separate the original; failure raises (never a silent fallback)."""
-    from .audio.io import import_asset
-    from .audio.separation import separate
+    import hashlib
 
+    from .audio.io import import_asset
+    from .audio.separation import is_known_preset, separate
+
+    if not is_known_preset(preset):
+        raise ServiceError(f"未知的分离预设：{preset}")
+    if device not in ("auto", "cpu"):
+        raise ServiceError("分离设备只能是 auto 或 cpu")
     orig = h.project.asset("original")
     if orig is None:
         raise ServiceError("请先上传原曲")
+    if not store.is_sha256(orig.sha256):
+        raise ServiceError("原曲的内容校验值无效，请重新上传原曲")
     src = asset_path(h, orig)
-    out_dir = store.cache_dir("separation") / f"{orig.sha256[:16]}-{preset}"
+    root = store.cache_dir("separation")
+    # the folder name is a hash (never built from user input); it is removed below, so it must be in the cache
+    out_dir = root / hashlib.sha256(f"{orig.sha256}:{preset}".encode("utf-8")).hexdigest()[:32]
+    if not store.inside(root, out_dir):
+        raise ServiceError("分离缓存路径无效")
     if out_dir.exists():
         shutil.rmtree(out_dir)  # never trust a possibly partial earlier run
     out_dir.mkdir(parents=True)
-    result = separate(src, out_dir, preset, cancel=cancel, progress=progress, device=device)
-    if cancel is not None:
-        cancel.check()
-    report = _jsonable(result.report)
-    assets = []
-    for role, path in (("vocals", result.vocals_path), ("instrumental", result.instrumental_path)):
-        source = AudioSource(kind="separation", filename=Path(path).name, model=report.get("model_filename"),
-                             model_version=report.get("audio_separator_version"),
-                             config={"preset": preset, "device": device}, parent_sha256=orig.sha256)
-        assets.append(import_asset(path, role, h.assets_dir, source, project_dir=h.dir))  # type: ignore[arg-type]
+    timeout_s = orig.duration_ms / 1000.0 * SEPARATION_TIMEOUT_FACTOR + SEPARATION_TIMEOUT_EXTRA_S
+    try:
+        result = separate(src, out_dir, preset, cancel=cancel, progress=progress, device=device,
+                          timeout_s=timeout_s)
+        if cancel is not None:
+            cancel.check()
+        report = _jsonable(result.report)
+        assets = []
+        for role, path in (("vocals", result.vocals_path), ("instrumental", result.instrumental_path)):
+            source = AudioSource(kind="separation", filename=Path(path).name, model=report.get("model_filename"),
+                                 model_version=report.get("audio_separator_version"),
+                                 config={"preset": preset, "device": device}, parent_sha256=orig.sha256)
+            assets.append(import_asset(path, role, h.assets_dir, source, project_dir=h.dir))  # type: ignore[arg-type]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
     with h.lock:
         h.project.audio = [a for a in h.project.audio if a.role not in ("vocals", "instrumental")]
         sync = report.get("sync") if isinstance(report.get("sync"), dict) else {}
@@ -1068,7 +1248,6 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
             a.sync_checked = a.sync_report is not None
             h.project.audio.append(a)
         h.save()
-    shutil.rmtree(out_dir, ignore_errors=True)
     return {"report": report, "assets": [a.id for a in assets]}
 
 
@@ -1095,7 +1274,7 @@ def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
     from .audio.mix import mix_stems
 
     v, i = require_stems(h, "人声保留比例")
-    s = MixSettings.model_validate({**h.project.mix.model_dump(), **settings})
+    s = mix_settings(h.project.mix, settings)
     vd, sr = load_audio(asset_path(h, v))
     idata, sr2 = load_audio(asset_path(h, i), target_sr=sr)
     _, rep = mix_stems(vd, idata, sr, s.vocal_keep_pct, s.instrumental_pct, s.master,
@@ -1103,11 +1282,12 @@ def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
     return {"bus_gain": rep.bus_gain, "peak_before": rep.peak_before}
 
 
-def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None, *, save: bool = True) -> dict:
+def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None, *, save: bool = True,
+               cancel: Optional[CancelToken] = None) -> dict:
     from .audio.mix import export_mix_wav
 
     v, i = require_stems(h, "导出混音")
-    s = MixSettings.model_validate({**h.project.mix.model_dump(), **settings})
+    s = mix_settings(h.project.mix, settings)
     orig = h.project.asset("original")
     name = f"mix-v{int(round(s.vocal_keep_pct))}-i{int(round(s.instrumental_pct))}.wav"
     out = Path(out_path) if out_path else h.dir / "exports" / name
@@ -1115,9 +1295,10 @@ def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None
     original_n = None
     if orig is not None and orig.sample_rate == v.sample_rate:
         original_n = orig.num_samples
+    # written to a part file and moved into place (a download never gets half a file)
     rep = export_mix_wav(asset_path(h, v), asset_path(h, i), out, s.vocal_keep_pct, s.instrumental_pct,
                          s.master, limiter="normalize_peak" if s.limiter == "normalize_peak" else "none",
-                         original_num_samples=original_n)
+                         original_num_samples=original_n, cancel=cancel)
     if save:  # the Export page remembers its mix; other callers (burn-in) do not touch it
         with h.lock:
             h.project.mix = s
