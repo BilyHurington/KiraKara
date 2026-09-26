@@ -376,6 +376,28 @@ def visible_spans(ll: LaidLine, style: KaraokeStyle) -> list[tuple[int, int]]:
     return [(x, y) for x, y in spans if y > x]
 
 
+def alternate_insets(laid: list[LaidLine], geom: list[tuple], indent: float, avail: float) -> list[float]:
+    """How far each left / right row sits in from its margin (the alternating layout's indent).
+
+    A line is moved back toward its edge as far as its length needs; and while a left and a right
+    row are on screen together they keep the staircase: the upper (left) one starts and ends no
+    further right than the lower (right) one.  For such a pair that means
+    ``inset_left + inset_right <= avail − the longer line's extent``; each gets half of that room."""
+    out = []
+    ext = [g[1] + g[2] + g[3] for g in geom]
+    for i, (ll, g) in enumerate(zip(laid, geom)):
+        if g[5] == "center":
+            out.append(0.0)
+            continue
+        cap = min(indent, max(0.0, avail - ext[i]))  # a long line slides back toward its edge
+        for j, (other, h) in enumerate(zip(laid, geom)):
+            if h[5] in ("center", g[5]) or other.show_to <= ll.show_from or other.show_from >= ll.show_to:
+                continue
+            cap = min(cap, max(0.0, avail - max(ext[i], ext[j])) / 2)
+        out.append(cap)
+    return out
+
+
 def _sung_within(ll: LaidLine, a: float, b: float) -> tuple[float, float]:
     """First start and last end of the line's singing inside the display span [a, b)."""
     times = ll.units or [(p.start, p.end) for c in ll.chunks for p in c.base
@@ -748,6 +770,8 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     edge = (max(txt.outline, 0) + max(txt.shadow, 0) + (glow.size + glow.blur if glow.enabled else 0)) * k + 2
     fx_on = style.effects.kind != "none"
     syllables: list[Syllable] = []
+    # widths first: how far a line sits in from its edge depends on the lines shown next to it
+    geom = []
     for ll in laid:
         widths = chunk_widths(ll.chunks, m_main, m_ruby, ruby_size, rb.fit)
         line_w = sum(widths) or 1.0
@@ -756,13 +780,12 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         scale = min(1.0, avail / extent) if lay.shrink_long_lines else 1.0
         if scale < 1.0:
             warnings.append(f"「{ll.line.text}」过长，已缩小到 {scale:.0%}")
-        line_w, over_l, over_r = line_w * scale, over_l * scale, over_r * scale
         align = "center"
         if lay.arrangement == "alternate" and n > 1 and 0 <= ll.slot < n:
             align = "left" if ll.slot == 0 else ("right" if ll.slot == n - 1 else "center")
-        indent = lay.alternate_indent * k if align != "center" else 0.0
-        free = max(0.0, avail - line_w - over_l - over_r)  # room left inside the margins
-        inset = min(indent, free)  # a long line slides back toward its edge
+        geom.append((widths, line_w * scale, over_l * scale, over_r * scale, scale, align))
+    insets = alternate_insets(laid, geom, lay.alternate_indent * k, avail)
+    for ll, (widths, line_w, over_l, over_r, scale, align), inset in zip(laid, geom, insets):
         if align == "left":
             x0 = margin_h + inset + over_l
         elif align == "right":

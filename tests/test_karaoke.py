@@ -712,3 +712,28 @@ def test_saved_styles_file_problems_lose_nothing(tmp_path):
     ST.save_style("我的", KaraokeStyle().model_dump(mode="json"))
     raw = json.loads(ST._path().read_text(encoding="utf-8"))
     assert [x["name"] for x in raw] == ["我的", "未来"] and raw[1] == future
+
+
+def test_alternating_rows_keep_the_staircase_for_long_lines():
+    from types import SimpleNamespace as NS
+
+    from kara_align.karaoke.ass import alternate_insets
+
+    avail, indent, margin = 1440.0, 240.0, 240.0
+
+    def g(ext, align):
+        return ([], ext, 0.0, 0.0, 1.0, align)
+
+    laid = [NS(show_from=0, show_to=5000), NS(show_from=3000, show_to=9000), NS(show_from=20000, show_to=25000),
+            NS(show_from=0, show_to=9000)]
+    geom = [g(1300, "left"), g(1100, "right"), g(600, "left"), g(900, "center")]
+    ins = alternate_insets(laid, geom, indent, avail)
+    left_x0, left_x1 = margin + ins[0], margin + ins[0] + 1300
+    right_x1 = margin + avail - ins[1]
+    right_x0 = right_x1 - 1100
+    # the upper (left) line shown with the lower (right) one never reaches past it on either side
+    assert left_x1 <= right_x1 and left_x0 <= right_x0
+    assert ins[0] == ins[1] == 70  # the room (1440 − 1300) shared equally
+    assert ins[2] == indent and ins[3] == 0.0  # alone on screen: the full indent; centred rows have none
+    # a line longer than the room goes all the way to its edge
+    assert alternate_insets([laid[0], laid[1]], [g(1500, "left"), g(400, "right")], indent, avail) == [0.0, 0.0]

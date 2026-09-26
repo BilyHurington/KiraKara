@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
 import { run, toast, useApp } from '@/store/app';
+import { usePageDraft } from '@/store/drafts';
 import {
   addTask, forgetOwnTask, getTaskStyleDraft, hasActiveTasks, markOwnTask, openInDetail, saveSettings, saveTaskStyle, setSimplePage, taskAction,
   useSimple,
@@ -61,9 +62,10 @@ export function SimpleHome() {
   const settings = useSimple((s) => s.settings);
   const tasks = useSimple((s) => s.tasks);
   const [mode, setMode] = useState<Mode>(settings?.simple.default_mode ?? 'lrc');
-  const [file, setFile] = useState<File | null>(null);
-  const [lyrics, setLyrics] = useState('');
-  const [name, setName] = useState('');
+  // the form survives leaving the page (to the settings, the detailed mode …) until the task is added
+  const [file, setFile] = usePageDraft<File | null>('simple.file', null);
+  const [lyrics, setLyrics] = usePageDraft('simple.lyrics', '');
+  const [name, setName] = usePageDraft('simple.name', '');
   const [busy, setBusy] = useState(false);
   const [upload, setUpload] = useState<number | null>(null);
   // start from the choices still being saved (left and came back quickly), else the saved ones

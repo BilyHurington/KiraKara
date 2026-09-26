@@ -312,6 +312,24 @@ describe('one-click AI readings in the detailed mode', () => {
   });
 });
 
+describe('the new-task form', () => {
+  it('keeps the chosen file, lyrics and name while the settings are open', async () => {
+    seed();
+    const api = mockApi({ 'GET /api/tasks': () => [], 'POST /api/tasks': () => task({ id: 'tn', status: 'preparing' }) });
+    const first = renderUI(<SimpleHome />);
+    await userEvent.upload(first.container.querySelector('input[type=file]') as HTMLInputElement, new File(['x'], 'song.mp4', { type: 'video/mp4' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '音乐链接或歌词' }), { target: { value: '[00:01.50]きみと' } });
+    first.unmount();  // e.g. to the settings page and back
+    renderUI(<SimpleHome />);
+    expect(screen.getByText('song.mp4')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '音乐链接或歌词' })).toHaveValue('[00:01.50]きみと');
+    // once the task is added the form starts empty, also after coming back
+    await userEvent.click(screen.getByRole('button', { name: /开始制作/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: '音乐链接或歌词' })).toHaveValue(''));
+  });
+});
+
 describe('confirming the start before the task continues', () => {
   const cal = {
     line_id: 'L1', line_text: 'きみと', lrc_ms: 1500, lines: [{ id: 'L1', text: 'きみと', lrc_ms: 1500 }, { id: 'L2', text: 'あるいた', lrc_ms: 3500 }],
