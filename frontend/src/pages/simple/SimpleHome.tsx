@@ -167,7 +167,7 @@ export function SimpleHome() {
           </StepBlock>
 
           {s && styleOpts && (
-            <StepBlock n={4} title="字幕样式">
+            <StepBlock n={4} title="字幕与视频">
               <TaskStyleStep value={styleOpts} onChange={changeStyle} settings={s} />
             </StepBlock>
           )}

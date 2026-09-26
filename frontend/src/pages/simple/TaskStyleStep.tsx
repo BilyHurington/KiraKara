@@ -47,12 +47,14 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const ruby: RubyChoice = o.ruby === 'style' ? (base && !base.ruby.enabled ? 'off' : base?.ruby.script ?? 'hiragana') : o.ruby;
   const rubyTarget = o.ruby_target ?? base?.ruby.target ?? 'all';
   const audio = o.video_audio ?? settings.video_audio;
+  const fontSize = o.font_size ?? base?.text.size ?? 88;
   const vocal = o.vocal_keep_pct ?? settings.vocal_keep_pct;
   const shown = useMemo(() => base && {
     ...base,
+    text: { ...base.text, size: fontSize },
     translation: { ...base.translation, enabled: translation },
     info: { ...base.info, enabled: songInfo },
-  }, [base, translation, songInfo]);
+  }, [base, translation, songInfo, fontSize]);
 
   return (
     <div className="space-y-4">
@@ -100,6 +102,16 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <Switch checked={translation} onChange={(v) => set({ translation: v })} label="显示翻译" />
               <Switch checked={songInfo} onChange={(v) => set({ song_info: v })} label="开头显示歌曲信息" />
+            </div>
+            <div className="text-[13px]">
+              <div className="flex items-center gap-x-4">
+                <span className="w-14 shrink-0 text-muted">字号</span>
+                <div className="min-w-0 max-w-md flex-1">
+                  <SliderField name="歌词字号" value={fontSize} onChange={(v) => set({ font_size: v })} min={24} max={160} step={1}
+                    unit="px" trackClassName="min-w-32" />
+                </div>
+              </div>
+              <p className="mt-1 pl-[4.5rem] text-xs text-subtle">以 1920 宽的画面为准；生成视频时按视频宽度等比缩放，任何分辨率下占画面宽度的比例都一样。</p>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
               <span className="w-14 shrink-0 text-muted">注音</span>
@@ -164,7 +176,7 @@ function StyleMock({ style }: { style: KaraokeStyle | null }) {
           和你一起走过的天空
         </div>
       )}
-      <div className="absolute inset-x-3 bottom-4 text-center text-[22px] leading-none">
+      <div className="absolute inset-x-3 bottom-4 text-center leading-none" style={{ fontSize: Math.round(22 * T.size / 88) }}>
         <span className="relative inline-block">
           <span style={text(T.color_unsung, G.enabled ? G.color_unsung : undefined)}>{line}</span>
           <span aria-hidden className="absolute inset-0" style={{ ...text(T.color_sung, G.enabled ? G.color_sung : undefined), clipPath: 'inset(0 45% 0 0)' }}>{line}</span>

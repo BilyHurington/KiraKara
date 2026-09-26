@@ -182,7 +182,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
         <Section {...sec('text')} icon={<Type className="size-4" />} title="歌词"
           summary={`${T.font || defaultFont || '默认字体'} · ${T.size}px${T.bold ? ' · 粗体' : ''} · 描边 ${T.outline}${G.enabled ? ' · 荧光边缘' : ''}`}>
           <Row label="字体"><FontSelect label="歌词字体" value={T.font} fonts={fonts} fallback={defaultFont} onChange={(v) => patch((s) => { s.text.font = v; })} /></Row>
-          <Row label="字号"><Num name="字号" value={T.size} min={24} max={200} onChange={(v) => patch((s) => { s.text.size = v; })} /></Row>
+          <Row label="字号" hint="以 1920 宽的画面为准，生成视频时按视频宽度缩放"><Num name="字号" value={T.size} min={24} max={200} onChange={(v) => patch((s) => { s.text.size = v; })} /></Row>
           <Switch checked={T.bold} onChange={(v) => patch((s) => { s.text.bold = v; })} label="粗体" />
           <Row label="描边宽度"><Num name="描边宽度" value={T.outline} max={16} step={0.5} onChange={(v) => patch((s) => { s.text.outline = v; })} /></Row>
           <Row label="阴影距离"><Num name="阴影距离" value={T.shadow} max={16} step={0.5} onChange={(v) => patch((s) => { s.text.shadow = v; })} /></Row>
@@ -295,7 +295,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
             </Row>
           )}
           <Switch checked={L.shrink_long_lines} onChange={(v) => patch((s) => { s.layout.shrink_long_lines = v; })} label="过长的行自动缩小，保证不超出边距" />
-          <p className="text-xs text-subtle">像素值以 1080p 画面为准，其他分辨率按比例缩放。</p>
+          <p className="text-xs text-subtle">像素值以 1920 宽的画面为准；生成视频时按视频宽度等比缩放（竖屏、4:3 等画面里文字占宽度的比例不变）。</p>
         </Section>
 
         <Section {...sec('timing')} icon={<Timer className="size-4" />} title="时间"

@@ -605,3 +605,40 @@ def test_ruby_sweep_follows_the_lyric(tmp_path):
     r = next(l for l in S.karaoke_ass(h)[0].splitlines() if ",KRuby," in l and "\\clip" in l and "まど" in l)
     a, b = map(int, re.search(r"\\t\((\d+),(\d+),\\clip", r).groups())
     assert b - a == 1
+
+
+def test_sizes_scale_with_the_video_width(tmp_path):
+    """Style pixels are for a 1920-wide frame: any video shows text at the same share of its width."""
+    h = _project(tmp_path)
+    r = h.project.result()
+
+    def main_size(w, hgt):
+        text, _ = A.build_ass(h.project, r, size=(w, hgt))
+        style = next(l for l in text.splitlines() if l.startswith("Style: KMain,"))
+        assert f"PlayResX: {w}" in text and f"PlayResY: {hgt}" in text
+        return float(style.split(",")[2])
+
+    base = main_size(1920, 1080)
+    assert base == h.project.karaoke.text.size
+    assert main_size(3840, 2160) == 2 * base and main_size(1280, 720) == pytest.approx(base * 2 / 3, abs=0.1)
+    assert main_size(1080, 1920) == pytest.approx(base * 1080 / 1920, abs=0.1)  # vertical video: not 1.78× larger
+    assert main_size(1440, 1080) == pytest.approx(base * 0.75, abs=0.1)  # 4:3
+
+
+def test_rotated_phone_video_reports_its_upright_size(monkeypatch):
+    import json
+    import subprocess
+
+    from kara_align.audio import video as V
+
+    def fake(streams):
+        out = json.dumps({"format": {"duration": "3.0"}, "streams": streams})
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, out, "")
+
+    monkeypatch.setattr(V, "ffprobe_path", lambda: "ffprobe")
+    base = {"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "30/1"}
+    for extra, want in (({}, (1920, 1080)), ({"side_data_list": [{"rotation": -90}]}, (1080, 1920)),
+                        ({"tags": {"rotate": "270"}}, (1080, 1920)), ({"side_data_list": [{"rotation": 180}]}, (1920, 1080))):
+        monkeypatch.setattr(V.subprocess, "run", fake([{**base, **extra}]))
+        info = V.probe_media("x.mp4")
+        assert (info["width"], info["height"]) == want, extra

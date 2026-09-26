@@ -24,7 +24,7 @@ _CREDIT = {"lyricist": re.compile(r"作词|作詞|^词$|^詞$|lyric|written", re
 _LABEL = re.compile(r"^\s*([^:：]{1,16}?)\s*[:：]\s*(.+?)\s*$")
 
 L_INFO_GLOW, L_INFO = 8, 9
-_BAR = 6  # accent bar width (1080p px)
+_BAR = 6  # accent bar width (px at 1920 wide)
 
 
 def song_fields(project: Project) -> dict[str, str]:

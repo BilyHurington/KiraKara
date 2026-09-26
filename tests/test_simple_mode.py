@@ -385,7 +385,7 @@ def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch)
     lyr = "きみと\nあるいた\nそら\n"
     a = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=lyr, mode="plain", name="A",
               style={"source": "template", "template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D",
-                     "translation": False, "song_info": True, "ruby": "romaji", "ruby_target": "kanji",
+                     "translation": False, "song_info": True, "ruby": "romaji", "ruby_target": "kanji", "font_size": 72,
                      "video_audio": "mix", "vocal_keep_pct": 35})
     # the choices are remembered for the next task
     assert AS.load().simple.task_style.secondary == "#FFC53D"
@@ -402,7 +402,7 @@ def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch)
     ka, kb = q.ws.get(a.project_id).project.karaoke, q.ws.get(b.project_id).project.karaoke
     assert ka.glow.enabled and ka.glow.color_unsung == "#FFC53D" and ka.effects.kind == "sparkle"
     assert (ka.translation.enabled, ka.info.enabled, ka.ruby.script, ka.ruby.target) == (False, True, "romaji", "kanji")
-    assert ka.output.vocal_keep_pct == 35
+    assert ka.output.vocal_keep_pct == 35 and ka.text.size == 72
     assert not kb.glow.enabled and kb.text.color_sung == "#2F80ED" and kb.text.size == 88
     # a saved style, and a preset that no longer exists
     from kara_align.karaoke.styles import save_style

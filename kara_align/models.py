@@ -496,8 +496,8 @@ class VideoAsset(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Karaoke subtitle style (ASS). Pixel values are defined for a 1080p frame and
-# scaled to the actual resolution.
+# Karaoke subtitle style (ASS). Pixel values are defined for a frame 1920 px wide
+# and scaled by the actual video width (same share of the width at any resolution).
 # ---------------------------------------------------------------------------
 
 
@@ -555,7 +555,7 @@ class KaraokeGlow(_Base):
     enabled: bool = False
     color_unsung: str = "#FF8AC2"
     color_sung: str = "#FFF2B3"  # the glow changes colour as each syllable is sung
-    size: float = 9.0  # px at 1080p
+    size: float = 9.0  # px at 1920 wide
     blur: float = 7.0
     strength: int = Field(default=85, ge=0, le=100)  # %
     ruby: bool = True  # glow the ruby too
@@ -629,7 +629,7 @@ class KaraokeSongInfo(_Base):
     fields: list[SongInfoField] = Field(default_factory=lambda: ["title", "artist"])
     start_ms: int = Field(default=500, ge=0, le=60000)  # audio time
     duration_ms: int = Field(default=7000, ge=1000, le=60000)
-    size: int = Field(default=56, ge=20, le=160)  # title size at 1080p; other lines are smaller
+    size: int = Field(default=56, ge=20, le=160)  # title size at 1920 wide; other lines are smaller
     margin: int = Field(default=56, ge=0, le=400)  # from the top and side edges
     color: str = ""  # "" = the lyrics' unsung colour
     accent: str = ""  # accent bar; "" = the lyrics' sung colour

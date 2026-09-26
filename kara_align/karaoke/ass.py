@@ -21,7 +21,7 @@ from ..models import AlignmentResult, KaraokeStyle, Line, Project, Segment
 from ..reading.japanese import is_kanji, to_hiragana
 from .fonts import Measurer, default_family
 
-REF_HEIGHT = 1080  # style pixel values are defined for this height
+REF_WIDTH = 1920  # style pixel values are defined for a frame this wide; other widths scale
 DEFAULT_SIZE = (1920, 1080)
 PAUSE_HIDE_MS = 6000  # a pause inside a line at least this long hides the line meanwhile
 
@@ -393,7 +393,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     # show / highlight everything a little before it is sung (display only)
     time_offset_ms -= style.timing.advance_ms
     W, H = size or resolution(project)
-    k = H / REF_HEIGHT
+    k = W / REF_WIDTH  # by width: the text takes the same share of the frame's width at any size
     lay, txt, rb, tr, glow, tm = style.layout, style.text, style.ruby, style.translation, style.glow, style.timing
     family = txt.font or default_family()
     ruby_family = (rb.font or family) if rb.enabled else family

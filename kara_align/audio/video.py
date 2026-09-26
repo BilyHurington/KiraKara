@@ -62,8 +62,17 @@ def probe_media(path: str | Path) -> dict:
     if video is not None:
         num, _, den = str(video.get("avg_frame_rate") or "0/1").partition("/")
         fps = f(num) / f(den, 1.0) if f(den, 1.0) else 0.0
+        # phone videos are often stored sideways with a rotation flag; ffmpeg turns them upright
+        # when decoding, so report the size as displayed
+        rot = f((video.get("tags") or {}).get("rotate"))
+        for sd in video.get("side_data_list") or []:
+            if "rotation" in sd:
+                rot = f(sd.get("rotation"))
+        w, h = video.get("width"), video.get("height")
+        if int(round(abs(rot))) % 180 == 90:
+            w, h = h, w
         info.update(video_codec=video.get("codec_name"), pix_fmt=video.get("pix_fmt"),
-                    width=video.get("width"), height=video.get("height"),
+                    width=w, height=h,
                     fps=round(fps, 3), video_start_s=f(video.get("start_time")))
     if audio is not None:
         info.update(audio_codec=audio.get("codec_name"), audio_sample_rate=int(f(audio.get("sample_rate"))),
