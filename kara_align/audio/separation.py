@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import sys
@@ -142,6 +143,36 @@ def fix_stem_length(stem: np.ndarray, original_len: int, leading_padding: int = 
     return x, action
 
 
+# where the separator used to keep its models (it downloads there by default): gone after a reboot
+_OLD_MODEL_DIR = Path("/tmp/audio-separator-models")
+
+
+def models_dir() -> Path:
+    """Where separation models are kept for good: ``$KARA_ALIGN_SEPARATION_MODELS``, else
+    ``<KARA_ALIGN_HOME>/models/separation`` (not the cache folder: it may be cleared).  A model is
+    downloaded there the first time it is used; models the separator left in its old temporary
+    folder are moved here (no second download)."""
+    from ..project.store import home_dir
+
+    env = os.environ.get("KARA_ALIGN_SEPARATION_MODELS")
+    d = Path(env).expanduser() if env else home_dir() / "models" / "separation"
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        old = [f for f in _OLD_MODEL_DIR.iterdir() if f.is_file()] if _OLD_MODEL_DIR.is_dir() else []
+    except OSError:
+        old = []
+    for f in old:
+        dest = d / f.name
+        if dest.exists():
+            continue
+        try:
+            shutil.move(str(f), str(dest.with_name(dest.name + ".part")))
+            os.replace(dest.with_name(dest.name + ".part"), dest)
+        except OSError:
+            pass  # left where it is: downloaded again when needed
+    return d
+
+
 # tqdm progress lines of the separator, e.g. " 45%|████      | 12/27"
 _PCT_RE = re.compile(r"(\d{1,3})%\|")
 
@@ -155,7 +186,7 @@ if args.get("device") == "cpu":
     torch.cuda.is_available = lambda: False
 from audio_separator.separator import Separator
 sep = Separator(output_dir=args["out_dir"], output_format="WAV", sample_rate=args["sample_rate"],
-                normalization_threshold=args.get("normalization", 0.9))
+                normalization_threshold=args.get("normalization", 0.9), model_file_dir=args["model_dir"])
 sep.load_model(model_filename=args["model_filename"])
 files = sep.separate(args["input"])
 print("@@RESULT@@" + json.dumps({"files": files}), flush=True)
@@ -202,7 +233,7 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     if device not in ("auto", "cpu"):
         raise SeparationError(f"不支持的分离设备：{device}（可选 auto / cpu）")
     args = {"input": str(decoded), "out_dir": str(raw_dir), "model_filename": p.model_filename,
-            "sample_rate": sr, "device": device}
+            "sample_rate": sr, "device": device, "model_dir": str(models_dir())}
     if progress:
         progress(0.05, f"加载分离模型 {p.model_filename}")
     # its own process group: stopping it also stops any worker processes the separator started

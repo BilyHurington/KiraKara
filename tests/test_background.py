@@ -147,3 +147,19 @@ def test_tasks_http_api_takes_a_background(tmp_path, monkeypatch):
     # without a background: as before
     del files["background"]
     assert c.post("/api/tasks", data={"lyrics": "きみと", "mode": "plain"}, files=files).status_code == 200
+
+
+def test_separation_models_are_kept_in_the_home_folder(tmp_path, monkeypatch):
+    from kara_align.audio import separation as SEP
+
+    old = tmp_path / "old-tmp"
+    old.mkdir()
+    (old / "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt").write_bytes(b"weights")
+    (old / "download_checks.json").write_text("{}")
+    monkeypatch.setattr(SEP, "_OLD_MODEL_DIR", old)
+    d = SEP.models_dir()
+    assert d == tmp_path / "home" / "models" / "separation"  # (KARA_ALIGN_HOME from the fixture)
+    assert (d / "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt").read_bytes() == b"weights"
+    assert not any(old.iterdir())  # moved, not downloaded again
+    monkeypatch.setenv("KARA_ALIGN_SEPARATION_MODELS", str(tmp_path / "elsewhere"))
+    assert SEP.models_dir() == tmp_path / "elsewhere"
