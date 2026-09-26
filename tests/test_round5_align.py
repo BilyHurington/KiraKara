@@ -65,13 +65,13 @@ def _texts(text):
 @pytest.mark.parametrize("text", ["ラララ～", "ラララ~", "ラララ〜"])
 def test_tilde_after_kana_is_long_vowel(text):
     prep, lines = _texts(text)
-    assert lines[0][-1] == ("ー", "a")
+    assert lines[0][-1] == ("ー", "")  # held: timed from the ら before it, no tokens of its own
     assert not [i for i in prep.issues if i.code == "untokenizable_unit"]
 
 
 def test_tilde_after_kanji_and_helpers():
     _, lines = _texts("空～\n空~きれい")
-    assert lines[0][-1] == ("ー", "a") and ("ー", "a") in lines[1]
+    assert lines[0][-1] == ("ー", "") and ("ー", "") in lines[1]
     assert to_hiragana("ららら～") == "らららー" and to_hiragana("~") == "ー" and to_hiragana("a~") == "a~"
     assert [m.text for m in split_morae("ラララ～")] == ["ら", "ら", "ら", "ー"]
     # English text keeps its tilde as punctuation
@@ -237,7 +237,7 @@ def test_no_window_edge_when_window_ends_with_audio():
 # --- A10 units without tokens --------------------------------------------------------------------
 
 def test_untokenizable_units_do_not_trigger_retries():
-    lines = [[a, b, "~"] for a, b in (("ka", "ta"), ("ne", "ko"), ("su", "shi"), ("yo", "ru"))] + [["ki", "mi"]]
+    lines = [[a, b, "っ"] for a, b in (("ka", "ta"), ("ne", "ko"), ("su", "shi"), ("yo", "ru"))] + [["ki", "mi"]]
     script, starts = [], []
     for i, (a, b, _) in enumerate(lines[:-1]):
         t = 1000 + i * 2000
@@ -583,3 +583,69 @@ def test_emission_key_changes_with_local_model_files(tmp_path):
     k1 = emission_cache_key("0" * 64, "original", 0, info, 20.0, 3.0, "x")
     (d / "weights.bin").write_bytes(b"abc")
     assert emission_cache_key("0" * 64, "original", 0, info, 20.0, 3.0, "x") != k1
+
+
+# --- long vowels are held, not spelled twice ----------------------------------------------------
+
+def test_long_vowel_is_timed_from_the_unit_it_lengthens():
+    doc = make_doc([["ら", "ー", "め", "ん"], ["そ", "ら", "ー"]], starts=[1000, 3000])
+    em = make_emission([("ra", 1000, 1100), ("me", 1600, 1700), ("n", 1700, 1800),
+                        ("so", 3000, 3100), ("ra", 3100, 3200)], 5000)
+    inp = inputs(doc, em)
+    inp.profile = JaHepburnProfile()
+    res = run_alignment(inp)
+    assert not [i for i in res.issues if i.code == "untokenizable_unit"]
+    assert len(res.units) == 7
+    ra, hold, me = res.units[0], res.units[1], res.units[2]
+    assert hold.status == "ok" and "held" in hold.flags
+    # ら and its ー share the time up to め, one equal piece each
+    assert abs(ra.start_ms - 1000) <= 40 and ra.end_ms == hold.start_ms and hold.end_ms == me.start_ms
+    assert abs((ra.end_ms - ra.start_ms) - (hold.end_ms - hold.start_ms)) <= 1
+    # line-final ー: held a little past the model's end of ら (the tail step may extend it)
+    ra2, hold2 = res.units[5], res.units[6]
+    assert hold2.status == "ok" and hold2.start_ms == ra2.end_ms and hold2.end_ms > hold2.start_ms
+
+
+def test_apply_holds_caps_the_hold_before_a_rest_and_needs_a_unit_before_it():
+    from kara_align.align.decoding import HOLD_MAX_MS, apply_holds
+    from kara_align.models import UnitTiming
+
+    def ut(r, s=None, e=None):
+        return UnitTiming(unit_id=r + str(s), line_id="L", segment_id="s", reading=r, start_ms=s, end_ms=e,
+                          status="ok" if s is not None else "unaligned")
+
+    uts = [ut("そ", 0, 100), ut("ー"), ut("ー"), ut("ら", 5000, 5100)]
+    apply_holds(uts)
+    assert [(u.start_ms, u.end_ms) for u in uts[:3]] == [(0, 300), (300, 600), (600, 100 + HOLD_MAX_MS)]
+    first = [ut("ー"), ut("あ", 0, 100)]
+    apply_holds(first)
+    assert first[0].start_ms is None and first[0].status == "unaligned"
+
+
+# --- spelled-out letters: one unit each, with the letter's name --------------------------------
+
+def test_spelled_letters_are_one_unit_each():
+    # (in Japanese lyrics; an English song keeps English readings)
+    prep, lines = _texts("きみと\nR O M A N T I C now")
+    lines = lines[1:]
+    letters = [(r, t) for r, t in lines[0] if r != "now"]
+    assert letters == [("あーる", "aru"), ("おー", "o"), ("えむ", "emu"), ("えー", "e"), ("えぬ", "enu"),
+                       ("てぃー", "ti"), ("あい", "ai"), ("しー", "shi")]
+    assert ("now", "now") in lines[0]
+    _, lines = _texts("きみ W X")
+    assert lines[0][-2:] == [("だぶりゅー", "daburyu"), ("えっくす", "ekkusu")]
+    # a word, or a lowercase letter (the article a), is not spelled out
+    segs = rule_segments("LOVE a")
+    assert [(s.surface, s.lang) for s in segs if s.units] == [("LOVE", "en"), ("a", "en")]
+
+
+def test_ai_reply_splitting_a_letter_into_morae_is_merged():
+    doc = parse_lyrics_text("きみと\nR O", mode="plain").doc
+    prepare_doc(doc)
+    ln = doc.lines[1]
+    patch = {"format": FMT_READING_PATCH, "version": 1, "lines": [{"id": ln.id, "text": ln.text, "segments": [
+        {"surface": "R", "reading": "あーる", "units": ["あ", "ー", "る"]}, {"surface": " ", "reading": ""},
+        {"surface": "O", "reading": "おー", "units": ["お", "ー"]}]}]}
+    rep = validate_patch(doc, patch)
+    assert [lr.status for lr in rep.lines] == ["ok"], rep.lines[0].reasons
+    assert [d.new_units for d in rep.lines[0].diff if d.new_units] == [["あーる"], ["おー"]]

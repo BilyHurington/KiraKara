@@ -79,6 +79,7 @@ export const FLAG_HELP: Record<string, string> = {
   in_rest: '所在位置人声分轨几乎无声：可能被错放进了间奏',
   tail_adjusted: '尾音结束时间已按人声能量修正',
   tail_unresolved: '尾音附近找不到可靠的能量边界，保留模型时间',
+  held: '长音「ー」：连续的元音没有可单独识别的声音，与前一个音平分从前一个音开始到下一个音开始的时间（最多延长 0.8 秒）',
 };
 
 export function flagLabel(flag: string): string {
@@ -86,7 +87,7 @@ export function flagLabel(flag: string): string {
   const map: Record<string, string> = {
     token_gap: '内部停顿', short_unit: '过短', long_unit: '过长', manual: '人工', adopted: '已采用',
     partial_tokens: '部分 token', illegal_interval: '非法区间', line_gap: '行内长停顿', in_rest: '人声无声处',
-    tail_adjusted: '尾音已修正', tail_unresolved: '尾音未定',
+    tail_adjusted: '尾音已修正', tail_unresolved: '尾音未定', held: '长音',
   };
   return map[flag] ?? flag;
 }

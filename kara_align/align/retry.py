@@ -25,7 +25,8 @@ from typing import Callable, Optional, Sequence
 
 from ..interfaces import TokenizedUnit, TranslitProfile
 from ..models import Candidate, Issue, RetryConfig, UnitTiming, new_id
-from .decoding import Prepared, TaskOutcome, unit_timings_for_line
+from ..reading.profiles import is_hold
+from .decoding import Prepared, TaskOutcome, apply_holds, unit_timings_for_line
 from .planning import Task
 
 RESIDUAL_TIE_MS = 150
@@ -127,7 +128,7 @@ def reading_overrides(prep: Prepared, line_id: str, profile: TranslitProfile,
             texts = profile.unit_texts(readings_l, langs, flags)
             toks = {t.unit_id: t for t in tokenize(ids, list(texts))}
             seq = [(uid, list(toks[uid].token_ids) if uid in toks else []) for uid in ids]
-            if any(not t for uid, t in seq if uid in readings):
+            if any(not t and not is_hold(readings[uid]) for uid, t in seq if uid in readings):
                 continue  # the candidate itself cannot be spelled for the model
             key = tuple(tuple(t) for _, t in seq)
             if key in seen:
@@ -153,6 +154,7 @@ def _timings_from_override(outcome: TaskOutcome, line_id: str, seq, readings: di
             ut.end_ms = ut.model_end_ms = sp.end_ms
             ut.acoustic_score = sp.score
         res.append(ut)
+    apply_holds(res)
     return res
 
 

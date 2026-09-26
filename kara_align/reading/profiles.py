@@ -4,7 +4,7 @@ The AI never decides tokenizer spelling; it only supplies kana readings.  A
 profile maps each Unit to the text the acoustic model is fed, one output
 string per unit so token positions map back to units.
 
-``ja-hepburn`` (version ``ja-hepburn/1``):
+``ja-hepburn`` (version ``ja-hepburn/2``):
 
 * lowercase Hepburn: し shi, ち chi, つ tsu, ふ fu, じ/ぢ ji, づ zu, を o,
   きゃ kya, しゃ sha, ちゃ cha, じゃ ja, ふぁ fa, ゔ vu ...
@@ -16,10 +16,15 @@ string per unit so token positions map back to units.
   and the alignment runner reports it as ``unaligned`` (it is never silently
   dropped from the result).
 * 撥音 ん -> ``n``.
-* long mark ー -> the previous unit's final vowel (empty if none).
+* a unit that is only a long mark (ー) gets **no tokens**: a held vowel has no
+  break in it, and CTC can only emit the same letter twice in a row with a
+  blank between them, so a doubled vowel squeezed the ー into one frame.  The
+  aligner gives it time from the unit before it instead
+  (:func:`kara_align.align.decoding.apply_holds`).  A ー inside a unit
+  (あーる) is simply dropped (``aru``).
 * neighbours are only taken from the units passed in one call: the aligner
   calls the profile once per lyric line, so a line-final っ is empty and a
-  line-initial ー has no vowel (both reported as ``unaligned``), never
+  line-initial ー has nothing to hold (both reported as ``unaligned``), never
   borrowed from the next / previous line.
 * ``en`` units: lowercase letters (apostrophes dropped).
 * ``zh`` units: tone-less pinyin letters, ü written as ``v``.
@@ -31,7 +36,7 @@ import re
 import unicodedata
 from typing import Sequence
 
-from .japanese import to_hiragana
+from .japanese import split_morae, to_hiragana
 
 _BASE = {
     "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
@@ -70,6 +75,12 @@ _DIGRAPH = {
 _YOON = {"ゃ": "a", "ゅ": "u", "ょ": "o"}
 _SMALL_V = {"ぁ": "a", "ぃ": "i", "ぅ": "u", "ぇ": "e", "ぉ": "o", "ゎ": "a"}
 _VOWELS = "aeiou"
+LONG_MARKS = frozenset("ー〜～~")
+
+
+def is_hold(reading: str) -> bool:
+    """A unit that only lengthens the one before it (ー)."""
+    return bool(reading) and all(c in LONG_MARKS for c in reading)
 
 
 def kana_to_romaji(mora: str) -> str:
@@ -90,6 +101,20 @@ def kana_to_romaji(mora: str) -> str:
     return "".join(_BASE.get(c, "") for c in m)
 
 
+def unit_romaji(reading: str) -> str:
+    """Romaji of one unit.  A unit is normally one mora; a longer one (a letter name read as one
+    unit: だぶりゅー, えっくす) is spelled mora by mora, its っ doubling the next consonant and its
+    ー dropped (a held vowel has no break for a second letter)."""
+    morae = split_morae(reading)
+    if len(morae) <= 1:
+        return kana_to_romaji(reading) if not (morae and "long" in morae[0].flags) else ""
+    parts = ["" if "long" in m.flags else kana_to_romaji(m.text) for m in morae]
+    for i, m in enumerate(morae):
+        if "sokuon" in m.flags:
+            parts[i] = _geminate(parts[i + 1]) if i + 1 < len(parts) else ""
+    return "".join(parts)
+
+
 def _geminate(next_text: str) -> str:
     if not next_text or next_text[0] in _VOWELS or next_text == "n":
         return ""
@@ -108,7 +133,7 @@ def _letters(s: str) -> str:
 
 class JaHepburnProfile:
     name = "ja-hepburn"
-    version = "ja-hepburn/1"
+    version = "ja-hepburn/2"
 
     def unit_texts(self, readings: Sequence[str], langs: Sequence[str], flags: Sequence[Sequence[str]]) -> list[str]:
         n = len(readings)
@@ -118,16 +143,11 @@ class JaHepburnProfile:
                 base.append(_letters(r))
             elif "sokuon" in fl or to_hiragana(r) == "っ":
                 base.append("\0sokuon")
-            elif "long" in fl or r in ("ー", "〜", "～", "~"):
-                base.append("\0long")
+            elif is_hold(r):
+                base.append("")  # held: time from the unit before it, no tokens of its own
             else:
-                base.append(kana_to_romaji(r))
+                base.append(unit_romaji(r))
         out = list(base)
-        for i in range(n):
-            if base[i] == "\0long":
-                prev = next((out[j] for j in range(i - 1, -1, -1) if out[j] and out[j][0] != "\0"), "")
-                v = prev[-1] if prev and prev[-1] in _VOWELS else ("n" if prev == "n" else "")
-                out[i] = v
         for i in range(n):
             if out[i] == "\0sokuon":
                 # only a directly following unit may supply the geminate

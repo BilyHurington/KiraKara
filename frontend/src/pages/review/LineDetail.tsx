@@ -174,7 +174,7 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
                   <div className="flex max-w-56 flex-wrap gap-1">
                     {u.flags.map((f) => (
                       <Tip key={f} content={flagHelp(f)}>
-                        <span className="cursor-help"><Badge tone={f === 'manual' ? 'ok' : f === 'adopted' ? 'accent' : 'warn'}>{flagLabel(f)}</Badge></span>
+                        <span className="cursor-help"><Badge tone={f === 'manual' ? 'ok' : f === 'adopted' ? 'accent' : f === 'held' ? 'neutral' : 'warn'}>{flagLabel(f)}</Badge></span>
                       </Tip>
                     ))}
                   </div>

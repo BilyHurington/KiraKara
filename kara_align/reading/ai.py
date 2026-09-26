@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
 from ..models import FMT_READING_PATCH, AiRoundtrip, Line, LyricsDoc, Segment, stable_hash
-from .japanese import is_kana, is_kana_text, split_morae, to_hiragana
+from .japanese import is_kana, is_kana_text, letter_name, split_morae, to_hiragana
 from .prepare import _assign_surfaces, units_from_spec
 
 MAX_REPLY_CHARS = 2_000_000
@@ -104,6 +104,9 @@ def build_prompt(doc: LyricsDoc, line_ids: Optional[Sequence[str]] = None, lang:
         "助词单独成段（に、を、は）；熟字训、当て字等只能整体读的词作为一个 segment（真新＝まっさら，不要拆成 真／新）。"
         "current_segments 的切分只是程序给的参考，可以合并或重新切分（locked 片段除外）。",
         "reading 写实际发音（助词は读作わ时写わ，へ读作え时写え），units 拼接后必须等于 reading。",
+        "逐个念出的拉丁字母（如 R O M A N T I C）：每个字母单独一个 segment，reading 写字母名的读法"
+        "（R＝あーる、M＝えむ、C＝しー、W＝だぶりゅー），整个字母只算一个 unit（units 为 [\"あーる\"]），不要按拍拆开。"
+        "日语歌词里的英文单词按歌里实际的唱法写成假名（now＝なう、friends＝ふれんず），units 照常按拍切分。",
         "重复的副歌也必须逐行完整输出，禁止用“同上”“略”“x2”等省略。",
         "不要输出任何时间、时间戳、偏移或时长字段；不要猜测时间。",
         "不要为了表现拖长演唱而新增元音或长音（例如不要把「空」写成そおおら）。",
@@ -287,6 +290,8 @@ def _validate_segments(line: Line, raw_segs: Any, reasons: list[str]) -> list[di
             if units is not None and "".join(units) != reading:
                 reasons.append(f"segment[{i}] units {units} 拼接后不等于 reading {reading}")
                 continue
+            if lang == "ja" and letter_name(surface.strip()):
+                units = [reading]  # a spelled-out letter is one unit, however the reply split it
         else:
             if has_jp:
                 reasons.append(f"segment[{i}] 缺少读音（{surface}）")

@@ -72,12 +72,15 @@ def test_hepburn_sokuon_and_long():
     assert ht(["かっぱ"]) == ["ka", "p", "pa"]
     assert ht(["まっちゃ"]) == ["ma", "t", "cha"]
     assert ht(["がんばっ"]) == ["ga", "n", "ba", ""]  # no following consonant -> empty, reported unaligned
-    assert ht(["らーめん"]) == ["ra", "a", "me", "n"]
+    # a ー unit has no tokens of its own (the aligner times it from the unit before it);
+    # inside a unit it is dropped
+    assert ht(["らーめん"]) == ["ra", "", "me", "n"]
+    assert get_profile().unit_texts(["あーる", "えむ"], ["ja", "ja"], [["long"], []]) == ["aru", "emu"]
 
 
 def test_profile_other_langs_and_version():
     p = get_profile()
-    assert p.version == "ja-hepburn/1"
+    assert p.version == "ja-hepburn/2"
     assert p.unit_texts(["love", "nv"], ["en", "zh"], [[], []]) == ["love", "nv"]
     with pytest.raises(KeyError):
         get_profile("nope")

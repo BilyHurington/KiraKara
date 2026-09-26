@@ -345,6 +345,11 @@ def _class_segments(text: str) -> list[Segment]:
                                     units=reading_units(reading) if reading else [],
                                     reading_source="rule" if reading else "none",
                                     uncertain=True))
+        elif kind == "latin" and letter_name(run):
+            # a letter spelled out (R O M A …): its name as sung, the whole letter one unit
+            name, alts = letter_name(run)  # type: ignore[misc]
+            segs.append(Segment(surface=run, reading=name, lang="ja", units=[Unit(reading=name, surface=run)],
+                                reading_source="rule", candidates=alts))
         elif kind == "latin":
             from .english import word_reading
 
@@ -358,6 +363,27 @@ def _class_segments(text: str) -> list[Segment]:
         elif not _long_after(segs, run):
             _punct(segs, run)
     return segs
+
+
+# names of the Latin letters as sung in Japanese; the first one is used, the others are offered as
+# candidates (tried by the aligner's retry when the line fits badly)
+LETTER_NAMES: dict[str, list[str]] = {
+    "A": ["えー", "えい"], "B": ["びー"], "C": ["しー"], "D": ["でぃー", "でー"], "E": ["いー"], "F": ["えふ"],
+    "G": ["じー"], "H": ["えいち", "えっち"], "I": ["あい"], "J": ["じぇー", "じぇい"], "K": ["けー", "けい"],
+    "L": ["える"], "M": ["えむ"], "N": ["えぬ"], "O": ["おー"], "P": ["ぴー"], "Q": ["きゅー"], "R": ["あーる"],
+    "S": ["えす"], "T": ["てぃー"], "U": ["ゆー"], "V": ["ぶい", "ゔぃー"], "W": ["だぶりゅー", "だぶる"],
+    "X": ["えっくす"], "Y": ["わい"], "Z": ["ぜっと", "ずぃー"],
+}
+
+
+def letter_name(run: str) -> Optional[tuple[str, list[str]]]:
+    """(reading, other readings) of a single capital letter written on its own (a spelled-out word:
+    R O M A N T I C); None for anything else (words, lowercase letters such as the article a)."""
+    c = unicodedata.normalize("NFKC", run)
+    if len(c) != 1 or not ("A" <= c <= "Z"):
+        return None
+    names = LETTER_NAMES[c]
+    return names[0], names[1:]
 
 
 def _kanji_pieces(text: str, start: int, run: str) -> list[tuple[str, str]]:

@@ -12,6 +12,7 @@ from typing import Callable, Optional, Sequence
 
 from ..interfaces import Emission, TokenizedUnit, TranslitProfile
 from ..models import DecodeConfig, Issue, Line, LyricsDoc, UnitTiming
+from ..reading.profiles import is_hold
 import numpy as np
 
 from .activity import VocalActivity
@@ -88,12 +89,15 @@ def prepare(
                                         [flags.get(i.unit_id, []) for i in li])
     toks = tokenize(ids, list(texts)) if infos else []
     by_id = {t.unit_id: t for t in toks}
+    held = held_units([(i.unit_id, i.line_id, i.reading) for i in infos], {t.unit_id for t in toks if t.token_ids})
     for i, text in zip(infos, texts):
         i.text = text
         t = by_id.get(i.unit_id)
         if t is not None:
             i.token_ids = list(t.token_ids)
             i.unknown = list(t.unknown)
+        if not i.token_ids and i.unit_id in held:
+            continue  # ー: timed from the unit it lengthens (apply_holds)
         if not i.token_ids:
             issues.append(Issue(code="untokenizable_unit", severity="warning", line_id=i.line_id, unit_id=i.unit_id,
                                 message=f"单元「{i.reading}」没有模型 token（转写「{text}」），保持未对齐",
@@ -103,6 +107,54 @@ def prepare(
                                 message=f"单元「{i.reading}」中的字符 {i.unknown} 不在模型词表中",
                                 data={"unknown": i.unknown}))
     return Prepared(lines, order, units, line_units, issues)
+
+
+def held_units(units: Sequence[tuple[str, str, str]], with_tokens: set[str]) -> set[str]:
+    """Ids of the ー units that lengthen a unit with tokens before them in the same line
+    (``units``: (unit id, line id, reading) in order)."""
+    out: set[str] = set()
+    holder: Optional[tuple[str, str]] = None  # (line id, unit id) of the unit a ー would lengthen
+    for uid, lid, reading in units:
+        if is_hold(reading):
+            if holder is not None and holder[0] == lid:
+                out.add(uid)
+            continue
+        holder = (lid, uid) if uid in with_tokens else None
+    return out
+
+
+# a held vowel (ー) lasts until the next unit starts, but at most this long past the model's end of
+# the unit it lengthens (a rest may follow); line-final: this long, the tail step may extend it
+HOLD_MAX_MS = 800
+HOLD_END_MS = 300
+MIN_PIECE_MS = 20
+
+
+def apply_holds(uts: list[UnitTiming]) -> None:
+    """Time the ー units of one line (in place): a unit and the ー after it share the time from the
+    unit's start to where the held vowel ends, one equal piece each (each is one mora)."""
+    i = 0
+    while i < len(uts):
+        p = uts[i]
+        j = i + 1
+        while j < len(uts) and is_hold(uts[j].reading) and uts[j].start_ms is None:
+            j += 1
+        holds = uts[i + 1:j]
+        if holds and p.start_ms is not None and p.end_ms is not None and not is_hold(p.reading):
+            nxt = next((u.start_ms for u in uts[j:] if u.start_ms is not None), None)
+            end = p.end_ms + (min(HOLD_MAX_MS, max(0, nxt - p.end_ms)) if nxt is not None else HOLD_END_MS)
+            end = max(end, p.start_ms + MIN_PIECE_MS * (len(holds) + 1))
+            if nxt is not None and nxt >= p.start_ms + MIN_PIECE_MS * (len(holds) + 1):
+                end = min(end, nxt)
+            step = (end - p.start_ms) / (len(holds) + 1)
+            p.end_ms = int(round(p.start_ms + step))
+            for k, h in enumerate(holds, start=1):
+                h.start_ms = int(round(p.start_ms + step * k))
+                h.end_ms = int(round(p.start_ms + step * (k + 1))) if k < len(holds) else int(end)
+                h.status, h.reason = "ok", None
+                h.acoustic_score = p.acoustic_score
+                h.flags = [f for f in h.flags if f != "partial_tokens"] + ["held"]
+        i = max(j, i + 1)
 
 
 @dataclass
@@ -252,7 +304,14 @@ def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_i
     for uid in prep.line_units.get(line_id, []):
         info = prep.units[uid]
         ut = UnitTiming(unit_id=uid, line_id=line_id, segment_id=info.segment_id, reading=info.reading)
-        if not info.token_ids:
+        if not info.token_ids and is_hold(info.reading):
+            # timed by apply_holds from the unit it lengthens, when that one has times
+            if outcome is not None and outcome.feasible:
+                ut.status, ut.reason = "unaligned", "长音前面没有可以延长的单元"
+            else:
+                ut.status = "failed"
+                ut.reason = (outcome.reason if outcome is not None else None) or "未解码"
+        elif not info.token_ids:
             ut.status = "unaligned"
             ut.reason = "该单元没有模型 token" + (f"（未知字符 {info.unknown}）" if info.unknown else "")
         elif outcome is None or not outcome.feasible:
@@ -271,4 +330,5 @@ def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_i
             if sp.max_gap_ms >= TOKEN_GAP_MS:
                 ut.flags.append("token_gap")
         res.append(ut)
+    apply_holds(res)
     return res
