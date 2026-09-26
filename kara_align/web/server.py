@@ -174,7 +174,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         tq.shutdown()
         jm.shutdown()
 
-    app = FastAPI(title="Kara Align", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="MiriKara", version=__version__, lifespan=lifespan)
     app.state.workspace = ws
     app.state.jobs = jm
     app.state.tasks = tq

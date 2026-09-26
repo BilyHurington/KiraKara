@@ -29,7 +29,7 @@ export function markConnection(ok: boolean) {
   else if (!ok && !s.down) useConnection.setState({ down: true, since: Date.now() });
 }
 
-export const OFFLINE_MESSAGE = '无法连接到本地服务，请确认 kara-align serve 正在运行';
+export const OFFLINE_MESSAGE = '无法连接到本地服务，请确认 mirikara serve 正在运行';
 
 // ------------------------------------------------------------------ readable errors
 
@@ -47,7 +47,7 @@ export function readableError(msg: unknown): string {
   for (let i = 0; i < 3 && PY_PREFIX.test(t); i++) t = t.replace(PY_PREFIX, '');
   if (/^'.*'$/.test(t)) t = `缺少 ${t}`;
   if (!t) return '未知错误';
-  if (/^Internal Server Error$/i.test(t)) return '本地服务内部错误（HTTP 500），请查看运行 kara-align serve 的终端日志';
+  if (/^Internal Server Error$/i.test(t)) return '本地服务内部错误（HTTP 500），请查看运行 mirikara serve 的终端日志';
   if (/^Not Found$/i.test(t)) return '找不到请求的内容（HTTP 404）';
   if (/^Method Not Allowed$/i.test(t)) return '本地服务不支持这个操作（HTTP 405），请确认前端与服务版本一致';
   if (/^Request Entity Too Large$/i.test(t)) return '文件或文本过大';
@@ -112,7 +112,7 @@ export function errorText(status: number, data: any): string {
   if (typeof detail === 'string' && detail.trim() && !/^\s*</.test(detail)) return readableError(detail);
   if (status === 413) return '文件或文本过大';
   if (status === 404) return '找不到请求的内容（HTTP 404）';
-  if (status >= 500) return `本地服务内部错误（HTTP ${status}），请查看运行 kara-align serve 的终端日志`;
+  if (status >= 500) return `本地服务内部错误（HTTP ${status}），请查看运行 mirikara serve 的终端日志`;
   return `请求失败（HTTP ${status}）`;
 }
 

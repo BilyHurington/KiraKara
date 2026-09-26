@@ -104,7 +104,7 @@ def ensure_available() -> str:
     except Exception as exc:  # ImportError or broken install
         raise SeparationError(
             "人声分离需要可选依赖 audio-separator"
-            "（pip install 'kara-align[separation]'）；导入失败：" + str(exc)) from exc
+            "（pip install 'mirikara[separation]'）；导入失败：" + str(exc)) from exc
     return audio_separator_version() or "unknown"
 
 

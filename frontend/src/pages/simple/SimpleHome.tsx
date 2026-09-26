@@ -184,7 +184,7 @@ export function SimpleHome() {
     <div className="space-y-6">
       {elsewhere && (
         <Callout tone="warn" title="另一个服务进程正在运行任务队列">
-          同一个项目目录下还开着另一个 Kara Align 服务，任务由它执行；这里只能查看，不能添加、取消或重试任务。请关掉其中一个后刷新页面。
+          同一个项目目录下还开着另一个 MiriKara 服务，任务由它执行；这里只能查看，不能添加、取消或重试任务。请关掉其中一个后刷新页面。
         </Callout>
       )}
       <Card>

@@ -1,7 +1,7 @@
 [project]
-name = "kara-align"
+name = "mirikara"
 version = "0.1.0"
-description = "Timestamp alignment for known karaoke lyrics (CTC forced alignment with optional LRC anchors)"
+description = "MiriKara: Japanese karaoke videos from a song and its lyrics (mora-level alignment, furigana, burned-in subtitles)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -42,7 +42,8 @@ dev = [
 ]
 
 [project.scripts]
-kara-align = "kara_align.cli:main"
+mirikara = "kara_align.cli:main"
+kara-align = "kara_align.cli:main"  # the earlier name, kept working
 
 [build-system]
 requires = ["hatchling"]
