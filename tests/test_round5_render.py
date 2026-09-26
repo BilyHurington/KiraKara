@@ -258,7 +258,10 @@ def test_title_card_never_shows_over_a_translation_or_lyric():
     wide = "很长很长的翻译文字" * 6  # shrunk to the room between the margins: under both corners
     p, r = _card_project(wide)
     text, warnings = A.build_ass(p, r, st)
-    assert not _events(text, "KInfo") and any("歌曲信息" in w for w in warnings)
+    # the card is not dropped: it moves down, below the translation along the top edge
+    trans_bottom = 40 + 88 * 0.6  # (margin_v, translation size of the default style)
+    tops = [float(re.search(r"\\pos\([\d.]+,([\d.]+)\)", l).group(1)) for l in _events(text, "KInfo") if "\\p1" in l]
+    assert tops and min(tops) > trans_bottom and not any("没有显示" in w for w in warnings)
     # a short one in the middle: the card stays (the 2 s rule for the top edge still applies)
     p, r = _card_project("短")
     text, _ = A.build_ass(p, r, st)
@@ -629,3 +632,86 @@ def test_title_card_comes_again_at_the_end_of_the_song():
     # the card is off: no ending card either
     st.info.enabled = False
     assert cards(st)[0] == []
+
+
+# --- long lines wrap; what cannot wrap reaches toward the edges ------------------------------------
+
+def _long_line(translation=None):
+    # 18 kana words, a full-width space in the middle: wider than the room between the margins
+    words = [_seg(w, w) for w in ("きみと", "あるいた", "そらの", "したで")] + [_seg("　")] + \
+        [_seg(w, w) for w in ("ゆめを", "みていた", "あのひの", "ことを")]
+    return _line(words, translation=translation)
+
+
+def _main_rows(text):
+    """Visible text of each lyric event group (KMain events that start together form one row)."""
+    rows = {}
+    for l in _events(text, "KMain"):
+        if "\\iclip" in l:
+            continue
+        rows.setdefault((l.split(",")[1], _pos(l)[1]), []).append(re.sub(r"\{[^}]*\}", "", l.split(",", 9)[9]))
+    return ["".join(v) for _, v in sorted(rows.items())]
+
+
+def test_a_long_line_wraps_at_the_space_and_keeps_one_translation():
+    st = KaraokeStyle()
+    st.ruby.enabled = False
+    st.translation.enabled = True
+    st.text.size = 110
+    p, r = _project([_long_line("走过天空之下 梦见那一天的事")])
+    text, warnings = A.build_ass(p, r, st)
+    rows = _main_rows(text)
+    assert rows == ["きみとあるいたそらのしたで", "ゆめをみていたあのひのことを"]  # broken at the space, dropped
+    assert not any("过长" in w for w in warnings)
+    trans = _events(text, "KTrans")
+    assert len(trans) == 1 and trans[0].endswith("走过天空之下 梦见那一天的事")
+    # shown until the second piece is sung (plus the hold)
+    last_end = max(u.end_ms for u in r.units)
+    assert _ms(trans[0].split(",")[2]) >= last_end
+    st.layout.wrap = "off"
+    text, warnings = A.build_ass(p, r, st)
+    assert len(_main_rows(text)) == 1
+
+
+def test_the_ai_suggested_break_is_used_when_asked():
+    st = KaraokeStyle()
+    st.ruby.enabled = False
+    st.text.size = 110
+    ln = _long_line()
+    ln.segments[2].wrap_before = True  # before そらの
+    p, r = _project([ln])
+    assert _main_rows(A.build_ass(p, r, st)[0])[0] == "きみとあるいたそらのしたで"  # auto: the space
+    st.layout.wrap = "ai"
+    assert _main_rows(A.build_ass(p, r, st)[0])[0] == "きみとあるいた"
+
+
+def test_a_line_that_cannot_wrap_reaches_toward_the_edge_before_it_shrinks():
+    st = KaraokeStyle()
+    st.ruby.enabled = False
+    st.layout.lines = 1
+    st.layout.margin_h = 240
+    st.text.size = 125
+    p, r = _project([_line([_seg("あいうえおかきくけこさしすせそたち", "あいうえおかきくけこさしすせそたち")])])
+    text, warnings = A.build_ass(p, r, st)
+    w = Measurer(default_family(), st.text.bold, 125).width("あいうえおかきくけこさしすせそたち")
+    assert 1920 - 2 * 240 < w < 1920 - 2 * 50  # wider than the margins allow, not than the edges
+    assert not any("过长" in x for x in warnings)  # not shrunk: it uses the room out to 50 px
+    xs = [_pos(l)[0] for l in _events(text, "KMain")]
+    assert min(xs) > 50 and max(xs) < 1920 - 50
+
+
+def test_long_titles_wrap_instead_of_being_squeezed():
+    from kara_align.karaoke.info import wrap_text
+
+    st = KaraokeStyle()
+    st.info.enabled, st.info.start_ms = True, 0
+    p, r = _card_project(None)
+    p.lyrics.meta.title = "ハイファイ☆デイズ (M@STER VERSION) 赤城みりあ ソロ・リミックス"
+    text, _ = A.build_ass(p, r, st)
+    card = [l for l in _events(text, "KInfo") if "\\p1" not in l]
+    assert card and not any("\\fscx" in l for l in card)  # no squeezed rows
+    texts = list(dict.fromkeys(l.split("}", 1)[1] for l in card))
+    assert texts[0] == "ハイファイ☆デイズ" and any("(M@STER VERSION)" in t for t in texts)  # not inside the brackets
+    # rows break outside brackets where they can
+    w = lambda s: len(s) * 40  # noqa: E731
+    assert wrap_text("ショコラ・ティアラ ～For Miria rearrange MIX～", w, 1100) == ["ショコラ・ティアラ", "～For Miria rearrange MIX～"]

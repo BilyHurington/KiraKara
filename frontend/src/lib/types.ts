@@ -193,6 +193,10 @@ export interface KaraokeStyle {
   layout: {
     position: 'bottom' | 'top'; lines: number; arrangement: 'alternate' | 'center';
     margin_v: number; line_spacing: number; margin_h: number; alternate_indent: number; shrink_long_lines: boolean;
+    /** long lines: split at a space / punctuation, or where the AI readings suggested; off = keep whole */
+    wrap?: 'off' | 'auto' | 'ai';
+    /** a line still too wide may reach this close to the frame's edges before it shrinks */
+    edge_margin?: number;
   };
   text: {
     font: string; size: number; bold: boolean; color_unsung: string; color_sung: string; outline_color: string;

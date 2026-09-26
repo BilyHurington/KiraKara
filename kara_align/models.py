@@ -97,6 +97,9 @@ class Segment(_Base):
     uncertain: bool = False
     candidates: list[str] = Field(default_factory=list)  # alternative readings
     note: str = ""
+    # karaoke display only: a long line may wrap before this segment (suggested by the AI readings;
+    # used with layout.wrap == "ai").  Not part of any revision: it never changes an alignment.
+    wrap_before: bool = False
 
 
 class LineSource(_Base):
@@ -737,6 +740,13 @@ class KaraokeLayout(_KaraokeBase):
     # alternating lines: extra inset toward the centre for lines that fit, so two
     # short lines are not pinned to opposite edges (long lines use the full width)
     alternate_indent: int = Field(default=240, ge=0, le=800)
+    # a line wider than the room between the margins: "auto" splits it in two (or more) at a space
+    # or punctuation (else between words), "ai" prefers the break the AI readings suggested
+    # (Segment.wrap_before), "off" keeps it whole.  The halves take turns in the rows like lines.
+    wrap: Literal["off", "auto", "ai"] = "auto"
+    # a line that is still too wide may reach this close to the frame's edges (px at 1920 wide)
+    # before it is shrunk
+    edge_margin: int = Field(default=50, ge=0, le=400)
     shrink_long_lines: bool = True  # scale down lines wider than the frame
 
 

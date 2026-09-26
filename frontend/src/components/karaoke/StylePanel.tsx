@@ -297,7 +297,16 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
               <Num name="向中间缩进" value={L.alternate_indent} max={800} onChange={(v) => patch((s) => { s.layout.alternate_indent = v; })} />
             </Row>
           )}
-          <Switch checked={L.shrink_long_lines} onChange={(v) => patch((s) => { s.layout.shrink_long_lines = v; })} label="过长的行自动缩小，保证不超出边距" />
+          <Row label="长句换行" hint={(L.wrap ?? 'auto') === 'off' ? '放不下的行保持一整行（伸向画面边缘，仍放不下时缩小）'
+            : (L.wrap ?? 'auto') === 'ai' ? '优先用 AI 注音时建议的换行位置（没有时按空格、标点）；两半像两行一样轮流显示，翻译仍是一整行'
+              : '放不下的行在空格、标点处（没有时在两个词之间）分成两半，像两行一样轮流显示；翻译仍是一整行'}>
+            <Segmented value={L.wrap ?? 'auto'} onChange={(v) => patch((s) => { s.layout.wrap = v; })}
+              options={[{ value: 'auto', label: '空格、标点处' }, { value: 'ai', label: '按 AI 建议' }, { value: 'off', label: '不换行' }]} />
+          </Row>
+          <Row label="长句离画面边缘至少" hint="换行后仍然放不下的行可以超出左右边距，伸到离边缘这么近；再放不下才缩小">
+            <Num name="长句边缘距离" value={L.edge_margin ?? 50} max={400} onChange={(v) => patch((s) => { s.layout.edge_margin = v; })} />
+          </Row>
+          <Switch checked={L.shrink_long_lines} onChange={(v) => patch((s) => { s.layout.shrink_long_lines = v; })} label="仍然过长的行自动缩小，保证不超出画面" />
           <p className="text-xs text-subtle">像素值以 1920 宽的画面为准；生成视频时按视频宽度等比缩放（竖屏、4:3 等画面里文字占宽度的比例不变）。</p>
         </Section>
 

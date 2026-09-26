@@ -69,6 +69,56 @@ def info_lines(project: Project, style: KaraokeStyle) -> list[str]:
     return auto_lines(project, style)
 
 
+# where a card line may wrap: after a space / "・" / "/", or before a bracket, a tilde or " - " —
+# preferably not inside brackets (「(M@STER VERSION)」, 「～For Miria MIX～」 stay together)
+_OPEN, _CLOSE, _TILDES = "(（[［【〈《「『", ")）]］】〉》」』", "~〜～"
+_BREAK_AFTER = " \u3000・/／、，,"
+
+
+def _depths(text: str) -> list[int]:
+    """Bracket depth before each character (a tilde opens when another one follows, else closes)."""
+    out, depth, in_tilde = [], 0, False
+    for i, c in enumerate(text):
+        out.append(depth)
+        if c in _OPEN:
+            depth += 1
+        elif c in _CLOSE:
+            depth = max(0, depth - 1)
+        elif c in _TILDES:
+            if in_tilde:
+                depth, in_tilde = max(0, depth - 1), False
+            elif any(x in _TILDES for x in text[i + 1:]):
+                depth, in_tilde = depth + 1, True
+    return out
+
+
+def wrap_text(text: str, width, max_w: float) -> list[str]:
+    """``text`` in rows no wider than ``max_w`` (``width``: text -> px), broken where it reads well:
+    the longest first row that ends at a good place outside brackets, else at a good place, else
+    between any two characters; spaces at the break are dropped."""
+    text = text.strip()
+    rows: list[str] = []
+    while text and width(text) > max_w:
+        depth = _depths(text)
+        cuts = [i for i in range(1, len(text))
+                if text[i] in _OPEN or (text[i] in _TILDES and depth[i] == 0) or text[i - 1] in _BREAK_AFTER
+                or text[i:i + 3] == " - "]
+        fit = [i for i in cuts if width(text[:i].rstrip()) <= max_w]
+        outside = [i for i in fit if depth[i] == 0]
+        if outside or fit:
+            i = (outside or fit)[-1]
+        else:  # no good place fits: as many characters as fit
+            i = 1
+            while i < len(text) and width(text[:i + 1]) <= max_w:
+                i += 1
+        head, text = text[:i].rstrip(" \u3000"), text[i:].lstrip(" \u3000")
+        if head:
+            rows.append(head)
+    if text:
+        rows.append(text)
+    return rows or [""]
+
+
 def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float, family: str,
                 time_offset_ms: float, busy_from_ms: Optional[float], *,
                 boxes: Sequence[tuple[float, float, float, float, float, float]] = (),
@@ -89,17 +139,17 @@ def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float,
     if busy_from_ms is not None and busy_from_ms - 200 < t1:
         t1 = max(t0 + 2000, busy_from_ms - 200)
     t0 = max(0.0, t0)
-    events = _card(lines, style, W, k, family, t0, t1, boxes, warnings, at_end=False)
+    events = _card(lines, style, W, H, k, family, t0, t1, boxes, warnings, at_end=False)
     if info.outro and end_ms is not None and end_ms - info.outro_duration_ms > t1:
         e1 = end_ms
         e0 = e1 - info.outro_duration_ms
         if busy_until_ms is not None and busy_until_ms + 200 > e0:
             e0 = min(e1 - 2000, busy_until_ms + 200)
-        events += _card(lines, style, W, k, family, max(e0, t1), e1, boxes, warnings, at_end=True)
+        events += _card(lines, style, W, H, k, family, max(e0, t1), e1, boxes, warnings, at_end=True)
     return events
 
 
-def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, t0: float, t1: float,
+def _card(lines: list[str], style: KaraokeStyle, W: int, H: int, k: float, family: str, t0: float, t1: float,
           boxes: Sequence[tuple[float, float, float, float, float, float]], warnings: Optional[list[str]], *,
           at_end: bool) -> list[str]:
     """One showing of the card from t0 to t1 (cut short by what else is drawn in its corner: at the
@@ -116,25 +166,32 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
     accent = _bgr(info.accent or txt.color_sung)
     outline_c = _bgr(txt.outline_color)
 
-    # where each line goes (\an7 / \an9: the line box's top at y, its height the font size)
+    # rows, top to bottom, relative to the card's top (\an7 / \an9: a row's top at y, its height
+    # the font size); a line too wide for the card wraps (at a space, before a bracket …) instead
+    # of being squeezed.  level 0 = the title.
     placed = []
-    y = bottom = margin
+    y = bottom = 0.0
     for i, text in enumerate(lines):
         size = title_size if i == 0 else sub_size
         bold = txt.bold if i == 0 else False
-        width = Measurer(family, bold, size).width(text)
-        placed.append((text, size, bold, width, y))
-        bottom = y + size
-        y += size * (1.18 if i == 0 else 1.32)
-    block_h = bottom - margin  # the accent bar is as tall as the text
+        m = Measurer(family, bold, size)
+        rows = wrap_text(text, m.width, max_w)
+        for j, row in enumerate(rows):
+            if placed:  # below the previous row: a wrapped row closer, the title's rows further
+                prev_size, prev_level = placed[-1][1], placed[-1][5]
+                y += prev_size * (1.1 if j else (1.18 if prev_level == 0 else 1.32))
+            placed.append((row, size, bold, m.width(row), y, 0 if i == 0 else 1))
+            bottom = y + size
+    block_h = bottom  # the accent bar is as tall as the text
     # the card's area (sliding in, outline and glow included) must stay clear of everything else
     pad = (txt.outline + (glow.size + glow.blur if glow.enabled else 0)) * k + 8 * k
-    reach = bar_w + gap + min(max_w, max(w for *_, w, _ in placed)) + 28 * k
+    reach = bar_w + gap + min(max_w, max(w for _, _, _, w, _, _ in placed)) + 28 * k
+    lowest = H * 0.45  # a card moved down stays in the upper part of the frame
 
-    def clear(right: bool) -> tuple[float, float]:
-        """The card's time with nothing else where it would be (in that corner), 0.2 s apart."""
+    def clear(right: bool, top: float) -> tuple[float, float]:
+        """The card's time with nothing else where it would be (that corner, from ``top``), 0.2 s apart."""
         cx0, cx1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
-        cy0, cy1 = margin - pad, margin + block_h + pad
+        cy0, cy1 = top - pad, top + block_h + pad
         start, end = t0, t1
         hits = [(b0, b1) for b0, b1, bx0, by0, bx1, by1 in boxes
                 if bx0 < cx1 and cx0 < bx1 and by0 < cy1 and cy0 < by1]
@@ -151,19 +208,37 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
                     end = b0 - 200
         return start, end
 
+    def place(right: bool, move: bool) -> Optional[tuple[float, float, float]]:
+        """(top, from, to) in that corner: at the top, or (``move``) moved down just below what is in
+        the way there (e.g. a translation along the top edge), with at least 1 s to show."""
+        cx0, cx1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
+        tops = [margin] + sorted({by1 + pad + 6 * k for b0, b1, bx0, by0, bx1, by1 in boxes
+                                  if bx0 < cx1 and cx0 < bx1 and b1 > t0 and b0 < t1 and by1 + pad + 6 * k > margin})
+        for top in (tops if move else tops[:1]):
+            if top + block_h > lowest:
+                break
+            a, b = clear(right, top)
+            if b - a >= 1000:
+                return top, a, b
+        return None
+
     where = "结尾" if at_end else "开头"
     right = info.position == "top-right"
-    n0, n1 = clear(right)
-    if n1 - n0 < 1000:  # no room in its corner: the other one, else no card
-        o0, o1 = clear(not right)
-        if o1 - o0 < 1000:
-            if warnings is not None:
-                warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息没有显示"
-                                f"（可调整它的{'显示时长' if at_end else '开始时间'}）")
-            return []
-        right, n0, n1 = not right, o0, o1
+    # its corner at the top; else the other corner; else moved down below what is in the way
+    # (its corner first); else no card
+    for side, move in ((right, False), (not right, False), (right, True), (not right, True)):
+        got = place(side, move)
+        if got is not None:
+            break
+    if got is None:
         if warnings is not None:
-            warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息改到了另一侧")
+            warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息没有显示"
+                            f"（可调整它的{'显示时长' if at_end else '开始时间'}）")
+        return []
+    if side != right and warnings is not None:
+        warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息改到了另一侧")
+    right = side
+    top, n0, n1 = got
     t0, t1 = n0, n1
     slide = 28 * k * (1 if right else -1)
     x_text = (W - margin - bar_w - gap) if right else (margin + bar_w + gap)
@@ -173,7 +248,8 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
     # leaving is the same played backwards: the lines slide back out (the last one first), then the
     # bar shrinks up.  (An event has one \\move: a line is one event coming in and one going out.)
     events: list[str] = []
-    for i, (text, size, bold, width, y) in enumerate(placed):
+    for i, (text, size, bold, width, y, level) in enumerate(placed):
+        y += top
         sx = f"\\fscx{max_w / width * 100:.1f}" if width > max_w else ""
         a = t0 + _STAGGER * i  # lines come in one after another
         out_end = t1 - 200 - _STAGGER * i  # and leave in the opposite order, before the bar
@@ -184,11 +260,11 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
         if glow.enabled:
             looks.append((L_INFO_GLOW, f"\\1a&HFF&\\3c{_bgr(glow.color_unsung)}"
                                        f"\\3a&H{int(round(255 * (1 - glow.strength / 100))):02X}&"
-                                       f"\\bord{glow.size * k * (0.7 if i == 0 else 0.5):.1f}"
+                                       f"\\bord{glow.size * k * (0.7 if level == 0 else 0.5):.1f}"
                                        f"\\blur{glow.blur * k:.1f}\\shad0"))
-        sub_alpha = "" if i == 0 else "\\1a&H18&"
+        sub_alpha = "" if level == 0 else "\\1a&H18&"
         looks.append((L_INFO, f"\\1c{color}{sub_alpha}\\3c{outline_c}"
-                              f"\\bord{txt.outline * k * (0.7 if i == 0 else 0.55):.2f}"
+                              f"\\bord{txt.outline * k * (0.7 if level == 0 else 0.55):.2f}"
                               f"\\shad{txt.shadow * k * 0.6:.2f}"))
         move_in = f"\\move({x_text + slide:.1f},{y:.1f},{x_text:.1f},{y:.1f},0,{_IN_MS})"
         for layer, look in looks:
@@ -201,7 +277,7 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, k: float, family: str, 
                 events.append(_dialogue(layer, a, t1, f"{font}{move_in}\\fad(350,300){look}", body))
     bar_x = (W - margin - bar_w) if right else margin
     rect = f"m 0 0 l {bar_w:.1f} 0 l {bar_w:.1f} {block_h:.1f} l 0 {block_h:.1f}"
-    bar = f"\\an7\\pos({bar_x:.1f},{margin:.1f})\\bord0\\shad{txt.shadow * k * 0.4:.2f}\\1c{accent}"
+    bar = f"\\an7\\pos({bar_x:.1f},{top:.1f})\\bord0\\shad{txt.shadow * k * 0.4:.2f}\\1c{accent}"
     shape = f"{{\\p1}}{rect}{{\\p0}}"
     shrink = t1 - _BAR_MS
     if shrink >= t0 + _BAR_MS:

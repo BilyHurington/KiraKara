@@ -649,3 +649,22 @@ def test_ai_reply_splitting_a_letter_into_morae_is_merged():
     rep = validate_patch(doc, patch)
     assert [lr.status for lr in rep.lines] == ["ok"], rep.lines[0].reasons
     assert [d.new_units for d in rep.lines[0].diff if d.new_units] == [["あーる"], ["おー"]]
+
+
+def test_ai_reply_can_suggest_where_a_long_line_wraps():
+    from kara_align.reading.ai import apply_patch
+
+    doc = parse_lyrics_text("きみと\nそらを みてた", mode="plain").doc
+    prepare_doc(doc)
+    ln = doc.lines[1]
+    patch = {"format": FMT_READING_PATCH, "version": 1, "lines": [{"id": ln.id, "text": ln.text, "segments": [
+        {"surface": "そらを", "reading": "そらを"}, {"surface": " ", "reading": ""},
+        {"surface": "みてた", "reading": "みてた", "wrap": True}]}]}
+    rep = validate_patch(doc, patch)
+    assert [lr.status for lr in rep.lines] == ["ok"], rep.lines[0].reasons
+    new, _ = apply_patch(doc, rep)
+    assert [s.wrap_before for s in new.lines[1].segments] == [False, False, True]
+    # display only: the same readings, and the hint is in no revision (no alignment goes out of date)
+    new.lines[1].segments[2].wrap_before = False
+    assert new.reading_revision() == new.model_copy(deep=True).reading_revision()
+    assert [s.reading for s in new.lines[1].segments] == ["そらを", None, "みてた"]

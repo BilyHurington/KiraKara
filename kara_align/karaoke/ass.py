@@ -121,6 +121,7 @@ class Part:
 class Chunk:
     base: list[Part]  # lyric text pieces with their own karaoke timing
     ruby: list[Part] = field(default_factory=list)  # empty = no ruby
+    wrap_before: bool = False  # the first chunk of a segment the AI suggested a line break before
 
     @property
     def base_text(self) -> str:
@@ -142,6 +143,13 @@ class LaidLine:
     show_to: int = 0
     slot: int = 0  # row: 0 … lines-1 in the block; beyond it (-1, -2 / lines, lines+1) extra rows
     units: list[tuple[int, int]] = field(default_factory=list)  # timed units (start, end), for pauses
+    # a long line wrapped into pieces (wrap_line): the translation goes with the first piece and is
+    # shown until the last one is sung
+    trans_until: Optional[int] = None
+
+    @property
+    def text(self) -> str:
+        return "".join(c.base_text for c in self.chunks)
 
 
 def _ruby_text(reading: str, script: str, romaji: Optional[str]) -> str:
@@ -237,10 +245,10 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
     chunks: list[Chunk] = []
     for seg in line.segments:
         if not seg.units:
-            chunks.append(Chunk([Part(seg.surface, None, None)]))
+            chunks.append(Chunk([Part(seg.surface, None, None)], wrap_before=seg.wrap_before))
             continue
         pieces = _split_affixes(seg) if seg.lang == "ja" else [(seg.surface, seg.units)]
-        for surface, units in pieces:
+        for n_piece, (surface, units) in enumerate(pieces):
             t = [times.get(u.id, (None, None)) for u in units]
             kanji = has_kanji(surface)
             hira = to_hiragana(surface)
@@ -264,7 +272,7 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
                         for u, (s, e) in zip(units, t)]
                 if "".join(p.text for p in ruby) == surface:
                     ruby = []  # e.g. hiragana ruby over hiragana
-            chunks.append(Chunk(base, ruby))
+            chunks.append(Chunk(base, ruby, wrap_before=seg.wrap_before and n_piece == 0))
     _fill_missing_times(chunks)
     return chunks
 
@@ -294,6 +302,98 @@ def _fill_missing_times(chunks: list[Chunk]) -> None:
 
 # ---------------------------------------------------------------------------
 # scheduling and layout
+
+
+# a lyric line may wrap after these (or before a space)
+_PUNCT = set(" \u3000、。，,.!?！？…‥・~〜～♪☆★「」『』()（）[]［］【】-—")
+_OPENING = set("「『(（[［【")
+
+
+def _blank(c: Chunk) -> bool:
+    return not c.base_text.strip()
+
+
+def _trim(piece: list[Chunk]) -> list[Chunk]:
+    """A piece of a wrapped line without the space at its ends (copies; the line keeps its chunks)."""
+    piece = list(piece)
+    for idx, strip in ((0, str.lstrip), (-1, str.rstrip)):
+        c = piece[idx]
+        part = c.base[idx]
+        text = strip(part.text)
+        if text != part.text and text:
+            base = list(c.base)
+            base[idx] = Part(text, part.start, part.end)
+            piece[idx] = Chunk(base, c.ruby, c.wrap_before)
+    return piece
+
+
+def wrap_line(ll: LaidLine, extent, avail: float, mode: str, max_pieces: int = 4) -> list[LaidLine]:
+    """A line wider than ``avail`` (``extent``: chunks -> px) split into pieces that fit, each sung
+    one after the other (they take turns in the rows like lines).  Breaks go between chunks (a chunk
+    is a word or a kana run): with ``mode == "ai"`` where the AI readings suggested one first; else
+    after punctuation / at a space, outside brackets; else the most even split between words.  A
+    piece keeps at least 3 characters.  The translation goes with the first piece and lasts until
+    the last one is sung."""
+    if mode == "off" or len(ll.chunks) < 2 or extent(ll.chunks) <= avail:
+        return [ll]
+    chunks = ll.chunks
+    depth, d = [], 0
+    for c in chunks:  # bracket depth before each chunk
+        depth.append(d)
+        for ch in c.base_text:
+            d = d + 1 if ch in _OPENING else max(0, d - 1) if ch in "」』)）]］】" else d
+    best = None
+    for b in range(1, len(chunks)):
+        left, right = [c for c in chunks[:b]], [c for c in chunks[b:]]
+        while left and _blank(left[-1]):
+            left.pop()
+        while right and _blank(right[0]):
+            right.pop(0)
+        if not left or not right:
+            continue
+        left, right = _trim(left), _trim(right)
+        lt, rt = "".join(c.base_text for c in left).strip(), "".join(c.base_text for c in right).strip()
+        if len(lt) < 3 or len(rt) < 3:
+            continue
+        prev, nxt = chunks[b - 1].base_text, chunks[b].base_text
+        if nxt[:1] in "、。，,.!?！？…‥ー" or prev[-1:] in _OPENING:
+            rank = 9  # never before closing punctuation or after an opening bracket, if avoidable
+        elif mode == "ai" and chunks[b].wrap_before:
+            rank = 0
+        else:
+            space = not prev.strip() or not nxt.strip() or prev[-1:].isspace() or nxt[:1].isspace()
+            sentence = prev.rstrip()[-1:] in "、。，,.!?！？…‥"
+            natural = space or sentence or prev[-1:] in _PUNCT or nxt[:1] in _PUNCT
+            rank = (1 if space else 2 if sentence else 3 if natural else 5) if depth[b] == 0 else (4 if natural else 5)
+        wl, wr = extent(left), extent(right)
+        if rank and max(wl, wr) > 0.72 * (wl + wr):
+            rank += 3  # very uneven: only when nothing better fits (the AI's own choice is kept)
+        # the AI's choice is taken even when a piece is still too wide (that piece wraps again)
+        fits = rank == 0 or (wl <= avail and wr <= avail)
+        key = (not fits, rank, max(wl, wr))
+        if best is None or key < best[0]:
+            best = (key, left, right)
+    if best is None:
+        return [ll]
+    out = []
+    for piece in (best[1], best[2]):
+        times = [p for c in piece for p in c.base if p.start is not None and p.end is not None]
+        if not times:
+            return [ll]
+        a, z = min(p.start for p in times), max(p.end for p in times)
+        sub = LaidLine(ll.line, piece, a, z, units=[u for u in ll.units if a <= u[0] <= z])
+        out.append(sub)
+    out[0].translation, out[0].trans_until = ll.translation, max(x.end for x in out)
+    if max_pieces > 2:  # a piece still too wide: split again
+        pieces: list[LaidLine] = []
+        for i, x in enumerate(out):
+            more = wrap_line(x, extent, avail, mode, max_pieces - 1) if extent(x.chunks) > avail else [x]
+            pieces += more
+        pieces[0].translation, pieces[0].trans_until = ll.translation, max(x.end for x in pieces)
+        for x in pieces[1:]:
+            x.translation, x.trans_until = None, None
+        out = pieces
+    return out
 
 
 def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
@@ -385,7 +485,9 @@ def alternate_insets(laid: list[LaidLine], geom: list[tuple], indent: float, ava
     the staircase — the upper (left) one starts and ends no further right than the lower (right)
     one, i.e. ``2 · indent <= avail − the longer line's extent``."""
     ext = [g[1] + g[2] + g[3] for g in geom]
-    side = [i for i, g in enumerate(geom) if g[5] != "center"]
+    # (lines wider than the room between the margins reach toward the edges instead: no indent,
+    # and they do not narrow everyone else's)
+    side = [i for i, g in enumerate(geom) if g[5] != "center" and not (len(g) > 6 and g[6])]
     inset = indent
     for i in side:
         inset = min(inset, max(0.0, avail - ext[i]))  # the line itself must fit
@@ -394,7 +496,7 @@ def alternate_insets(laid: list[LaidLine], geom: list[tuple], indent: float, ava
                 continue
             inset = min(inset, max(0.0, avail - max(ext[i], ext[j])) / 2)
     inset = max(0.0, inset)
-    return [0.0 if g[5] == "center" else inset for g in geom]
+    return [0.0 if g[5] == "center" or (len(g) > 6 and g[6]) else inset for g in geom]
 
 
 def _sung_within(ll: LaidLine, a: float, b: float) -> tuple[float, float]:
@@ -425,9 +527,10 @@ def translation_windows(laid: list[LaidLine], style: KaraokeStyle) -> list[tuple
     lines = [ll for ll in laid if ll.translation]
     prev_to = 0
     for i, ll in enumerate(lines):
-        t_to = ll.end + tm.hold_ms
+        end = max(ll.end, ll.trans_until or 0)  # (a wrapped line: until its last piece is sung)
+        t_to = end + tm.hold_ms
         if i + 1 < len(lines):
-            t_to = min(t_to, max(lines[i + 1].start - lead, ll.end))
+            t_to = min(t_to, max(lines[i + 1].start - lead, end))
         t_from = max(ll.start - lead, prev_to, 0)
         if t_to > t_from:
             out.append((ll, t_from, t_to))
@@ -678,6 +781,15 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     if missing_fonts:
         warnings.append(f"这台电脑没有字体 {'、'.join(sorted(set(missing_fonts)))}，已改用 {family}")
 
+    margin_h = min(lay.margin_h * k, W * 0.4)
+    avail = W - 2 * margin_h
+
+    def extent(chunks: list[Chunk]) -> float:
+        """How wide a line of these chunks is drawn, readings reaching past its ends included."""
+        widths = chunk_widths(chunks, m_main, m_ruby, ruby_size, rb.fit)
+        over_l, over_r = ruby_overhang(chunks, widths, m_ruby)
+        return (sum(widths) or 1.0) + over_l + over_r
+
     covered = set(result.coverage.line_ids) if not result.coverage.full else None
     laid: list[LaidLine] = []
     skipped = 0
@@ -691,9 +803,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             skipped += 1
             continue
         unit_times = [times[u.id] for u in ln.units() if u.id in times and None not in times[u.id]]
-        laid.append(LaidLine(ln, chunks, min(starts), max(ends),
-                             translation=(ln.translation or None) if tr.enabled else None,
-                             units=unit_times))  # type: ignore[arg-type]
+        # a line too wide for the room between the margins is wrapped into pieces
+        laid += wrap_line(LaidLine(ln, chunks, min(starts), max(ends),
+                                   translation=(ln.translation or None) if tr.enabled else None,
+                                   units=unit_times), extent, avail, lay.wrap)  # type: ignore[arg-type]
     if skipped:
         warnings.append(f"{skipped} 行没有任何时间，未写入字幕")
     if tr.enabled and not any(ll.translation for ll in laid):
@@ -711,8 +824,6 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     # the bouncing ball hops above each line: rows keep room for it
     spacing = max(lay.line_spacing * k, ball_room(style, main_size, k))
     margin_v = min(lay.margin_v * k, H * 0.4)
-    margin_h = min(lay.margin_h * k, W * 0.4)
-    avail = W - 2 * margin_h
     block_h = n * slot_h + (n - 1) * spacing
     block_top = max(0.0, H - margin_v - block_h) if lay.position == "bottom" else margin_v
     top_row = min((ll.slot for ll in laid), default=0)
@@ -778,27 +889,37 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     fx_on = style.effects.kind != "none"
     syllables: list[Syllable] = []
     # widths first: how far a line sits in from its edge depends on the lines shown next to it
+    # a line still wider than the room between the margins (it could not wrap) may reach out to
+    # `edge_x` from the frame's edges, moving only as far as it needs to; only wider than that it shrinks
+    edge_x = min(lay.edge_margin * k, margin_h)
+    room = W - 2 * edge_x
     geom = []
     for ll in laid:
         widths = chunk_widths(ll.chunks, m_main, m_ruby, ruby_size, rb.fit)
         line_w = sum(widths) or 1.0
         over_l, over_r = ruby_overhang(ll.chunks, widths, m_ruby)
         extent = line_w + over_l + over_r  # readings reaching past the line's ends count too
-        scale = min(1.0, avail / extent) if lay.shrink_long_lines else 1.0
+        scale = min(1.0, room / extent) if lay.shrink_long_lines else 1.0
         if scale < 1.0:
-            warnings.append(f"「{ll.line.text}」过长，已缩小到 {scale:.0%}")
+            warnings.append(f"「{ll.text}」过长，已缩小到 {scale:.0%}")
         align = "center"
         if lay.arrangement == "alternate" and n > 1 and 0 <= ll.slot < n:
             align = "left" if ll.slot == 0 else ("right" if ll.slot == n - 1 else "center")
-        geom.append((widths, line_w * scale, over_l * scale, over_r * scale, scale, align))
+        wide = extent * scale > avail + 0.5
+        geom.append((widths, line_w * scale, over_l * scale, over_r * scale, scale, align, wide))
     insets = alternate_insets(laid, geom, lay.alternate_indent * k, avail)
-    for ll, (widths, line_w, over_l, over_r, scale, align), inset in zip(laid, geom, insets):
+    for ll, (widths, line_w, over_l, over_r, scale, align, wide), inset in zip(laid, geom, insets):
+        ext = line_w + over_l + over_r
         if align == "left":
-            x0 = margin_h + inset + over_l
+            # a wide line keeps its start while it can, else moves toward the left edge
+            start_x = max(edge_x, min(margin_h, W - edge_x - ext)) if wide else margin_h + inset
+            x0 = start_x + over_l
         elif align == "right":
-            x0 = W - margin_h - inset - line_w - over_r
-        else:  # centred, but its readings kept inside the margins
-            lo, hi = margin_h + over_l, W - margin_h - over_r - line_w
+            end_x = min(W - edge_x, max(W - margin_h, edge_x + ext)) if wide else W - margin_h - inset
+            x0 = end_x - over_r - line_w
+        else:  # centred, but its readings kept inside the margins (the edges for a wide line)
+            side = edge_x if wide else margin_h
+            lo, hi = side + over_l, W - side - over_r - line_w
             x0 = min(max((W - line_w) / 2, lo), hi) if lo <= hi else (lo + hi) / 2
         slot_top = block_top + ll.slot * (slot_h + spacing)
         main_y = slot_top + ruby_h + main_size

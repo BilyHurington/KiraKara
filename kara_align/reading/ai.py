@@ -107,6 +107,8 @@ def build_prompt(doc: LyricsDoc, line_ids: Optional[Sequence[str]] = None, lang:
         "逐个念出的拉丁字母（如 R O M A N T I C）：每个字母单独一个 segment，reading 写字母名的读法"
         "（R＝あーる、M＝えむ、C＝しー、W＝だぶりゅー），整个字母只算一个 unit（units 为 [\"あーる\"]），不要按拍拆开。"
         "日语歌词里的英文单词按歌里实际的唱法写成假名（now＝なう、friends＝ふれんず），units 照常按拍切分。",
+        "卡拉OK字幕里一行放不下时需要折成两行：歌词行较长（约 18 个字以上）时，在最适合换行的位置（意思和节奏的停顿处），"
+        "给从新一行开始的那个 segment 加上 \"wrap\": true（每行最多一处）；短的行不要加。",
         "重复的副歌也必须逐行完整输出，禁止用“同上”“略”“x2”等省略。",
         "不要输出任何时间、时间戳、偏移或时长字段；不要猜测时间。",
         "不要为了表现拖长演唱而新增元音或长音（例如不要把「空」写成そおおら）。",
@@ -300,7 +302,8 @@ def _validate_segments(line: Line, raw_segs: Any, reasons: list[str]) -> list[di
             if is_latin:
                 lang = "en"
         out.append({"surface": surface, "reading": reading or None, "units": units, "lang": lang,
-                    "candidates": [c for c in cands if c], "uncertain": bool(rs.get("uncertain", False))})
+                    "candidates": [c for c in cands if c], "uncertain": bool(rs.get("uncertain", False)),
+                    "wrap_before": rs.get("wrap") is True})
     if "".join(s["surface"] for s in out) != line.text and not reasons:
         reasons.append("surface 拼接结果与当前原文不一致")
     return out
@@ -462,7 +465,8 @@ def apply_patch(doc: LyricsDoc, report: PatchReport, *, include_line_ids: Option
         for a, b, spec in _spans(lr.segments):
             cur = cur_spans.get((a, b))
             if cur is not None and _is_locked(cur):
-                new_segs.append(cur)
+                # the reading stays as confirmed; the line-break hint is display only and still taken
+                new_segs.append(cur.model_copy(update={"wrap_before": bool(spec.get("wrap_before"))}))
                 continue
             seg = _segment_from_spec(spec)
             if cur is not None:
@@ -483,11 +487,13 @@ def _segment_from_spec(spec: dict) -> Segment:
     if reading:
         units = units_from_spec(reading, spec["units"], lang)
         seg = Segment(surface=spec["surface"], reading=reading, lang=lang, units=units, reading_source="ai",
-                      confirmed=False, uncertain=spec["uncertain"], candidates=list(spec["candidates"]))
+                      confirmed=False, uncertain=spec["uncertain"], candidates=list(spec["candidates"]),
+                      wrap_before=bool(spec.get("wrap_before")))
         _assign_surfaces(seg)
         if lang == "en":
             for u in seg.units:
                 u.surface = spec["surface"] if len(seg.units) == 1 else ""
     else:
-        seg = Segment(surface=spec["surface"], reading=None, lang=lang, units=[], reading_source="none")
+        seg = Segment(surface=spec["surface"], reading=None, lang=lang, units=[], reading_source="none",
+                      wrap_before=bool(spec.get("wrap_before")))
     return seg
