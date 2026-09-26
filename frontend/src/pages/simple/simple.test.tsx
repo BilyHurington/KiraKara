@@ -313,6 +313,37 @@ describe('one-click AI readings in the detailed mode', () => {
 });
 
 describe('the new-task form', () => {
+  it('sends the audio with a background picture, and keeps the background for the next song', async () => {
+    seed();
+    const api = mockApi({ 'GET /api/tasks': () => [], 'POST /api/tasks': () => task({ id: 'tb', status: 'preparing' }) });
+    const { container } = renderUI(<SimpleHome />);
+    await userEvent.click(screen.getByRole('radio', { name: '音频 + 背景' }));
+    const inputs = () => container.querySelectorAll('input[type=file]');
+    await userEvent.upload(inputs()[0] as HTMLInputElement, new File(['a'], 'song.mp3', { type: 'audio/mpeg' }));
+    await userEvent.upload(inputs()[0] as HTMLInputElement, new File(['p'], 'cover.png', { type: 'image/png' }));
+    expect(screen.getByText(/^背景图片 ·/)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: '音乐链接或歌词' }), { target: { value: 'きみと' } });
+    await userEvent.click(screen.getByRole('button', { name: /开始制作/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks')).toHaveLength(1));
+    const fd = api.find('POST', '/api/tasks')[0].body as FormData;
+    expect((fd.get('file') as File).name).toBe('song.mp3');
+    expect((fd.get('background') as File).name).toBe('cover.png');
+    await waitFor(() => expect(screen.queryByText('song.mp3')).not.toBeInTheDocument());
+    expect(screen.getByText('cover.png')).toBeInTheDocument();  // the next song usually has the same one
+    // back to "video": no background is sent
+    await userEvent.click(screen.getByRole('radio', { name: '视频' }));
+    await userEvent.upload(inputs()[0] as HTMLInputElement, new File(['v'], 'clip.mp4', { type: 'video/mp4' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '音乐链接或歌词' }), { target: { value: 'きみと' } });
+    await userEvent.click(screen.getByRole('button', { name: /开始制作/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks')).toHaveLength(2));
+    expect((api.find('POST', '/api/tasks')[1].body as FormData).get('background')).toBeNull();
+    // leave the form as the other tests expect it
+    await userEvent.click(screen.getByRole('radio', { name: '音频 + 背景' }));
+    await userEvent.click(screen.getAllByRole('button', { name: /换一个/ }).at(-1)!);
+    await userEvent.click(screen.getByRole('radio', { name: '视频' }));
+    localStorage.clear();
+  });
+
   it('keeps the chosen file, lyrics and name while the settings are open', async () => {
     seed();
     const api = mockApi({ 'GET /api/tasks': () => [], 'POST /api/tasks': () => task({ id: 'tn', status: 'preparing' }) });

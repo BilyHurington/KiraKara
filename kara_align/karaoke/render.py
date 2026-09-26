@@ -93,8 +93,9 @@ def frame_size(video: Path, fallback: tuple[int, int]) -> tuple[int, int]:
 
 
 def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional[Path] = None,
-                audio_offset_s: float = 0.0) -> bytes:
-    """One frame at audio time ``t_ms``: the video frame there, or black."""
+                audio_offset_s: float = 0.0, background: Optional[tuple[Path, str, Optional[int]]] = None) -> bytes:
+    """One frame at audio time ``t_ms``: the video frame there, the background's (path, kind,
+    duration_ms) frame there, or black."""
     w, h = size
     t = max(0.0, t_ms / 1000.0)
     with tempfile.TemporaryDirectory() as td:
@@ -103,7 +104,12 @@ def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional
         # the frame gets pts = t so the subtitles filter draws the state at t
         # millisecond timebase first: a 1 fps source would round t to whole seconds
         vf = f"settb=1/1000,setpts=PTS-STARTPTS+{t:.3f}/TB,{_subtitles_filter('k.ass')}"
-        if video is not None:
+        if background is not None:
+            from .background import cover_filter, input_args
+
+            inp = input_args(background[0], background[1], at_s=t, duration_ms=background[2])  # type: ignore[arg-type]
+            vf = f"{cover_filter(w, h)},{vf}"
+        elif video is not None:
             inp = ["-ss", f"{t + audio_offset_s:.3f}", "-i", str(video)]
             vf = f"scale={w}:{h},{vf}"
         else:
@@ -118,14 +124,17 @@ def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional
 def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int, *,
          video: Optional[Path] = None, audio: Optional[Path] = None, audio_offset_s: float = 0.0,
          use_video_audio: bool = False, quality: str = "standard", cancel=None,
-         progress: Optional[Callable[[float, str], None]] = None) -> Path:
-    """Render subtitles into a video (the source video, or black) of ``size``.
+         progress: Optional[Callable[[float, str], None]] = None,
+         background: Optional[tuple[Path, str]] = None) -> Path:
+    """Render subtitles into a video (the source video, a background, or black) of ``size``.
 
     ``size`` is the frame the subtitles were laid out for (their PlayRes, see frame_size());
     the source video is scaled to it (square pixels) and both sides are made even, as the
     yuv420p encoders require (odd sizes would fail).
     ``audio``: a file to use as the soundtrack (placed at ``audio_offset_s``);
     ``use_video_audio``: keep the source video's first audio stream instead.
+    ``background``: (path, "image" | "video") shown instead: a picture, or a video looped for the
+    whole song (its own sound is never used), scaled to cover the frame.
     """
     from ..interfaces import Cancelled
 
@@ -139,7 +148,14 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
     with tempfile.TemporaryDirectory() as td:
         Path(td, "k.ass").write_text(ass_text, encoding="utf-8")
         cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats"]
-        if video is not None:
+        limit: list[str] = []
+        if background is not None:
+            from .background import cover_filter, input_args
+
+            cmd += input_args(background[0], background[1])  # type: ignore[arg-type]
+            vf = f"{cover_filter(w, h)},{_subtitles_filter('k.ass')}"
+            limit = ["-t", f"{dur + audio_offset_s:.3f}"]  # an endless input: the song's length
+        elif video is not None:
             cmd += ["-i", str(video)]
             vf = f"scale={w}:{h},setsar=1,{_subtitles_filter('k.ass')}"
         else:
@@ -155,7 +171,8 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
             maps += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "256k"]
         else:
             maps += ["-an"]
-        cmd += ["-vf", vf, *maps, *video_encoder(quality), "-movflags", "+faststart", "-f", "mp4", str(part.resolve())]
+        cmd += ["-vf", vf, *maps, *limit, *video_encoder(quality), "-movflags", "+faststart", "-f", "mp4",
+                str(part.resolve())]
         # stderr goes to a file: an undrained pipe could block ffmpeg
         err_file = open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace")
         proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, bufsize=1)

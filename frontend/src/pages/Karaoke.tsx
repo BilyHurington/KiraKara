@@ -1,12 +1,12 @@
 // Step 7: karaoke subtitles — presets, settings, a live libass preview at any
 // moment, ASS download and one-click burn-in (see docs/karaoke.md).
 
-import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, Sparkles, Subtitles } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Image as ImageIcon, Loader2, Sparkles, Subtitles, Trash2, Upload } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, fmtRelative, parseTime } from '@/lib/format';
 import { isEnter, isEscape } from '@/lib/keys';
-import type { FontFamily, Job, KaraokeStyle, ProjectView, SongInfo } from '@/lib/types';
+import type { FontFamily, Job, KaraokeStyle, PictureInfo, ProjectView, SongInfo } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import {
@@ -17,6 +17,7 @@ import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Progress, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
 import { StylePanel } from '@/components/karaoke/StylePanel';
+import { BACKGROUND_ACCEPT } from '@/pages/input/AudioCard';
 import { setSimpleDefault } from '@/store/simple';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number }
@@ -197,7 +198,7 @@ function Header() {
     <PageHeader
       eyebrow="第 7 步（可选）"
       title="卡拉OK字幕"
-      description="选择样式并预览任意时刻的画面；导出 ASS 字幕，或一键生成带字幕的视频（把字幕烧录进画面；没有视频时使用纯黑背景）。设置会自动保存；总是使用项目的当前对齐结果。"
+      description="选择样式并预览任意时刻的画面；导出 ASS 字幕，或一键生成带字幕的视频（把字幕烧录进画面：背景图片 / 循环播放的背景视频、原视频或纯黑）。设置会自动保存；总是使用项目的当前对齐结果。"
       actions={<Button onClick={() => setStep('export')} icon={<ArrowRight className="size-4" />}>下一步：导出</Button>}
     />
   );
@@ -206,7 +207,6 @@ function Header() {
 // ------------------------------------------------------------------ preview
 
 function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines: LineSpan[]; refreshKey: string }) {
-  const project = useProject()!;
   const [lineIdx, setLineIdx] = useState(0);
   const [pct, setPct] = useState(40);
   const [custom, setCustom] = useState<number | null>(null);
@@ -220,8 +220,10 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
   const t = custom ?? (line ? Math.round(line.start + (line.end - line.start) * pct / 100) : 0);
   // the burn-in audio setting lives in the style but does not change the picture
   const lookKey = JSON.stringify({ ...style, output: undefined });
-  const w = project.video?.width ?? 1920;
-  const h = project.video?.height ?? 1080;
+  const pic = usePicture();
+  const w = pic.width;
+  const h = pic.height;
+  const picKey = JSON.stringify(pic);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,7 +246,7 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [lookKey, t, bg, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lookKey, t, bg, refreshKey, picKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (i: number) => { setCustom(null); setLineIdx(Math.max(0, Math.min(lines.length - 1, i))); };
   const followPlayhead = () => {
@@ -262,9 +264,10 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
   return (
     <Card>
       <CardHeader icon={<Subtitles className="size-4" />} title="预览"
-        description={`${w}×${h} · ${project.video ? '原视频画面' : '纯黑背景'} · 与烧录使用同一渲染器（libass）`}
-        actions={project.video ? (
-          <Segmented size="sm" label="预览背景" value={bg} onChange={setBg} options={[{ value: 'auto', label: '视频画面' }, { value: 'black', label: '纯黑' }]} />
+        description={`${w}×${h} · ${pictureLabel(pic)} · 与烧录使用同一渲染器（libass）`}
+        actions={pic.source !== 'black' ? (
+          <Segmented size="sm" label="预览背景" value={bg} onChange={setBg}
+            options={[{ value: 'auto', label: pic.source === 'background' ? '背景' : '视频画面' }, { value: 'black', label: '纯黑' }]} />
         ) : undefined} />
       <CardBody className="space-y-4">
         <div className="relative overflow-hidden rounded-xl bg-black ring-1 ring-line" style={{ aspectRatio: `${w} / ${h}` }}>
@@ -320,13 +323,69 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
   );
 }
 
+// ------------------------------------------------------------------ picture (background / video / black)
+
+function usePicture(): PictureInfo {
+  const project = useProject();
+  const pic = useApp((s) => s.pv?.view.picture);
+  // (older servers: no picture in the view)
+  return pic ?? { source: project?.video ? 'video' : 'black', width: project?.video?.width ?? 1920, height: project?.video?.height ?? 1080 };
+}
+
+function pictureLabel(pic: PictureInfo): string {
+  if (pic.source === 'background') return pic.kind === 'video' ? '背景视频（循环播放）' : '背景图片';
+  return pic.source === 'video' ? '原视频画面' : '纯黑背景';
+}
+
+/** Choose / replace / remove the picture or looped video shown behind the subtitles. */
+function BackgroundControl({ pic }: { pic: PictureInfo }) {
+  const project = useProject()!;
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const upload = (f: File) => run(async () => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f, f.name);
+      setPV(await api.put<ProjectView>(ppath('/background'), fd));
+      toast('ok', '已设置背景', '预览和生成的视频都会使用它');
+    } finally { setBusy(false); }
+  }, '无法使用这个背景');
+  const remove = () => run(async () => {
+    setPV(await api.del<ProjectView>(ppath('/background')));
+  }, '无法移除背景');
+  const bg = project.background;
+  return (
+    <div className="space-y-1.5 text-xs text-subtle">
+      {bg ? (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <ImageIcon className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate" title={bg.filename ?? ''}>{bg.filename}</span>
+        </div>
+      ) : (
+        <div>{pic.source === 'video' ? '可以换成一张图片或一段循环播放的视频' : '可以用一张图片或一段循环播放的视频作为画面'}</div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        <Button size="xs" variant="outline" loading={busy} icon={<Upload className="size-3.5" />} onClick={() => input.current?.click()}>
+          {bg ? '更换背景' : '选择背景…'}
+        </Button>
+        {bg && <Button size="xs" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => void remove()}>
+          移除{project.video ? '（回到原视频）' : ''}
+        </Button>}
+      </div>
+      <input ref={input} type="file" accept={BACKGROUND_ACCEPT} className="hidden" aria-label="选择背景文件"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void upload(f); }} />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ export / burn
 
 function BurnCard({ style, patch, beforeBurn }: {
   style: KaraokeStyle; patch: (fn: (s: KaraokeStyle) => void) => void; beforeBurn: () => Promise<void>;
 }) {
-  const project = useProject()!;
   const view = useApp((s) => s.pv?.view);
+  const pic = usePicture();
   const job = useJob('burn');
   const [background, setBackground] = useState<'auto' | 'black'>('auto');
   const [audio, setAudio] = useState<'original' | 'mix' | 'none'>('original');
@@ -354,15 +413,16 @@ function BurnCard({ style, patch, beforeBurn }: {
           <DownloadButton href={ppath('/export/karaoke-ass?download=1')} before={beforeBurn} variant="outline" icon={<Download className="size-4" />}>
             下载 ASS 字幕
           </DownloadButton>
-          <span className="text-xs text-muted">{project.video ? '时间已与原视频对齐（含音轨起点偏移）' : '时间从音频起点开始'}；使用当前结果和已保存的样式</span>
+          <span className="text-xs text-muted">{pic.source === 'video' ? '时间已与原视频对齐（含音轨起点偏移）' : '时间从音频起点开始'}；使用当前结果和已保存的样式</span>
         </div>
 
         <div className="grid gap-4 rounded-xl border border-line p-4 md:grid-cols-3">
           <div className="space-y-1.5">
             <div className="text-[13px] font-medium">背景</div>
-            <Segmented size="sm" label="背景" value={project.video ? background : 'black'} onChange={setBackground}
-              options={[{ value: 'auto', label: '原视频', disabled: !project.video }, { value: 'black', label: '纯黑' }]} />
-            {!project.video && <div className="text-xs text-subtle">上传视频作为原曲即可使用原视频画面</div>}
+            <Segmented size="sm" label="背景" value={pic.source !== 'black' ? background : 'black'} onChange={setBackground}
+              options={[{ value: 'auto', label: pic.source === 'background' ? (pic.kind === 'video' ? '背景视频' : '背景图片') : '原视频',
+                disabled: pic.source === 'black' }, { value: 'black', label: '纯黑' }]} />
+            <BackgroundControl pic={pic} />
           </div>
           <div className="space-y-1.5">
             <div className="text-[13px] font-medium">音频</div>
@@ -404,7 +464,7 @@ function BurnCard({ style, patch, beforeBurn }: {
           </Callout>
         )}
         <p className="text-xs text-subtle">生成视频耗时约为歌曲时长的 0.3–1 倍，可以离开本页，操作在后台继续（右上角可查看进度或取消）；完成后回到这里也能下载。</p>
-        {!project.video && <Badge tone="neutral">无视频：输出 1920×1080 纯黑背景视频</Badge>}
+        <Badge tone="neutral">输出 {pic.width}×{pic.height} · {background === 'black' ? '纯黑背景' : pictureLabel(pic)}</Badge>
       </CardBody>
     </Card>
   );

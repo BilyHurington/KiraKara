@@ -618,6 +618,12 @@ def _romaji(project: Project) -> dict[str, str]:
 
 
 def resolution(project: Project) -> tuple[int, int]:
+    """The frame the subtitles are made for: the background's, else the video's, else 1920×1080."""
+    b = project.background
+    if b is not None:
+        from .background import frame_for
+
+        return frame_for(b.width, b.height)
     v = project.video
     if v is not None and v.width and v.height:
         return int(v.width), int(v.height)

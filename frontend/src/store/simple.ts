@@ -175,9 +175,11 @@ export function hasActiveTasks(tasks: PipelineTask[]) {
 }
 
 export async function addTask(file: File, lyrics: string, mode: string, name: string, style?: TaskStyleOptions,
-  onProgress?: (f: number) => void) {
+  onProgress?: (f: number) => void, background?: File | null) {
   const fd = new FormData();
   fd.append('file', file, file.name);
+  // a picture / video played in a loop behind the subtitles (the file is then usually just the song)
+  if (background) fd.append('background', background, background.name);
   fd.append('lyrics', lyrics);
   fd.append('mode', mode);
   fd.append('name', name);

@@ -9,7 +9,9 @@ import { ppath, run, setPV, toast, useProject, useView } from '@/store/app';
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, Tip } from '@/components/ui';
 import { openEnhance } from '@/pages/enhance/tab';
 
-const AUDIO_ACCEPT = 'audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif';
+export const AUDIO_ACCEPT = 'audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif';
+// a background behind the subtitles: a picture, or a video played in a loop
+export const BACKGROUND_ACCEPT = 'image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp,video/*,.gif,.mp4,.mov,.m4v,.mkv,.webm,.avi,.flv,.ts,.mts,.m2ts,.wmv,.mpg,.mpeg,.3gp';
 // the original may also be a video: its audio track is extracted and used
 export const MEDIA_ACCEPT = `${AUDIO_ACCEPT},video/*,.mp4,.mov,.m4v,.mkv,.webm,.avi,.flv,.ts,.mts,.m2ts,.wmv,.mpg,.mpeg,.3gp`;
 

@@ -160,6 +160,16 @@ export interface MixSettings { vocal_keep_pct: number; instrumental_pct: number;
 
 export interface AiRoundtrip { id: string; created: string; snapshot_id: string; line_ids: string[]; status: string; applied_at: string | null }
 
+export interface BackgroundAsset {
+  id: string; sha256: string; path: string; filename: string | null; kind: 'image' | 'video';
+  width: number; height: number; duration_ms: number | null;
+}
+
+/** What a burned video shows by default (ProjectView.view.picture). */
+export interface PictureInfo {
+  source: 'background' | 'video' | 'black'; width: number; height: number; kind?: 'image' | 'video'; filename?: string | null;
+}
+
 export interface VideoAsset {
   id: string;
   sha256: string;
@@ -242,6 +252,8 @@ export interface Project {
   active_result_id: string | null;
   mix: MixSettings;
   video?: VideoAsset | null;
+  /** a picture, or a video played in a loop, shown behind the subtitles instead of the video / black */
+  background?: BackgroundAsset | null;
   karaoke?: KaraokeStyle;
   song_info_text?: string | null;
 }
@@ -272,6 +284,7 @@ export interface ProjectView {
     capability_warnings: string[];
     /** ``outdated``: a stem separated from a replaced original (not usable) */
     audio: Partial<Record<Role, { asset_id: string; available: boolean; outdated?: boolean; duration_ms: number; sample_rate: number }>>;
+    picture?: PictureInfo;
   };
   [extra: string]: any;
 }
@@ -416,6 +429,8 @@ export interface CalibrationRequest {
 
 export interface PipelineTask {
   id: string; created: string; finished: string | null; name: string; mode: Mode; media_filename: string;
+  /** a picture / looped video shown behind the subtitles ('' = none) */
+  background_filename?: string;
   lyrics_kind: 'link' | 'text'; lyrics_input: string; status: TaskStatus; project_id: string | null;
   stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
   warnings: string[]; outputs: { video?: { filename: string; url: string } };

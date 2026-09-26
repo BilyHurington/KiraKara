@@ -540,6 +540,20 @@ class VideoAsset(_Base):
     audio_sha256: Sha256
 
 
+class BackgroundAsset(_Base):
+    """A picture, or a video played in a loop, shown behind the karaoke subtitles instead of a video
+    of the song (kara_align.karaoke.background)."""
+
+    id: str = Field(default_factory=lambda: new_id("b"))
+    sha256: Sha256
+    path: str  # relative to the project directory (content-addressed in assets/)
+    filename: Optional[str] = None
+    kind: Literal["image", "video"]
+    width: int
+    height: int
+    duration_ms: Optional[int] = None  # video only
+
+
 # ---------------------------------------------------------------------------
 # Karaoke subtitle style (ASS). Pixel values are defined for a frame 1920 px wide
 # and scaled by the actual video width (same share of the width at any resolution).
@@ -866,6 +880,8 @@ class Project(_Base):
     active_result_id: Optional[str] = None
     mix: MixSettings = Field(default_factory=MixSettings)
     video: Optional[VideoAsset] = None
+    # shown behind the subtitles instead of the video (or of black) when set
+    background: Optional[BackgroundAsset] = None
     karaoke: KaraokeStyle = Field(default_factory=KaraokeStyle)
     # the karaoke title card's own text (one line each; the first is the title); None = from the song data
     song_info_text: Optional[str] = None

@@ -139,6 +139,8 @@ class PipelineTask(_Base):
     name: str = ""
     mode: Literal["plain", "lrc"] = "lrc"
     media_filename: str = ""
+    # a picture / video (looped) shown behind the subtitles instead of the media's own picture
+    background_filename: str = ""
     lyrics_kind: Literal["link", "text"] = "text"
     lyrics_input: str = ""
     status: TaskStatus = "queued"
@@ -323,6 +325,9 @@ class TaskQueue:
     def media_path(self, task: PipelineTask) -> Path:
         return self.dir / task.id / task.media_filename
 
+    def background_path(self, task: PipelineTask) -> Optional[Path]:
+        return self.dir / task.id / "background" / task.background_filename if task.background_filename else None
+
     # ---- public API
     def list(self) -> list[dict]:
         self._refresh()
@@ -362,8 +367,11 @@ class TaskQueue:
         raise KeyError(task_id)
 
     def add(self, *, media: Path, filename: str, lyrics: str, mode: str, name: str = "",
-            style: Optional[dict] = None) -> PipelineTask:
-        """``style``: the task's subtitle choices (TaskStyleOptions); None = the last ones used."""
+            style: Optional[dict] = None, background: Optional[Path] = None,
+            background_filename: str = "") -> PipelineTask:
+        """``style``: the task's subtitle choices (TaskStyleOptions); None = the last ones used.
+        ``background``: a picture or a video (looped) to show behind the subtitles (the media is then
+        usually just the song's audio); checked here, before the task is added."""
         self._require_owner()
         lyrics = lyrics.strip()
         if not lyrics:
@@ -383,7 +391,20 @@ class TaskQueue:
         safe = Path(filename).name
         if safe in ("", ".", ".."):
             safe = "media"
-        t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
+        bg_name = ""
+        if background is not None:
+            from .karaoke.background import BackgroundError, probe_background, validate_background
+
+            bg_name = Path(background_filename or Path(background).name).name
+            if bg_name in ("", ".", ".."):
+                bg_name = "background" + Path(background).suffix
+            try:
+                with open(background, "rb") as f:
+                    kind = validate_background(bg_name, f.read(64), Path(background).stat().st_size)
+                probe_background(Path(background), kind)
+            except BackgroundError as e:
+                raise S.ServiceError(str(e)) from e
+        t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe, background_filename=bg_name,  # type: ignore[arg-type]
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
                          stages=task_stages(cfg.simple.calibration),
                          karaoke=karaoke, video=video, style_label=label, style_colors=colors,
@@ -400,6 +421,9 @@ class TaskQueue:
         dest = self.dir / t.id
         dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(media), dest / safe)
+        if background is not None:
+            (dest / "background").mkdir(exist_ok=True)  # its own folder: the names may be the same
+            shutil.move(str(background), dest / "background" / bg_name)
         t.status, t.message = "preparing", "读取视频和歌词"
         with self._lock:
             self.tasks.append(t)
@@ -739,6 +763,12 @@ def stage_import(q, task, cfg, cancel, progress):
         raise S.ServiceError("上传的文件已不存在，请重新添加任务")
     h = q.ws.get(task.project_id) if task.project_id else q.ws.create(task.name or Path(src).stem, task.mode)
     task.project_id = h.project.id
+    bg = q.background_path(task)
+    if bg is not None:
+        if not bg.exists():
+            raise S.ServiceError("上传的背景已不存在，请重新添加任务")
+        progress(0.1, "读取背景")
+        S.set_background(h, bg, filename=task.background_filename)
     progress(0.2, "读取视频 / 音频")
     from .audio.io import validate_upload
 

@@ -19,7 +19,7 @@ import numpy as np
 from .interfaces import CancelToken, Emission
 from .models import (
     AiRoundtrip, AlignConfig, AlignmentResult, AudioAsset, AudioSource, Issue, LineAnchor, LyricsDoc,
-    MixSettings, Project, SourceSnapshot, VideoAsset, new_id, stable_hash,
+    BackgroundAsset, MixSettings, Project, SourceSnapshot, VideoAsset, new_id, stable_hash,
 )
 from .project import store
 from .project.store import ProjectError
@@ -307,6 +307,7 @@ def project_view(h: ProjectHandle) -> dict:
                 "results": results,
                 "capability_warnings": cap,
                 "audio": audio,
+                "picture": picture(h),
             },
         }
 
@@ -1062,6 +1063,68 @@ def ensure_upright_video(h: ProjectHandle) -> None:
         h.save()
 
 
+def set_background(h: ProjectHandle, src_path: Path, filename: Optional[str] = None) -> BackgroundAsset:
+    """Use a picture or a video (looped) behind the subtitles (kara_align.karaoke.background).
+    Checked before anything changes; stored content-addressed like the other assets."""
+    from .audio.io import file_sha256
+    from .karaoke.background import BackgroundError, probe_background, validate_background
+
+    src_path = Path(src_path)
+    name = filename or src_path.name
+    with open(src_path, "rb") as f:
+        head = f.read(64)
+    try:
+        kind = validate_background(name, head, src_path.stat().st_size)
+        info = probe_background(src_path, kind)
+    except BackgroundError as e:
+        raise ServiceError(str(e)) from e
+    sha = file_sha256(src_path)
+    ext = Path(name).suffix.lower()
+    dest = h.assets_dir / f"{sha}{ext}"
+    if not dest.exists():
+        h.assets_dir.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.part")
+        shutil.copyfile(src_path, tmp)
+        tmp.replace(dest)
+    bg = BackgroundAsset(sha256=sha, path=str(Path("assets") / dest.name), filename=name, kind=kind, **info)
+    with h.lock:
+        h.project.background = bg
+        h.save()
+    return bg
+
+
+def clear_background(h: ProjectHandle) -> None:
+    """Back to the video (or black); the file stays in the project's assets."""
+    with h.lock:
+        h.project.background = None
+        h.save()
+
+
+def _background_file(h: ProjectHandle) -> Optional[tuple[BackgroundAsset, Path]]:
+    b = h.project.background
+    if b is None:
+        return None
+    p = store.asset_abspath(h.dir, b.path)
+    return (b, p) if p and p.exists() else None
+
+
+def picture(h: ProjectHandle) -> dict:
+    """What a burned video shows by default: {source: background|video|black, width, height, kind?, filename?}."""
+    from .karaoke.ass import resolution
+    from .karaoke.render import frame_size
+
+    bg = _background_file(h)
+    if bg is not None:
+        w, hh = resolution(h.project)
+        return {"source": "background", "kind": bg[0].kind, "filename": bg[0].filename, "width": w, "height": hh}
+    video = _video_file(h)
+    if video is not None:
+        w, hh = frame_size(video, resolution(h.project))
+        return {"source": "video", "width": w, "height": hh, "filename": h.project.video.filename}
+    w, hh = resolution(h.project)
+    return {"source": "black", "width": w, "height": hh}
+
+
 def _video_file(h: ProjectHandle) -> Optional[Path]:
     v = h.project.video
     orig = h.project.asset("original")
@@ -1080,7 +1143,8 @@ def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bo
     from .karaoke.render import frame_size
 
     r, k = _karaoke_inputs(h, style)
-    video = _video_file(h) if for_video else None
+    # with a background the video's picture is not used: its frame, the audio's timeline
+    video = _video_file(h) if for_video and _background_file(h) is None else None
     offset = h.project.video.audio_offset_s * 1000 if video else 0.0
     # laid out for the frame as the video shows it (non-square pixels applied)
     size = frame_size(video, resolution(h.project)) if video else None
@@ -1109,18 +1173,20 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
     from .karaoke.render import frame_size
 
     r, k = _karaoke_inputs(h, style)
-    video = _video_file(h) if background != "black" else None
+    bg = _background_file(h) if background != "black" else None
+    video = _video_file(h) if background != "black" and bg is None else None
     # the size the video is shown at (non-square pixels applied), like the burn: same layout, no squash
     size = frame_size(video, resolution(h.project)) if video else resolution(h.project)
     text, _ = build_ass(h.project, r, k, size=size)  # audio timeline; the frame is taken at t (+offset)
     off = h.project.video.audio_offset_s if video else 0.0
-    return preview_png(text, int(t_ms), size, video=video, audio_offset_s=off)
+    return preview_png(text, int(t_ms), size, video=video, audio_offset_s=off,
+                       background=(bg[1], bg[0].kind, bg[0].duration_ms) if bg else None)
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
                  vocal_keep_pct: Optional[float] = None, tag: str = "",
                  cancel: Optional[CancelToken] = None, progress: Optional[Callable[[float, str], None]] = None) -> dict:
-    """Burn the karaoke subtitles into a video (the source video or black).
+    """Burn the karaoke subtitles into a video (the background, the source video, or black).
 
     ``audio="mix"`` keeps the vocals at ``vocal_keep_pct`` (default: the karaoke
     style's own setting) over the full instrumental; the Export page's mix
@@ -1136,7 +1202,9 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     orig = h.project.asset("original")
     if orig is None:
         raise ServiceError("请先上传原曲")
-    video = _video_file(h) if background != "black" else None
+    # a background (picture / looped video) comes first, then the song's own video, then black
+    bg = _background_file(h) if background != "black" else None
+    video = _video_file(h) if background != "black" and bg is None else None
     offset_s = h.project.video.audio_offset_s if video else 0.0
     # the frame the subtitles are drawn on: the video as shown (square pixels), both sides even (yuv420p);
     # the ASS is laid out for exactly that frame
@@ -1162,7 +1230,8 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
             else:
                 audio_file = asset_path(h, orig)
         burn(text, out, size, orig.duration_ms, video=video, audio=audio_file, audio_offset_s=offset_s,
-             use_video_audio=use_video_audio, quality=quality, cancel=cancel, progress=progress)
+             use_video_audio=use_video_audio, quality=quality, cancel=cancel, progress=progress,
+             background=(bg[1], bg[0].kind) if bg else None)
     return {"filename": out.name, "warnings": warnings}
 
 

@@ -51,7 +51,7 @@ they are gone (the UI shows an operation that was running as failed: the local s
 | POST | `/api/projects/import` | multipart `file` (project.json or .kara.zip) | `ProjectView`; the imported project always gets a **new id** (an id in the file is never used as a folder name) |
 | GET | `/api/projects/{pid}/package?include_audio=1` | – | zip download (built in a temporary folder, not kept in `exports/`) |
 
-`ProjectView` = `{project: Project, view: {effective_starts: {line_id: {ms, kind: "soft"|"hard"}}, calibration_issues: [Issue], mode_notice: str|null, results: [ResultSummary], capability_warnings: [str], audio: {role: {asset_id, duration_ms, sample_rate, available: bool, outdated: bool}}}}`.
+`ProjectView` = `{project: Project, view: {effective_starts: {line_id: {ms, kind: "soft"|"hard"}}, calibration_issues: [Issue], mode_notice: str|null, results: [ResultSummary], capability_warnings: [str], audio: {role: {asset_id, duration_ms, sample_rate, available: bool, outdated: bool}}, picture: {source: "background"|"video"|"black", width, height, kind?: "image"|"video", filename?}}}` (`picture`: what a burned video shows by default and its frame size).
 
 - `ResultSummary` = `{id, created, mode, stale, stale_reason, coverage, parent_result_id, n_units, n_failed, n_issues, n_manual, audio_role, backend}`.
 - `audio.*.outdated`: a vocals / instrumental stem separated from an original that has since been replaced; such stems are
@@ -114,6 +114,9 @@ and the last `PatchReport`.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
+| PUT | `/api/projects/{pid}/background` | multipart `file`: a picture (PNG / JPG / WebP / BMP) or a video (MP4 / MOV / MKV / WebM / GIF …, ≤ 4 GiB) | `ProjectView`. Stored as `project.background` `{id, sha256, path, filename, kind: "image"\|"video", width, height, duration_ms}`; from then on preview and burn (`background: "auto"`) show it instead of the project's video / black: a picture held for the whole song, a video looped (its own sound never used), scaled to cover a frame of its aspect ratio with the longer side 1920 px; the audio is the project's (timeline from the audio start). 400 for anything else (checked by extension, content and ffprobe); 409 while a task works on the project |
+| DELETE | `/api/projects/{pid}/background` | – | `ProjectView` (back to the video / black; the file stays in `assets/`) |
+| GET | `/api/projects/{pid}/background/file` | – | the background file (404 without one) |
 | POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`). The file may be a **video**: its first audio track is extracted losslessly (FLAC) and used; a video uploaded as the original is kept as `project.video` (with `audio_offset_s`) for re-muxing. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/playback.wav` | – | decoded PCM WAV (same decoder as alignment → identical time origin). Supports Range. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/peaks?per_second=200` | – | `{sample_rate, duration_ms, per_second, mins: [float], maxs: [float]}` (mono, first peak at 0 ms) |
@@ -229,13 +232,20 @@ unknown values → default). See `docs/karaoke.md`.
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | GET | `/api/tasks` | – | `[PipelineTask]` newest first (without `karaoke`, `detail`, `warning_stage`) |
-| POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?`, `style?` (JSON `TaskStyleOptions`: source / template / colours / saved preset / translation / title card / ruby / video sound; omitted = the last choices) | `PipelineTask` (with its `karaoke`, `video` and `processing` snapshots) |
+| POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?`, `style?` (JSON `TaskStyleOptions`: source / template / colours / saved preset / translation / title card / ruby / video sound; omitted = the last choices), `background?` (a picture or a video played in a loop behind the subtitles, as `PUT …/background`; checked before the task is added, 400 when unusable) | `PipelineTask` (with its `karaoke`, `video` and `processing` snapshots) |
 | POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
 | POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
 | POST | `/api/tasks/{id}/calibration` | `{marked_ms}` (first sung onset of `calibration.line_id`) or `{plain: true}` | `PipelineTask` (only while `waiting`; the task continues) |
 | DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
 
-`PipelineTask` = `{id, created, finished, name, mode, media_filename, lyrics_kind: "link"|"text", lyrics_input, status, project_id, project_deleted, progress, message, error, warnings: [str], current_stage, stages: [{key, label, status, progress, message, failed_soft}], outputs: {video?: {filename, url}}, calibration, calibration_confirmed, video: TaskVideo, processing: TaskProcessing, style_label, style_colors: [str], style_applied, name_auto}` (+ `karaoke: KaraokeStyle`, `detail` (traceback) and `warning_stage` in the responses of the POST endpoints, not in the list).
+Adding a task from a script (e.g. with audio downloaded elsewhere): no browser `Origin` header is needed, only a local `Host`.
+
+```bash
+curl -F file=@song.mp3 -F background=@cover.jpg -F lyrics='https://music.163.com/song?id=347230' -F mode=lrc \
+     http://127.0.0.1:8765/api/tasks
+```
+
+`PipelineTask` = `{id, created, finished, name, mode, media_filename, background_filename, lyrics_kind: "link"|"text", lyrics_input, status, project_id, project_deleted, progress, message, error, warnings: [str], current_stage, stages: [{key, label, status, progress, message, failed_soft}], outputs: {video?: {filename, url}}, calibration, calibration_confirmed, video: TaskVideo, processing: TaskProcessing, style_label, style_colors: [str], style_applied, name_auto}` (+ `karaoke: KaraokeStyle`, `detail` (traceback) and `warning_stage` in the responses of the POST endpoints, not in the list).
 
 - `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export` in the order they run (tasks with `processing.calibration: "auto"` run `calibrate` — labelled 检测偏移 — after `separate`), stage status `pending|running|waiting|done|skipped|failed`.
 - `calibration` (LRC mode, while `waiting`): `{line_id, line_text, lrc_ms, lines: [{id, text, lrc_ms}], check_line, asset_id, duration_ms, lines_after_audio, lines_total}`; the list adds `current_ms` (the project's current offset applied to `lrc_ms`, when one was set in the detailed mode, else `null`); after a confirmation it holds `confirmed_ms`. Automatic tasks that were not sure enough add `auto: {shift_ms, tight, lines, tight_lines, drift_ms, reason, confident}` (only `{reason}` when no estimate could be made); an automatic task that was sure goes on without waiting.

@@ -3,8 +3,8 @@
 // 并自动记住，下一首从同样的选择开始。
 
 import {
-  AlertTriangle, ArrowRight, Check, CircleDashed, Crosshair, Download, Film, Hand, Link2, ListMusic, Loader2, Play,
-  RotateCcw, Settings2, Sparkles, Trash2, X,
+  AlertTriangle, ArrowRight, Check, CircleDashed, Crosshair, Download, Film, Hand, Image as ImageIcon, Link2, ListMusic,
+  Loader2, Music2, Play, RotateCcw, Settings2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
@@ -19,11 +19,34 @@ import {
   Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, DropZone, EmptyState, Input, Progress, Segmented, Textarea,
 } from '@/components/ui';
 import { DownloadLink } from '@/components/DownloadButton';
-import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
+import { AUDIO_ACCEPT, BACKGROUND_ACCEPT, MEDIA_ACCEPT } from '@/pages/input/AudioCard';
 import { CalibrateDialog } from './CalibrateDialog';
 import { TaskStyleStep } from './TaskStyleStep';
 
 const PROVIDER_LABEL = { none: '', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
+
+// the picture source of the form (video / audio + background) is remembered in this browser
+const SOURCE_KEY = 'kara.simple.source';
+function readSource(): 'video' | 'audio' {
+  try { return localStorage.getItem(SOURCE_KEY) === 'audio' ? 'audio' : 'video'; } catch { return 'video'; }
+}
+function saveSource(v: 'video' | 'audio') {
+  try { localStorage.setItem(SOURCE_KEY, v); } catch { /* private mode: not remembered */ }
+}
+const isImage = (f: File) => (f.type.startsWith('image/') && f.type !== 'image/gif') || /\.(png|jpe?g|webp|bmp)$/i.test(f.name);
+
+function FileRow({ file, icon, onClear, note }: { file: File; icon: React.ReactNode; onClear: () => void; note?: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-line bg-surface-2/50 px-3 py-2.5">
+      {icon}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium">{file.name}</div>
+        <div className="text-xs text-muted">{note ? `${note} · ` : ''}{(file.size / 1024 / 1024).toFixed(1)} MB</div>
+      </div>
+      <Button size="xs" variant="ghost" icon={<X className="size-3.5" />} onClick={onClear}>换一个</Button>
+    </div>
+  );
+}
 
 const EXPLICIT = /^\s*(netease|ncm|163|wyy|qq|qqmusic)\s*[:：]\s*(?:(song|album|playlist)\s*[:：]\s*)?([A-Za-z0-9]+)\s*$/i;
 const URL_RE = /https?:\/\/[^\s，。！？、）)"'<>【】「」]+/gi;
@@ -64,6 +87,9 @@ export function SimpleHome() {
   const [mode, setMode] = useState<Mode>(settings?.simple.default_mode ?? 'lrc');
   // the form survives leaving the page (to the settings, the detailed mode …) until the task is added
   const [file, setFile] = usePageDraft<File | null>('simple.file', null);
+  // "video": the video's own picture; "audio": the song's audio + a picture / looped video behind the subtitles
+  const [source, setSource] = usePageDraft<'video' | 'audio'>('simple.source', readSource);
+  const [background, setBackground] = usePageDraft<File | null>('simple.background', null);
   const [lyrics, setLyrics] = usePageDraft('simple.lyrics', '');
   const [name, setName] = usePageDraft('simple.name', '');
   const [busy, setBusy] = useState(false);
@@ -120,12 +146,13 @@ export function SimpleHome() {
     setBusy(true);
     try {
       // big files show how far the upload is (small ones are sent at once)
-      const progress = file.size > 8 * 1024 * 1024 ? (f: number) => setUpload(f) : undefined;
+      const bg = source === 'audio' ? background : null;
+      const progress = file.size + (bg?.size ?? 0) > 8 * 1024 * 1024 ? (f: number) => setUpload(f) : undefined;
       if (progress) setUpload(0);
-      const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined, progress);
+      const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined, progress, bg);
       markOwnTask(t.id);
       toast('ok', '已开始', mode === 'lrc' ? '读取视频和歌词后请确认开头位置，之后全部自动完成' : active ? '前面的任务完成后自动继续' : '马上开始');
-      setFile(null);
+      setFile(null);  // (the background stays: the next song often uses the same one)
       setLyrics('');
       setName('');
     } finally {
@@ -158,7 +185,7 @@ export function SimpleHome() {
         </Callout>
       )}
       <Card>
-        <CardHeader icon={<Sparkles className="size-4" />} title="做一首卡拉OK" description="放入视频和歌词，其余全部自动完成：注音、人声分离、对齐、生成带字幕的视频。" />
+        <CardHeader icon={<Sparkles className="size-4" />} title="做一首卡拉OK" description="放入视频（或音频 + 背景图片 / 视频）和歌词，其余全部自动完成：注音、人声分离、对齐、生成带字幕的视频。" />
         <CardBody className="space-y-6">
           <StepBlock n={1} title="模式">
             <Segmented<Mode> label="模式" value={mode} onChange={chooseMode} options={[
@@ -173,19 +200,32 @@ export function SimpleHome() {
           </StepBlock>
 
           <StepBlock n={2} title="视频或音频">
-            {file ? (
-              <div className="flex items-center gap-3 rounded-xl border border-line bg-surface-2/50 px-3 py-2.5">
-                <Film className="size-5 shrink-0 text-accent" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium">{file.name}</div>
-                  <div className="text-xs text-muted">{(file.size / 1024 / 1024).toFixed(1)} MB</div>
-                </div>
-                <Button size="xs" variant="ghost" icon={<X className="size-3.5" />} onClick={() => setFile(null)}>换一个</Button>
-              </div>
-            ) : (
-              <DropZone accept={MEDIA_ACCEPT} onFile={setFile} title="拖入视频（或音频），也可以点击选择"
-                hint="MP4 / MOV / MKV / MP3 / FLAC …；视频会保留画面，字幕直接烧录上去" />
-            )}
+            <Segmented<'video' | 'audio'> label="画面来源" value={source} onChange={(v) => { setSource(v); saveSource(v); }} options={[
+              { value: 'video', label: '视频', title: '字幕烧录在视频自己的画面上' },
+              { value: 'audio', label: '音频 + 背景', title: '只有音频：配一张图片或一段循环播放的视频作为画面' },
+            ]} />
+            <div className="mt-2.5 space-y-2">
+              {source === 'video' ? (
+                file ? <FileRow file={file} icon={<Film className="size-5 shrink-0 text-accent" />} onClear={() => setFile(null)} /> : (
+                  <DropZone accept={MEDIA_ACCEPT} onFile={setFile} title="拖入视频（或音频），也可以点击选择"
+                    hint="MP4 / MOV / MKV / MP3 / FLAC …；视频会保留画面，字幕直接烧录上去" />
+                )
+              ) : (
+                <>
+                  {file ? <FileRow file={file} icon={<Music2 className="size-5 shrink-0 text-accent" />} onClear={() => setFile(null)} /> : (
+                    <DropZone compact accept={`${AUDIO_ACCEPT},${MEDIA_ACCEPT}`} onFile={setFile} title="拖入音频，也可以点击选择"
+                      hint="MP3 / FLAC / M4A / WAV …（放入视频时只用它的声音）" />
+                  )}
+                  {background ? (
+                    <FileRow file={background} icon={<ImageIcon className="size-5 shrink-0 text-accent" />} onClear={() => setBackground(null)}
+                      note={isImage(background) ? '背景图片' : '背景视频 · 循环播放'} />
+                  ) : (
+                    <DropZone compact accept={BACKGROUND_ACCEPT} onFile={setBackground} title="拖入背景图片或视频（可选）"
+                      hint="视频会循环播放、不用它的声音；不选则为纯黑背景。输出画面按背景的比例，长边 1920" />
+                  )}
+                </>
+              )}
+            </div>
           </StepBlock>
 
           <StepBlock n={3} title="歌词">
@@ -310,7 +350,7 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
             )}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted">
-            {t.media_filename} · {t.lyrics_kind === 'link' ? '音乐链接' : '粘贴的歌词'} · {fmtRelative(t.created)}
+            {t.media_filename}{t.background_filename ? ` + 背景 ${t.background_filename}` : ''} · {t.lyrics_kind === 'link' ? '音乐链接' : '粘贴的歌词'} · {fmtRelative(t.created)}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

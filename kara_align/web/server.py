@@ -352,7 +352,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
 
     @app.post("/api/tasks")
     async def add_task(file: UploadFile = File(...), lyrics: str = Form(...), mode: str = Form("lrc"),
-                       name: str = Form(""), style: str = Form("")):
+                       name: str = Form(""), style: str = Form(""), background: Optional[UploadFile] = File(None)):
         from ..audio.io import AudioError, validate_upload
         from ..pipeline import QueueElsewhere
 
@@ -373,9 +373,18 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
                 opts = json.loads(style) if style.strip() else None
             except ValueError as e:
                 raise HTTPException(400, "style 必须是 JSON") from e
+            bg_tmp, bg_name = None, ""
+            if background is not None and (background.filename or "").strip():
+                bg_name = _upload_name(background.filename, "background")
+                (Path(td) / "bg").mkdir()
+                bg_tmp = Path(td) / "bg" / bg_name
+                await _save_upload(background, bg_tmp, MAX_AUDIO_BYTES)
             # moving the upload and resolving the style run in a thread: the server keeps answering
-            t = await run_in_threadpool(tq.add, media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name,
-                                        style=opts)
+            try:
+                t = await run_in_threadpool(tq.add, media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name,
+                                            style=opts, background=bg_tmp, background_filename=bg_name)
+            except S.ServiceError as e:
+                raise HTTPException(400, _clean(str(e), td, bg_name or fname)) from e
         finally:
             shutil.rmtree(td, ignore_errors=True)
         return t.model_dump(mode="json")
@@ -642,6 +651,41 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
             except AudioError as e:  # (ffmpeg's messages name the temporary copy: shown as the file name)
                 raise HTTPException(400, _clean(str(e), td, name)) from e
         return view(h)
+
+    @app.put("/api/projects/{pid}/background")
+    async def upload_background(pid: str, file: UploadFile = File(...)):
+        """A picture or a video (looped) shown behind the subtitles instead of the video / black."""
+        from ..karaoke.background import MAX_BACKGROUND_BYTES
+
+        h = handle(pid)
+        not_busy(pid)
+        name = _upload_name(file.filename, "background")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / name
+            await _save_upload(file, tmp, MAX_BACKGROUND_BYTES)
+            try:
+                await run_in_threadpool(S.set_background, h, tmp, filename=name)
+            except S.ServiceError as e:
+                raise HTTPException(400, _clean(str(e), td, name)) from e
+        return view(h)
+
+    @app.delete("/api/projects/{pid}/background")
+    def delete_background(pid: str):
+        h = handle(pid)
+        not_busy(pid)
+        S.clear_background(h)
+        return view(h)
+
+    @app.get("/api/projects/{pid}/background/file")
+    def background_file(pid: str):
+        from ..project import store
+
+        h = handle(pid)
+        b = h.project.background
+        p = store.asset_abspath(h.dir, b.path) if b is not None else None
+        if p is None or not p.exists():
+            raise HTTPException(404, "没有背景")
+        return FileResponse(p, filename=b.filename or p.name)
 
     @app.get("/api/projects/{pid}/audio/{asset_id}/playback.wav")
     def playback(pid: str, asset_id: str):
