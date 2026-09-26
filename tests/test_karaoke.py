@@ -398,9 +398,12 @@ def test_advance_shows_everything_earlier_and_lrc_exports_follow(tmp_path):
     assert len(a) == len(b)
     assert all(_ms(x[0]) - _ms(y[0]) in (150, 0) and _ms(x[1]) - _ms(y[1]) == 150 for x, y in zip(a, b))
     assert any(_ms(x[0]) - _ms(y[0]) == 150 for x, y in zip(a, b))
-    # \k durations are relative to each event, so the highlight moves with it
-    assert [l.split(",,", 1)[1] for l in plain.splitlines() if ",KRuby," in l][0] == \
-        [l.split(",,", 1)[1] for l in early.splitlines() if ",KRuby," in l][0]
+    # \k durations are relative to each event, so the highlight moves with it; an event cut at 0:00
+    # (it would start before the video) has its lead-in \k shortened by the same 150 ms
+    p0 = [l.split(",,", 1)[1] for l in plain.splitlines() if ",KRuby," in l][0]
+    e0 = [l.split(",,", 1)[1] for l in early.splitlines() if ",KRuby," in l][0]
+    k_p, k_e = (int(re.search(r"\{\\k(\d+)\}", x).group(1)) for x in (p0, e0))
+    assert k_p - k_e == 15 and re.sub(r"\{\\k\d+\}", "", p0, count=1) == re.sub(r"\{\\k\d+\}", "", e0, count=1)
     out = S.export(h, "lrc-unit")
     assert out.content != lrc0 and "[00:00.85]" in out.content  # first unit sung at 1.000 s
     assert any("提前 150 ms" in w for w in out.warnings)
@@ -642,3 +645,67 @@ def test_rotated_phone_video_reports_its_upright_size(monkeypatch):
         monkeypatch.setattr(V.subprocess, "run", fake([{**base, **extra}]))
         info = V.probe_media("x.mp4")
         assert (info["width"], info["height"]) == want, extra
+
+
+def test_user_text_with_backslashes_and_missing_fonts(tmp_path):
+    h = _project(tmp_path)
+    ln = h.project.lyrics.sung_lines()[0]
+    ln.translation = "AC\\DC {x} \\N"
+    h.save()
+    st = h.project.karaoke.model_copy(deep=True)
+    st.translation.enabled = True
+    st.translation.position = "line"
+    st.text.font = "No Such Font 123"
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    text, warnings = S.karaoke_ass(h)
+    trans = [l for l in text.splitlines() if ",KTrans," in l]
+    # libass has no escape for "\": it becomes a full-width one, never "\\" (shown doubled, and a trailing
+    # one would eat the next {\k} tag); "\N" is no line break
+    assert trans and all("AC＼DC ｛x｝ ＼N" in l for l in trans)
+    assert "No Such Font 123" not in text and any("没有字体 No Such Font 123" in w for w in warnings)
+    from kara_align.karaoke.fonts import default_family
+
+    assert f"Style: KMain,{default_family()}," in text
+
+
+def test_translation_under_each_line_stays_inside_the_margins(tmp_path):
+    h = _project(tmp_path)
+    for ln in h.project.lyrics.sung_lines():
+        ln.translation = "a very long English translation that is certainly much wider than the lyric line above it"
+    h.save()
+    st = h.project.karaoke.model_copy(deep=True)
+    st.translation.enabled, st.translation.position = True, "line"
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    text, _ = A.build_ass(h.project, h.project.result(), size=(1080, 1920))
+    trans = [l for l in text.splitlines() if ",KTrans," in l]
+    assert trans and all("\\fscx" in l for l in trans)
+    for l in trans:
+        x = float(re.search(r"\\pos\(([\d.]+),", l).group(1))
+        assert 0 < x < 1080
+
+
+def test_effects_end_with_their_line(tmp_path):
+    from kara_align.karaoke.effects import Syllable, syllable_events
+
+    st = KaraokeStyle()
+    syl = [Syllable("き", 1000, 1300, 500, 900, 60, 88, "Arial", 88, False, 1500)]
+    for kind in ("sparkle", "petals", "hearts", "pulse"):
+        st.effects.kind = kind
+        assert all(t1 <= 1500 for _, _, t1, _, _ in syllable_events(st, syl, 1.0)), kind
+
+
+def test_saved_styles_file_problems_lose_nothing(tmp_path):
+    import json
+
+    from kara_align.karaoke import styles as ST
+
+    ST._path().parent.mkdir(parents=True, exist_ok=True)
+    ST._path().write_text("{not json", encoding="utf-8")
+    assert [x["name"] for x in ST.list_styles()] == ["默认", "暖阳"]
+    assert ST._path().with_suffix(".broken.json").read_text(encoding="utf-8") == "{not json"
+    # an entry this version cannot read is written back unchanged when saving
+    future = {"id": "st_future", "name": "未来", "style": {"text": {"size": "huge"}}}
+    ST._path().write_text(json.dumps([future]), encoding="utf-8")
+    ST.save_style("我的", KaraokeStyle().model_dump(mode="json"))
+    raw = json.loads(ST._path().read_text(encoding="utf-8"))
+    assert [x["name"] for x in raw] == ["我的", "未来"] and raw[1] == future

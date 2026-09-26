@@ -44,9 +44,12 @@ class ProjectHandle:
     project: Project
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     previews: dict[str, Any] = field(default_factory=dict, repr=False)
+    deleted: bool = False
 
     def save(self) -> None:
         with self.lock:
+            if self.deleted:  # a request still holding the handle must not bring the folder back
+                raise ServiceError("这个项目已被删除")
             store.save_project(self.project, self.dir)
 
     @property
@@ -102,6 +105,7 @@ class Workspace:
         with self._lock:
             self._handles.pop(pid, None)
         with h.lock:
+            h.deleted = True
             shutil.rmtree(h.dir)
 
     def import_file(self, path: Path, filename: str) -> ProjectHandle:
@@ -217,8 +221,12 @@ def project_view(h: ProjectHandle) -> dict:
             "n_issues": len(r.issues), "n_manual": manual_count(r),
             "audio_role": r.snapshot.audio_role, "backend": r.backend.name,
         } for r in p.results]
-        audio = {a.role: {"asset_id": a.id, "available": a.path is not None, "duration_ms": a.duration_ms,
-                          "sample_rate": a.sample_rate} for a in p.audio}
+        stems_ok = stems_current(p)
+        # a stem separated from a replaced original is listed but not usable
+        audio = {a.role: {"asset_id": a.id, "duration_ms": a.duration_ms, "sample_rate": a.sample_rate,
+                          "available": a.path is not None and (a.role == "original" or stems_ok),
+                          "outdated": a.role in ("vocals", "instrumental") and not stems_ok}
+                 for a in p.audio}
         try:
             cap = capability_warnings(p.lyrics, backend_languages(p))
         except Exception:
@@ -768,7 +776,7 @@ def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
             sha256=sha, path=str(Path("assets") / dest.name), filename=name, container=ext,
             duration_ms=info["duration_ms"], width=info.get("width"), height=info.get("height"),
             fps=info.get("fps"), video_codec=info.get("video_codec"), audio_codec=info.get("audio_codec"),
-            audio_offset_s=audio_offset_s(info), audio_sha256=asset.sha256,
+            audio_offset_s=audio_offset_s(info), audio_sha256=asset.sha256, upright=True,
         )
     with h.lock:
         if role == "original":
@@ -848,6 +856,27 @@ def _karaoke_inputs(h: ProjectHandle, style: Optional[dict]):
     return r, k
 
 
+def ensure_upright_video(h: ProjectHandle) -> None:
+    """Videos imported before rotation was read keep a sideways size (a phone video stored as
+    1920×1080 plays as 1080×1920): probe once more and store the displayed size."""
+    v = h.project.video
+    if v is None or v.upright:
+        return
+    p = store.asset_abspath(h.dir, v.path) if v.path else None
+    if p is None or not p.exists():
+        return
+    try:
+        from .audio.video import probe_media
+
+        info = probe_media(p)
+    except Exception:
+        return
+    with h.lock:
+        v.width, v.height = info.get("width") or v.width, info.get("height") or v.height
+        v.upright = True
+        h.save()
+
+
 def _video_file(h: ProjectHandle) -> Optional[Path]:
     v = h.project.video
     orig = h.project.asset("original")
@@ -859,6 +888,7 @@ def _video_file(h: ProjectHandle) -> Optional[Path]:
 
 def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bool = True) -> tuple[str, list[str]]:
     """ASS text; on the video's timeline when the project has a video."""
+    ensure_upright_video(h)
     from .karaoke.ass import build_ass
 
     r, k = _karaoke_inputs(h, style)
@@ -872,6 +902,7 @@ def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bo
 
 
 def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, background: str = "auto") -> bytes:
+    ensure_upright_video(h)
     from .karaoke.ass import build_ass, resolution
     from .karaoke.render import preview_png
 
@@ -891,6 +922,7 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     style's own setting) over the full instrumental; the Export page's mix
     settings are neither used nor changed.
     """
+    ensure_upright_video(h)
     import tempfile
 
     from .karaoke.ass import build_ass, resolution
@@ -915,8 +947,7 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
         audio_file: Optional[Path] = None
         use_video_audio = False
         if audio == "mix":
-            if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
-                raise ServiceError("降低人声需要人声和伴奏两条分轨，请先进行人声分离")
+            require_stems(h, "降低人声")
             mix = MixSettings(vocal_keep_pct=pct, instrumental_pct=100.0).model_dump()
             audio_file = Path(export_mix(h, mix, Path(td) / "mix.wav", save=False)["path"])
         elif audio == "original":
@@ -1041,13 +1072,29 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
     return {"report": report, "assets": [a.id for a in assets]}
 
 
+def stems_current(p: Project) -> bool:
+    """Vocals and instrumental exist and belong to the current original (separated from it, or
+    imported without a known source).  Stems of a replaced original must not be used."""
+    orig, v, i = p.asset("original"), p.asset("vocals"), p.asset("instrumental")
+    if v is None or i is None:
+        return False
+    return all(x.source.parent_sha256 in (None, orig.sha256 if orig else None) for x in (v, i))
+
+
+def require_stems(h: ProjectHandle, what: str) -> tuple[AudioAsset, AudioAsset]:
+    v, i = h.project.asset("vocals"), h.project.asset("instrumental")
+    if v is None or i is None:
+        raise ServiceError(f"{what}需要人声和伴奏两条分轨；请先进行人声分离")
+    if not stems_current(h.project):
+        raise ServiceError(f"{what}需要重新进行人声分离：现有分轨来自更换前的原曲")
+    return v, i
+
+
 def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
     from .audio.io import load_audio
     from .audio.mix import mix_stems
 
-    v, i = h.project.asset("vocals"), h.project.asset("instrumental")
-    if v is None or i is None:
-        raise ServiceError("人声保留比例需要人声和伴奏两条分轨；只有原曲时无法单独降低人声")
+    v, i = require_stems(h, "人声保留比例")
     s = MixSettings.model_validate({**h.project.mix.model_dump(), **settings})
     vd, sr = load_audio(asset_path(h, v))
     idata, sr2 = load_audio(asset_path(h, i), target_sr=sr)
@@ -1059,9 +1106,7 @@ def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
 def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None, *, save: bool = True) -> dict:
     from .audio.mix import export_mix_wav
 
-    v, i = h.project.asset("vocals"), h.project.asset("instrumental")
-    if v is None or i is None:
-        raise ServiceError("导出混音需要人声和伴奏两条分轨；只有原曲时无法单独降低人声")
+    v, i = require_stems(h, "导出混音")
     s = MixSettings.model_validate({**h.project.mix.model_dump(), **settings})
     orig = h.project.asset("original")
     name = f"mix-v{int(round(s.vocal_keep_pct))}-i{int(round(s.instrumental_pct))}.wav"
@@ -1150,18 +1195,28 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
         cfg = AlignConfig.model_validate(_deep_merge(cfg.model_dump(mode="json"), config))
     if audio_role:
         cfg = cfg.model_copy(update={"audio_role": audio_role})
+    elif line_ids and snap.result() is not None and snap.result().snapshot.audio_role in ("original", "vocals") \
+            and (snap.result().snapshot.audio_role == "original" or stems_current(snap)):
+        # a local rerun is compared with / adopted into the active result: same audio as that result
+        cfg = cfg.model_copy(update={"audio_role": snap.result().snapshot.audio_role})
     if not snap.lyrics.sung_lines():
         raise ServiceError("没有参与对齐的歌词行")
+    skip_line_ids: list[str] = []
     if snap.mode == "lrc":
         from .align.calibration import effective_line_starts, validate_anchors
 
         if not effective_line_starts(snap.lyrics, snap.calibration):
             raise LrcTimesError("LRC 增强模式需要有效的行时间；请补充时间或切换到普通模式")
         orig = snap.asset("original")
-        errors = [i for i in validate_anchors(snap.lyrics, snap.calibration, orig.duration_ms if orig else None)
-                  if i.severity == "error"]
+        found = validate_anchors(snap.lyrics, snap.calibration, orig.duration_ms if orig else None)
+        # lines after the end of the audio (a shortened video, e.g. a TV-size cut with full lyrics):
+        # left out of the alignment with a note, instead of giving up the LRC times of the whole song
+        skip_line_ids = [i.line_id for i in found if i.code == "anchor_out_of_range" and i.line_id]
+        errors = [i for i in found if i.severity == "error" and i.code != "anchor_out_of_range"]
         if errors:
             raise LrcTimesError("锚点需要修正: " + "; ".join(i.message for i in errors[:5]))
+        if skip_line_ids and len(skip_line_ids) >= len(snap.lyrics.sung_lines()):
+            raise LrcTimesError("所有歌词行的时间都在音频结束之后：歌词和音频可能不是同一首歌或同一版本")
     missing_units = [ln.id for ln in snap.lyrics.sung_lines() if not ln.units()]
     if missing_units:
         from .reading.prepare import prepare_doc
@@ -1171,8 +1226,11 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
     original = snap.asset("original")
     if original is None:
         raise ServiceError("请先上传原曲")
-    roles = ["original"] + (["vocals"] if snap.asset("vocals") is not None else [])
+    # stems of a replaced original are never used (not as input, not for singing / rest detection)
+    roles = ["original"] + (["vocals"] if stems_current(snap) else [])
     if cfg.audio_role not in roles:
+        if snap.asset("vocals") is not None:
+            raise ServiceError("选择了人声作为对齐输入，但现有人声分轨来自更换前的原曲；请重新进行人声分离")
         raise ServiceError("选择了人声作为对齐输入，但项目中没有人声分轨（请先分离或导入）")
 
     progress(0.02, "加载模型")
@@ -1235,6 +1293,7 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
         tokenize=backend.tokenize, profile=profile, emission_for=emission_for, available_roles=roles,
         audio_assets={r: a for r, a in assets.items() if a is not None}, audio_duration_ms=original.duration_ms,
         energy_for=energy_for, previous=previous, line_ids=line_ids,
+        skip_line_ids=[x for x in skip_line_ids if line_ids is None or x in line_ids],
     )
 
     def run_progress(frac: float, msg: str = "") -> None:

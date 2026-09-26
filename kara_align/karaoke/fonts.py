@@ -114,6 +114,13 @@ def families() -> list[dict]:
     return sorted(out.values(), key=lambda e: (e["family"] not in DEFAULT_FAMILIES, e["family"].lower()))
 
 
+def installed(family: str) -> bool:
+    """A font family this machine has (by any of its names).  With no font list at all (no
+    fontconfig, nothing scanned) every family is assumed present, as libass will decide."""
+    faces = list_faces()
+    return not faces or any(family == f.family or family in f.names for f in faces)
+
+
 def default_family() -> str:
     names = {f.family for f in list_faces()}
     for fam in DEFAULT_FAMILIES:

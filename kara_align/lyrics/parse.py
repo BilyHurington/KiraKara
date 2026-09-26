@@ -140,6 +140,44 @@ def _make_line(i: int, text: str, source: LineSource, start: Optional[int]) -> L
                 imported_start_ms=start, source=source)
 
 
+def _split_translations(parsed: ParsedLrc) -> dict[tuple[int, int], str]:
+    """Bilingual LRC (a Japanese line and its translation under the same time tag, as copied from
+    many lyric sites): the line without kana at a shared time is the translation of the other.
+    The translation entries are removed from ``parsed``; returns {(raw_index, tag_index) of the
+    lyric line: translation}.  Needs at least two such pairs, so one odd line is left alone."""
+    by_time: dict[int, list] = {}
+    for e in parsed.entries:
+        if e.text:
+            by_time.setdefault(e.time_ms, []).append(e)
+    pairs = []
+    for group in by_time.values():
+        if len(group) != 2:
+            continue
+        kana = [bool(_KANA.search(e.text)) for e in group]
+        if kana.count(True) != 1:
+            continue
+        lyric, trans = (group[0], group[1]) if kana[0] else (group[1], group[0])
+        if _HAN.search(trans.text) or _LATIN.search(trans.text):
+            pairs.append((lyric, trans))
+    if len(pairs) < 2:
+        return {}
+    drop = {id(t) for _, t in pairs}
+    parsed.entries = [e for e in parsed.entries if id(e) not in drop]
+    return {(lyric.raw_index, lyric.tag_index): trans.text for lyric, trans in pairs}
+
+
+def _attach_translations(lines: list[Line], translations: dict[tuple[int, int], str], warnings: list[str]) -> None:
+    if not translations:
+        return
+    n = 0
+    for ln in lines:
+        t = translations.get((ln.source.raw_index, ln.source.tag_index))
+        if t is not None:
+            ln.translation = t
+            n += 1
+    warnings.append(f"检测到 {n} 行翻译（与歌词同一时间标签、没有假名的行），已作为翻译，不参与演唱。")
+
+
 def _lines_from_lrc(parsed: ParsedLrc, keep_times: bool, origin: str, source_id: str) -> list[Line]:
     """Build line instances in time order; untimed lines keep their raw position."""
     items: list[tuple[Optional[int], str, LineSource]] = []
@@ -208,13 +246,17 @@ def parse_lyrics_text(
                     "LRC 增强模式需要行时间，但输入中没有找到任何时间。"
                     "请提供带时间的 LRC，或切换到普通模式。"
                 )
+            translations = _split_translations(parsed)
             doc.lines = _lines_from_lrc(parsed, True, origin, snapshot.id)
+            _attach_translations(doc.lines, translations, warnings)
             if parsed.untimed:
                 n = sum(1 for u in parsed.untimed if u.text)
                 if n:
                     warnings.append(f"{n} 行没有时间标签，已保留但不作为锚点。")
         else:
+            translations = _split_translations(parsed)
             doc.lines = _lines_from_lrc(parsed, False, origin, snapshot.id)
+            _attach_translations(doc.lines, translations, warnings)
             warnings.append(
                 "普通模式：已忽略 LRC 时间标签，只使用歌词正文"
                 "（不使用外部时间锚点）。"

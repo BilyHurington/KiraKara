@@ -187,6 +187,12 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
             {c.lines.length > 1 && <> · 之后：{c.lines.slice(1).map((l) => l.text).join(' / ')}</>}
           </div>
         </div>
+        {!!c.lines_after_audio && (
+          <Callout tone="warn" title={`有 ${c.lines_after_audio} 行歌词的时间在音频结束之后`}>
+            视频可能是剪短的版本（例如 TV 版），而歌词是完整版。这些行不会对齐、也不会出现在字幕里；其余的行照常处理。
+            如果整首都对不上，请检查视频和歌词是不是同一首歌、同一个版本。
+          </Callout>
+        )}
         {c.current_ms != null && c.confirmed_ms == null && (
           <p className="text-xs text-muted">标记从详细模式里已设置的偏移（{fmtSigned(c.current_ms - c.lrc_ms)}）开始，确认即可继续。</p>
         )}

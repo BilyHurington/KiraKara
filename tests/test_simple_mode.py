@@ -266,7 +266,9 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     assert (t.style_label, t.style_colors) == ("荧光", ["#FF8A1E", "#F5C400"])
     k = h.project.karaoke
     assert (k.ruby.script, k.ruby.target, k.text.color_sung, k.glow.enabled) == ("hiragana", "kanji", "#FF8A1E", True)
-    assert k.translation.enabled and k.info.enabled
+    assert k.translation.enabled
+    # pasted lyrics without [ti:] and no name typed: no title card showing the file name
+    assert not k.info.enabled and any("没有歌名" in w for w in t.warnings)
     assert (k.timing.lead_in_ms, k.timing.hold_ms, k.layout.margin_v) == (4000, 2000, 40)
     video = h.dir / "exports" / t.outputs["video"]["filename"]
     assert video.exists() and video.stat().st_size > 1000
@@ -688,3 +690,86 @@ def test_waiting_task_shows_the_offset_already_set(tmp_path, monkeypatch):
     S.calibration_op(h, "shift", user_shift_ms=-300)  # set in the detailed mode's calibration page
     assert listed()["current_ms"] == t.calibration["lrc_ms"] - 300
     q.shutdown()
+
+
+def test_stems_of_a_replaced_original_are_not_used(tmp_path):
+    from kara_align.models import AudioSource
+
+    h = S.create_dir(tmp_path / "p", "x", "plain")
+    S.apply_lyrics(h, S.parse_lyrics(h, "きみと\nそら\n", origin="paste")["preview_id"])
+    S.add_audio(h, _wav(tmp_path / "a.wav"), "original")
+    orig = h.project.asset("original")
+    for role in ("vocals", "instrumental"):
+        S.add_audio(h, _wav(tmp_path / f"{role}.wav", seconds=6.0), role)
+    assert S.stems_current(h.project)  # imported stems (no known source) are usable
+    with h.lock:
+        for role in ("vocals", "instrumental"):
+            h.project.asset(role).source = AudioSource(kind="separation", parent_sha256="sha_of_an_older_original")
+        h.save()
+    assert not S.stems_current(h.project)
+    view = S.project_view(h)["view"]["audio"]
+    assert not view["vocals"]["available"] and view["vocals"]["outdated"] and view["original"]["available"]
+    with pytest.raises(S.ServiceError, match="更换前的原曲"):
+        S.require_stems(h, "降低人声")
+    with pytest.raises(S.ServiceError, match="更换前的原曲"):
+        S.run_align(h, audio_role="vocals")
+    assert orig.sha256 == h.project.asset("original").sha256
+
+
+def test_lines_after_the_end_of_the_audio_are_left_out(tmp_path):
+    h = S.create_dir(tmp_path / "p", "x", "lrc")
+    S.update_settings(h, config={"backend": "scripted"})
+    pv = S.parse_lyrics(h, "[00:01.00]きみと\n[00:03.00]あるいた\n[00:05.00]そら\n[00:20.00]とおく\n[00:25.00]みらい\n",
+                        origin="paste")
+    S.apply_lyrics(h, pv["preview_id"])
+    S.add_audio(h, _wav(tmp_path / "a.wav"), "original")  # 7 s: a shortened version
+    from kara_align.pipeline import calibration_request
+
+    req = calibration_request(h)
+    assert (req["lines_after_audio"], req["lines_total"]) == (2, 5)
+    r = S.run_align(h)
+    assert h.project.mode == "lrc"  # not given up for plain mode
+    issue = next(i for i in r.issues if i.code == "lines_after_audio")
+    assert len(issue.data["line_ids"]) == 2
+    assert {u.line_id for u in r.units if u.start_ms is not None} <= {ln.id for ln in h.project.lyrics.sung_lines()[:3]}
+
+
+def test_task_list_is_light_and_disabled_steps_stay_skipped(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n",
+                       mode="plain", name="A").id)
+    listed = next(x for x in q.list() if x["id"] == t.id)
+    assert "karaoke" not in listed and "detail" not in listed and listed["style_label"]
+    # separation was switched off (not an error): a retry leaves it skipped; a failed optional step runs again
+    assert t.stage("separate").status == "skipped" and not t.stage("separate").failed_soft
+    t.stage("readings").status, t.stage("readings").failed_soft = "skipped", True
+    t.stage("export").status, t.status = "failed", "failed"
+    q.retry(t.id)
+    assert t.stage("separate").status == "skipped" and t.stage("readings").status in ("pending", "running", "skipped", "done")
+    _wait(q, t.id)
+    q.shutdown()
+
+
+def test_old_sideways_video_size_is_corrected_and_deleted_projects_stay_deleted(tmp_path, monkeypatch):
+    from kara_align.models import VideoAsset
+
+    h = S.create_dir(tmp_path / "p", "x", "plain")
+    (h.dir / "assets").mkdir(parents=True, exist_ok=True)
+    (h.dir / "assets" / "v.mp4").write_bytes(b"x")
+    with h.lock:
+        h.project.video = VideoAsset(sha256="s", path="assets/v.mp4", container=".mp4", duration_ms=1000, width=1920,
+                                     height=1080, audio_sha256="a")  # imported before rotation was read
+        h.save()
+    import kara_align.audio.video as V
+
+    monkeypatch.setattr(V, "probe_media", lambda p: {"width": 1080, "height": 1920})
+    S.ensure_upright_video(h)
+    assert (h.project.video.width, h.project.video.height, h.project.video.upright) == (1080, 1920, True)
+    ws = S.Workspace(tmp_path / "ws")
+    h2 = ws.create("y")
+    ws.delete(h2.project.id)
+    with pytest.raises(S.ServiceError):
+        h2.save()  # a late save does not bring the folder back
+    assert not h2.dir.exists()

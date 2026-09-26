@@ -491,6 +491,8 @@ class VideoAsset(_Base):
     audio_codec: Optional[str] = None
     # original audio stream start relative to the file start (restored when muxing)
     audio_offset_s: float = 0.0
+    # width / height are the displayed (rotation applied) size; False on videos imported before that
+    upright: bool = False
     # sha256 of the audio extracted from it (= the original asset it produced)
     audio_sha256: str
 

@@ -171,11 +171,13 @@ describe('third review round', () => {
   it('the offset dialog starts from an offset already set in the detailed mode', async () => {
     const waiting = task({ id: 'tw', status: 'waiting', calibration: {
       line_id: 'L1', line_text: 'きみと', lrc_ms: 1500, lines: [{ id: 'L1', text: 'きみと', lrc_ms: 1500 }], check_line: null,
-      asset_id: null, duration_ms: 7000, current_ms: 1200 } });
+      asset_id: null, duration_ms: 7000, current_ms: 1200, lines_after_audio: 2, lines_total: 5 } });
     mockApi({});
     const { CalibrateDialog } = await import('./simple/CalibrateDialog');
     renderUI(<CalibrateDialog task={waiting} onClose={() => {}} />);
     expect(screen.getByText(/详细模式里已设置的偏移（-300 ms）/)).toBeInTheDocument();
+    // a shortened video: said before anything runs
+    expect(screen.getByText('有 2 行歌词的时间在音频结束之后')).toBeInTheDocument();
   });
 
   it('the banner says a task is still reading its video', () => {

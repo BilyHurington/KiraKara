@@ -270,7 +270,8 @@ export interface ProjectView {
     mode_notice: string | null;
     results: ResultSummary[];
     capability_warnings: string[];
-    audio: Partial<Record<Role, { asset_id: string; available: boolean; duration_ms: number; sample_rate: number }>>;
+    /** ``outdated``: a stem separated from a replaced original (not usable) */
+    audio: Partial<Record<Role, { asset_id: string; available: boolean; outdated?: boolean; duration_ms: number; sample_rate: number }>>;
   };
   [extra: string]: any;
 }
@@ -400,6 +401,8 @@ export interface CalibrationRequest {
   asset_id: string | null; duration_ms: number | null; confirmed_ms?: number;
   /** the offset already set on the project (e.g. in the detailed mode's calibration page), as a marker */
   current_ms?: number | null;
+  /** timed lines starting after the end of the audio (a shortened video): left out of the subtitles */
+  lines_after_audio?: number; lines_total?: number;
 }
 
 export interface PipelineTask {

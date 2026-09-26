@@ -135,4 +135,6 @@ def _bgr(hex_rgb: str) -> str:
 
 
 def _escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+    from .ass import escape_text
+
+    return escape_text(text)

@@ -80,6 +80,9 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
     dur = max(0.1, duration_ms / 1000.0)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # written next to the target and moved into place only when complete: a cancelled or failed
+    # burn never leaves half a video, nor truncates an earlier one of the same name
+    part = out_path.with_name(f".{out_path.stem}.part{out_path.suffix}")
     with tempfile.TemporaryDirectory() as td:
         Path(td, "k.ass").write_text(ass_text, encoding="utf-8")
         cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats"]
@@ -99,7 +102,7 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
             maps += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "256k"]
         else:
             maps += ["-an"]
-        cmd += ["-vf", vf, *maps, *video_encoder(quality), "-movflags", "+faststart", str(out_path.resolve())]
+        cmd += ["-vf", vf, *maps, *video_encoder(quality), "-movflags", "+faststart", "-f", "mp4", str(part.resolve())]
         # stderr goes to a file: an undrained pipe could block ffmpeg
         err_file = open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace")
         proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, bufsize=1)
@@ -117,6 +120,9 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
                         continue
                     progress(min(0.99, done / total), f"烧录中 {min(100, int(done / total * 100))}%")
             proc.wait()
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -124,9 +130,10 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
         err_file.seek(0)
         err = err_file.read()
         err_file.close()
-        if proc.returncode != 0 or not out_path.exists():
-            out_path.unlink(missing_ok=True)
+        if proc.returncode != 0 or not part.exists():
+            part.unlink(missing_ok=True)
             raise RenderError(f"烧录失败：{err.strip()[-400:]}")
+        part.replace(out_path)
     return out_path
 
 

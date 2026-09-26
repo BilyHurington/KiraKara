@@ -19,7 +19,7 @@ from typing import Optional
 
 from ..models import AlignmentResult, KaraokeStyle, Line, Project, Segment
 from ..reading.japanese import is_kanji, to_hiragana
-from .fonts import Measurer, default_family
+from .fonts import Measurer, default_family, installed
 
 REF_WIDTH = 1920  # style pixel values are defined for a frame this wide; other widths scale
 DEFAULT_SIZE = (1920, 1080)
@@ -57,7 +57,10 @@ def ass_time(ms: float) -> str:
 
 
 def escape_text(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("{", "｛").replace("}", "｝").replace("\n", " ")
+    """User text as literal ASS text.  libass has no escape for a backslash (``\\\\`` is shown
+    as two, and a trailing one before the next ``{\\k..}`` breaks the tag), and ``\\N`` /
+    ``\\n`` / ``\\h`` are line breaks / spaces: backslashes and braces become full-width."""
+    return s.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", " ")
 
 
 # ---------------------------------------------------------------------------
@@ -395,19 +398,33 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     W, H = size or resolution(project)
     k = W / REF_WIDTH  # by width: the text takes the same share of the frame's width at any size
     lay, txt, rb, tr, glow, tm = style.layout, style.text, style.ruby, style.translation, style.glow, style.timing
-    family = txt.font or default_family()
-    ruby_family = (rb.font or family) if rb.enabled else family
-    trans_family = tr.font or family
+    # a style may name a font this machine does not have (styles travel between machines, the built-in
+    # 暖阳 uses macOS fonts): then the default font is used for measuring *and* drawing, so the layout
+    # still matches what libass draws
+    missing_fonts: list[str] = []
+
+    def usable(name: str) -> str:
+        if name and not installed(name):
+            missing_fonts.append(name)
+            return ""
+        return name
+
+    family = usable(txt.font) or default_family()
+    ruby_family = (usable(rb.font) or family) if rb.enabled else family
+    trans_family = usable(tr.font) or family
     main_size = txt.size * k
     ruby_size = main_size * rb.size_pct / 100
     trans_size = main_size * tr.size_pct / 100
     gap = rb.gap * k
     trans_gap = 6 * k
     m_main = Measurer(family, txt.bold, main_size)
+    m_trans = Measurer(trans_family, tr.bold, trans_size)
     m_ruby = Measurer(ruby_family, txt.bold, ruby_size) if rb.enabled else None
     times = _unit_times(result)
     romaji = _romaji(project) if (rb.enabled and rb.script == "romaji") else {}
     warnings: list[str] = []
+    if missing_fonts:
+        warnings.append(f"这台电脑没有字体 {'、'.join(sorted(set(missing_fonts)))}，已改用 {family}")
 
     covered = set(result.coverage.line_ids) if not result.coverage.full else None
     laid: list[LaidLine] = []
@@ -557,6 +574,9 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             pause = (spans[1][0] - spans[0][1] + tm.hold_ms + tm.lead_in_ms) / 1000
             warnings.append(f"「{ll.line.text}」中间停顿约 {pause:.0f} 秒，停顿期间暂时隐藏该行")
         for t_from, t_to in spans:
+            # an ASS event cannot start before 0:00: start it there and time the sweep from there,
+            # or the fill would lag by what was cut off
+            t_from = max(t_from, -time_offset_ms)
             cxs, x = [], x0
             for w in widths:
                 cxs.append(x + w * scale / 2)
@@ -591,8 +611,14 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 x += w * scale
             if ll.translation and per_line_trans:
                 ty = main_y + trans_gap + trans_size
-                an, tx = {"left": (1, x0), "right": (3, x0 + line_w), "center": (2, W / 2)}[align]
-                emit_trans(t_from, t_to, f"\\an{an}\\pos({tx:.1f},{ty:.1f})", ll.translation)
+                # a translation wider than the room between the margins is shrunk, and kept inside them
+                tw = m_trans.width(ll.translation) or 1.0
+                tfs = f"\\fscx{avail / tw * 100:.1f}\\fscy{avail / tw * 100:.1f}" if tw > avail else ""
+                tw = min(tw, avail)
+                an, tx = {"left": (1, max(margin_h, min(x0, W - margin_h - tw))),
+                          "right": (3, min(W - margin_h, max(x0 + line_w, margin_h + tw))),
+                          "center": (2, W / 2)}[align]
+                emit_trans(t_from, t_to, f"\\an{an}\\pos({tx:.1f},{ty:.1f}){tfs}", ll.translation)
 
     if tr.enabled and not per_line_trans:
         for t0, t1, pos, text in translation_placements(laid, style, W, H, block_top, block_h, trans_size,

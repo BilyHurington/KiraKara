@@ -111,7 +111,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
 
         def add(layer: int, dur: float, tags: str, body: str, delay: float = 0.0) -> None:
             a = int(t0 + delay)
-            b = int(min(a + dur, s.visible_until + 300))
+            b = int(min(a + dur, s.visible_until))  # gone with the line (the fade is inside)
             if b - a >= 60:
                 out.append((layer, a, b, tags, body))
 
@@ -246,4 +246,6 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
 
 
 def _escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ")
+    from .ass import escape_text
+
+    return escape_text(text)

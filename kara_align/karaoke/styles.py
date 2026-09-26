@@ -77,25 +77,36 @@ def _path():
     return home_dir() / "styles.json"
 
 
-def _load_user() -> list[dict]:
+def _read_raw() -> list:
     try:
         raw = json.loads(_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
-    except Exception:
-        return []
-    out = []
-    for item in raw if isinstance(raw, list) else []:
+    except Exception:  # unreadable: kept aside (never overwritten by the next save), start empty
         try:
-            out.append({"id": str(item["id"]), "name": str(item["name"]), "updated": item.get("updated"),
-                        "style": KaraokeStyle.model_validate(item["style"]).model_dump(mode="json")})
-        except Exception:
-            continue  # skip a broken entry, keep the rest
-    return out
+            _path().replace(_path().with_suffix(".broken.json"))
+        except OSError:
+            pass
+        return []
+    return raw if isinstance(raw, list) else []
+
+
+def _parse(item) -> Optional[dict]:
+    try:
+        return {"id": str(item["id"]), "name": str(item["name"]), "updated": item.get("updated"),
+                "style": KaraokeStyle.model_validate(item["style"]).model_dump(mode="json")}
+    except Exception:
+        return None
+
+
+def _load_user() -> list[dict]:
+    return [x for x in (_parse(i) for i in _read_raw()) if x is not None]  # a broken entry is skipped
 
 
 def _save_user(items: list[dict]) -> None:
-    atomic_write_text(_path(), json.dumps(items, ensure_ascii=False, indent=1))
+    # entries this version cannot read (e.g. saved by a newer one) are written back unchanged
+    unreadable = [i for i in _read_raw() if _parse(i) is None]
+    atomic_write_text(_path(), json.dumps(items + unreadable, ensure_ascii=False, indent=1))
 
 
 def list_styles() -> list[dict]:

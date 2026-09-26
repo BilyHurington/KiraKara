@@ -587,8 +587,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/mix/export")
     def mix_export(pid: str, body: dict):
         h = handle(pid)
-        if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
-            raise HTTPException(400, "导出混音需要人声和伴奏两条分轨；只有原曲时无法单独降低人声")
+        S.require_stems(h, "导出混音")
 
         def run(job: Job):
             out = S.export_mix(h, body or {})
@@ -723,8 +722,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         h = handle(pid)
         if h.project.video is None:
             raise HTTPException(400, "项目中没有视频：请在“音频与歌词”中上传视频作为原曲")
-        if h.project.asset("vocals") is None or h.project.asset("instrumental") is None:
-            raise HTTPException(400, "降低人声需要人声和伴奏两条分轨，请先进行人声分离")
+        S.require_stems(h, "降低人声")
 
         def run(job: Job):
             job.message = "混音并合成视频"

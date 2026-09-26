@@ -110,6 +110,10 @@ function RunCard() {
   const hasVocals = !!view.audio.vocals?.available;
   const running = job && (job.status === 'queued' || job.status === 'running');
   const backend = info?.backends.find((b) => b.name === cfg.backend);
+  // e.g. a simple-mode task aligned the vocals, while the project setting is still the original
+  const active = view.results.find((r) => r.id === project.active_result_id);
+  const activeRole = active?.audio_role as 'original' | 'vocals' | undefined;
+  const roleDiffers = !!activeRole && activeRole !== cfg.audio_role && (activeRole === 'original' || hasVocals);
 
   const patchConfig = (partial: Record<string, unknown>) => run(async () => {
     setPV(await api.patch<ProjectView>(ppath(''), { config: partial }));
@@ -132,7 +136,8 @@ function RunCard() {
       <CardHeader icon={<Settings2 className="size-4" />} title="对齐设置" description="设置随项目保存；运行时使用当前输入的快照。" />
       <CardBody className="space-y-5">
         <div className="grid gap-5 md:grid-cols-2">
-          <Field label="对齐输入音频" hint={hasVocals ? '人声使用未衰减的分离人声；分离不保证更准，异常句可切回原曲比较' : '没有人声分轨：可在“注音与分离”中分离或导入'}>
+          <Field label="对齐输入音频" hint={hasVocals ? '人声使用未衰减的分离人声；分离不保证更准，异常句可切回原曲比较'
+            : view.audio.vocals?.outdated ? '现有人声分轨来自更换前的原曲，不能使用：请在“注音与分离”中重新分离' : '没有人声分轨：可在“注音与分离”中分离或导入'}>
             <Segmented
               value={cfg.audio_role}
               onChange={(v) => patchConfig({ audio_role: v })}
@@ -141,6 +146,12 @@ function RunCard() {
                 { value: 'vocals', label: '人声（未衰减）', disabled: !hasVocals },
               ]}
             />
+            {roleDiffers && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-2.5 py-1.5 text-xs text-warn">
+                当前对齐结果用的是「{ROLE_LABEL[activeRole!]}」，这里选的是「{ROLE_LABEL[cfg.audio_role]}」：重新对齐会改用后者。
+                <Button size="xs" variant="secondary" onClick={() => patchConfig({ audio_role: activeRole })}>改用{ROLE_LABEL[activeRole!]}</Button>
+              </div>
+            )}
           </Field>
           <Field label="声学后端">
             <Select value={cfg.backend} onChange={(e) => patchConfig({ backend: e.target.value })}>

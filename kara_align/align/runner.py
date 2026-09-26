@@ -69,6 +69,8 @@ class AlignInputs:
     energy_for: Optional[Callable[[str], tuple[np.ndarray, float]]] = None
     previous: Optional[AlignmentResult] = None
     line_ids: Optional[list[str]] = None
+    # LRC lines starting after the end of the audio (a shortened video): left out of this run
+    skip_line_ids: list[str] = field(default_factory=list)
     supports_language: Optional[Callable[[str], bool]] = None
     extra_stats: dict = field(default_factory=dict)
 
@@ -95,8 +97,10 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
                                          message=f"对齐输入音轨「{role}」不可用；"
                                                  f"可用：{inp.available_roles}")])
     issues: list[Issue] = []
+    skip = set(inp.skip_line_ids)
     if inp.mode == "lrc":
-        v = validate_anchors(doc, cal, inp.audio_duration_ms)
+        v = [i for i in validate_anchors(doc, cal, inp.audio_duration_ms)
+             if not (i.code == "anchor_out_of_range" and i.line_id in skip)]
         errors = [i for i in v if i.severity == "error"]
         if errors:
             raise AlignmentInputError(errors)
@@ -113,7 +117,12 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
         if unknown:
             raise AlignmentInputError([Issue(code="unknown_lines", severity="error",
                                              message=f"这些行不参与演唱或不存在：{unknown}")])
-    selected = [lid for lid in prep.order if inp.line_ids is None or lid in inp.line_ids]
+    selected = [lid for lid in prep.order if (inp.line_ids is None or lid in inp.line_ids) and lid not in skip]
+    plan_ids = selected if skip else inp.line_ids
+    if skip:
+        issues.append(Issue(code="lines_after_audio", severity="warning",
+                            message=f"{len(skip)} 行歌词的时间在音频结束之后（视频可能是剪短的版本），这些行没有对齐、不会出现在字幕里",
+                            data={"line_ids": sorted(skip)}))
     voices = {lid: prep.lines[lid].voice for lid in prep.order}
 
     prog(0.05, "读取声学分数")
@@ -151,7 +160,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
         return plan_lrc(doc, cal, decode_cfg or cfg.decode, fm, nf, inp.audio_duration_ms, line_ids,
                         force_joint, extra_context)
 
-    tasks = plan(line_ids=inp.line_ids)
+    tasks = plan(line_ids=plan_ids)
     prog(0.1, f"解码 {len(tasks)} 个任务")
     outcomes: dict[str, tuple[Task, TaskOutcome]] = {}
     for i, task in enumerate(tasks):
@@ -233,7 +242,7 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
     if inp.mode == "lrc" and tasks:
         prog(0.55, "稳定性检查")
         alt_cfg = cfg.decode.model_copy(update={"joint_context_lines": 0 if cfg.decode.joint_context_lines > 0 else 1})
-        alt_tasks = plan(decode_cfg=alt_cfg, line_ids=inp.line_ids)[:MAX_STABILITY_TASKS]
+        alt_tasks = plan(decode_cfg=alt_cfg, line_ids=plan_ids)[:MAX_STABILITY_TASKS]
         alt_starts: dict[str, Optional[int]] = {}
         for t in alt_tasks:
             base_t = outcomes.get(t.retained_line_ids[0], (None, None))[0]

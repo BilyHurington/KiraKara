@@ -60,6 +60,7 @@ STAGES: list[tuple[str, str, float]] = [  # key, label, share of the progress ba
     ("export", "生成视频", 0.20),
 ]
 PREP_STAGES = ("import", "lyrics", "calibrate")  # quick; run as soon as the task is added
+SKIPPED_ON_ERROR = "skipped:error"  # a stage outcome: optional step skipped because it went wrong
 _LABEL = {k: label for k, label, _ in STAGES}
 _WEIGHT = {k: w for k, _, w in STAGES}
 
@@ -70,6 +71,9 @@ class Stage(_Base):
     status: StageStatus = "pending"
     progress: float = 0.0
     message: str = ""
+    # skipped because something went wrong (an optional step: AI readings, separation) — a retry runs
+    # it again; skipped because it is switched off / not set up is kept as it is
+    failed_soft: bool = False
 
 
 class TaskVideo(_Base):
@@ -124,6 +128,7 @@ class PipelineTask(_Base):
     warning_stage: dict[str, str] = Field(default_factory=dict)  # warning text -> stage that raised it
     current_stage: str = ""
     project_deleted: bool = False  # the project was deleted in the detailed mode
+    name_auto: bool = False  # the name is the media file's (nobody gave one)
 
     def stage(self, key: str) -> Stage:
         return next(s for s in self.stages if s.key == key)
@@ -211,7 +216,8 @@ class TaskQueue:
             tasks = list(reversed(self.tasks))
         out = []
         for t in tasks:
-            d = t.model_dump(mode="json")
+            # polled every second: the full style snapshot and tracebacks stay on the server
+            d = t.model_dump(mode="json", exclude={"karaoke", "detail", "warning_stage"})
             if t.status == "waiting" and t.calibration and t.project_id:
                 try:  # the project's current offset, if one was set meanwhile (detailed mode)
                     shift = self.ws.get(t.project_id).project.calibration.user_shift_ms
@@ -269,6 +275,7 @@ class TaskQueue:
             app_settings.update({"simple": {"task_style": opts.model_dump(mode="json")}})
         if not t.name and t.lyrics_kind == "text":
             t.name = Path(safe).stem
+            t.name_auto = True
         dest = self.dir / t.id
         dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(media), dest / safe)
@@ -321,8 +328,10 @@ class TaskQueue:
                 raise S.ServiceError("这个任务的项目已被删除，无法重试；请重新添加任务")
             again = set()
             for s in t.stages:
-                if s.status in ("failed", "running", "skipped", "waiting"):  # optional stages get another chance
-                    s.status, s.progress, s.message = "pending", 0.0, ""
+                # failed / stopped stages, and optional ones that went wrong, get another chance;
+                # an optional step that is switched off (or AI not set up) stays skipped
+                if s.status in ("failed", "running", "waiting") or (s.status == "skipped" and s.failed_soft):
+                    s.status, s.progress, s.message, s.failed_soft = "pending", 0.0, "", False
                     again.add(s.key)
             # warnings from the stages that run again are dropped (they are raised again if still true)
             t.warnings = [w for w in t.warnings if t.warning_stage.get(w) not in again]
@@ -433,6 +442,10 @@ class TaskQueue:
                 if done_status == "succeeded":
                     task.progress = 1.0
         except WaitForUser as w:
+            if token.cancelled:  # cancelled just as it came to ask: stays cancelled
+                task.status, task.message = "cancelled", "已取消"
+                self._mark_running_stage(task, "pending")
+                return  # (finally still runs)
             task.status, task.message = "waiting", str(w)
             for s in task.stages:
                 if s.status == "running":
@@ -517,10 +530,12 @@ def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Option
             cancel.check()
 
         outcome = STAGE_FUNCS[key](q, task, cfg, cancel, progress)
-        st.status = "skipped" if outcome == "skipped" else "done"
+        st.failed_soft = outcome == SKIPPED_ON_ERROR
+        st.status = "skipped" if outcome in ("skipped", SKIPPED_ON_ERROR) else "done"
         st.progress = 1.0
         # keep a result note ("48 行", "整体偏移 -350 ms"), drop the last progress text
-        st.message = outcome if isinstance(outcome, str) and outcome not in ("skipped", "done") else ""
+        st.message = "未完成，已跳过" if st.failed_soft else \
+            (outcome if isinstance(outcome, str) and outcome not in ("skipped", "done") else "")
         overall()
         save(True)
 
@@ -609,6 +624,14 @@ def stage_lyrics(q, task, cfg, cancel, progress):
         raise S.ServiceError("歌词里没有可以演唱的行")
     n = len(h.project.lyrics.sung_lines())
     paired = pair_translation(h, (pv.get("extra_tracks") or {}).get("translation"))
+    if task.karaoke is not None and task.karaoke.info.enabled and task.name_auto \
+            and not (h.project.lyrics.meta.title or "").strip():
+        # no real title (pasted lyrics without [ti:], no name typed): a title card would show the file name
+        k = h.project.karaoke.model_copy(deep=True)
+        k.info.enabled = False
+        S.set_karaoke_style(h, k.model_dump(mode="json"))
+        task.karaoke.info.enabled = False
+        _warn(task, "没有歌名（歌词里没有 [ti:]，也没有填写歌名），开头不显示歌曲信息；可以在详细模式的“歌曲信息”里填写后开启")
     if task.karaoke is not None and task.karaoke.translation.enabled and not any(
             (ln.translation or "").strip() for ln in h.project.lyrics.sung_lines()):
         _warn(task, "音乐平台没有提供这首歌的翻译，视频里不会显示翻译" if task.lyrics_kind == "link"
@@ -642,7 +665,7 @@ def stage_readings(q, task, cfg, cancel, progress):
         raise
     except Exception as e:  # rule readings are still usable
         _warn(task, f"AI 注音失败，使用规则读音：{e}")
-        return "skipped"
+        return SKIPPED_ON_ERROR
     rep = out["report"]
     bad = [lr["line_id"] for lr in rep.get("lines", []) if lr.get("status") != "ok"]
     if bad:
@@ -663,7 +686,7 @@ def stage_separate(q, task, cfg, cancel, progress):
         ensure_available()
     except Exception:
         _warn(task, "未安装人声分离组件：使用原曲对齐，也无法生成降低人声的视频")
-        return "skipped"
+        return SKIPPED_ON_ERROR
     try:
         run_heavy(lambda: S.run_separation(h, cfg.simple.separation_preset, cancel=cancel, progress=progress,
                                            device=cfg.simple.separation_device),
@@ -672,7 +695,7 @@ def stage_separate(q, task, cfg, cancel, progress):
         raise
     except Exception as e:
         _warn(task, f"人声分离失败，使用原曲对齐：{e}")
-        return "skipped"
+        return SKIPPED_ON_ERROR
     return "done"
 
 
@@ -717,8 +740,11 @@ def calibration_request(h: "S.ProjectHandle") -> dict:
     ref = timed[0]
     mid = timed[len(timed) // 2] if len(timed) > 2 else None
     audio = h.project.asset("original")
+    # lines whose LRC time is after the end of the audio (a shortened video): said up front
+    after = sum(1 for ln in timed if audio and audio.duration_ms and C.base_ms(doc, ln) >= audio.duration_ms)
     return {
         "line_id": ref.id, "line_text": ref.text, "lrc_ms": C.base_ms(doc, ref),
+        "lines_after_audio": after, "lines_total": len(timed),
         "lines": [{"id": ln.id, "text": ln.text, "lrc_ms": C.base_ms(doc, ln)} for ln in timed[:3]],
         "check_line": {"id": mid.id, "text": mid.text, "lrc_ms": C.base_ms(doc, mid)} if mid else None,
         "asset_id": audio.id if audio else None, "duration_ms": audio.duration_ms if audio else None,
@@ -831,7 +857,7 @@ def stage_export(q, task, cfg, cancel, progress):
         _warn(task, "歌词或读音在对齐后有变化，已重新对齐后再生成视频")
         _align(q, task, h, cancel, lambda f, m="": progress(0.0, m))
     audio = video.video_audio
-    if audio == "mix" and (h.project.asset("vocals") is None or h.project.asset("instrumental") is None):
+    if audio == "mix" and not S.stems_current(h.project):
         _warn(task, "没有人声分轨，视频使用原声")
         audio = "original"
     out = run_heavy(lambda: S.karaoke_burn(h, background="auto", audio=audio, quality=video.quality,

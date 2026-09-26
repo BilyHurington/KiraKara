@@ -263,7 +263,7 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
           {t.project_deleted && <Badge tone="neutral">项目已删除</Badge>}
           {!t.project_deleted && (t.status === 'failed' || t.status === 'cancelled' || t.status === 'interrupted') && (
             <Button size="sm" variant="secondary" icon={<RotateCcw className="size-4" />} onClick={() => act('retry')}
-              title="从没完成的步骤继续：已经完成的步骤、已有的分轨和对齐结果（包括在详细模式里做的）都会保留">重试</Button>
+              title="从没完成的步骤继续，并再试一次出错时跳过的 AI 注音 / 人声分离。已有的分轨和对齐结果会保留；若 AI 注音这次改了读音，会重新对齐（锁定的手动时间保留），也会再次使用 AI 额度">重试</Button>
           )}
           {canOpen && <Button size="sm" variant="ghost" icon={<ArrowRight className="size-4" />} onClick={open}>详细模式</Button>}
           {live && <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={() => act('cancel')}>取消</Button>}
