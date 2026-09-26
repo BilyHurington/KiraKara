@@ -30,7 +30,10 @@ Design decisions
 
 from __future__ import annotations
 
+import os
+import shutil
 import threading
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -73,6 +76,31 @@ def resolve_device(device: str) -> str:
     return "cpu"
 
 
+def model_cache_dir(model_id: str) -> Optional[str]:
+    """Where a Hub model is kept: ``<models>/alignment`` (store.models_dir), in the Hub's own layout,
+    passed to the loader explicitly.  The first time, a copy already in the default Hugging Face
+    cache is copied over (copied, not moved: other programs may use it).  A local folder given as
+    the model is used as it is (None)."""
+    if Path(model_id).expanduser().exists():
+        return None
+    from ...project.store import models_dir
+
+    d = models_dir("alignment")
+    name = "models--" + model_id.replace("/", "--")
+    if not (d / name).exists():
+        hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        src = Path(os.environ.get("HF_HUB_CACHE", hf_home / "hub")) / name
+        if src.is_dir():
+            tmp = d / (name + ".part")
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+                shutil.copytree(src, tmp, symlinks=True)  # (snapshots link to blobs, relatively)
+                os.replace(tmp, d / name)
+            except OSError:
+                shutil.rmtree(tmp, ignore_errors=True)  # downloaded again instead
+    return str(d)
+
+
 def load_model(model_id: str, revision: Optional[str], device: str) -> dict[str, Any]:
     """Load (once per process) model + vocab; reused across calls."""
     key = (model_id, revision, device)
@@ -80,11 +108,12 @@ def load_model(model_id: str, revision: Optional[str], device: str) -> dict[str,
         if key in _MODEL_CACHE:
             return _MODEL_CACHE[key]
         torch, transformers = _import_ml()
-        model = transformers.Wav2Vec2ForCTC.from_pretrained(model_id, revision=revision)
+        where = {"cache_dir": cache} if (cache := model_cache_dir(model_id)) else {}
+        model = transformers.Wav2Vec2ForCTC.from_pretrained(model_id, revision=revision, **where)
         model.eval().to(device)
-        tok = transformers.AutoTokenizer.from_pretrained(model_id, revision=revision)
+        tok = transformers.AutoTokenizer.from_pretrained(model_id, revision=revision, **where)
         try:
-            fe = transformers.AutoFeatureExtractor.from_pretrained(model_id, revision=revision)
+            fe = transformers.AutoFeatureExtractor.from_pretrained(model_id, revision=revision, **where)
             sr = int(fe.sampling_rate)
             do_norm = bool(getattr(fe, "do_normalize", True))
         except Exception:

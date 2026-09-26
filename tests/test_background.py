@@ -149,17 +149,37 @@ def test_tasks_http_api_takes_a_background(tmp_path, monkeypatch):
     assert c.post("/api/tasks", data={"lyrics": "きみと", "mode": "plain"}, files=files).status_code == 200
 
 
-def test_separation_models_are_kept_in_the_home_folder(tmp_path, monkeypatch):
+def test_separation_models_are_kept_with_the_app_and_passed_explicitly(tmp_path, monkeypatch):
     from kara_align.audio import separation as SEP
 
     old = tmp_path / "old-tmp"
     old.mkdir()
     (old / "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt").write_bytes(b"weights")
     (old / "download_checks.json").write_text("{}")
-    monkeypatch.setattr(SEP, "_OLD_MODEL_DIR", old)
+    earlier = tmp_path / "home" / "models" / "separation"  # (KARA_ALIGN_HOME from the fixture)
+    earlier.mkdir(parents=True)
+    (earlier / "UVR-MDX-NET-Inst_HQ_3.onnx").write_bytes(b"mdx")
+    monkeypatch.setattr(SEP, "_OLD_MODEL_DIRS", [old])
+    monkeypatch.setenv("KARA_ALIGN_MODELS", str(tmp_path / "app-models"))
     d = SEP.models_dir()
-    assert d == tmp_path / "home" / "models" / "separation"  # (KARA_ALIGN_HOME from the fixture)
+    assert d == tmp_path / "app-models" / "separation"
     assert (d / "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt").read_bytes() == b"weights"
-    assert not any(old.iterdir())  # moved, not downloaded again
-    monkeypatch.setenv("KARA_ALIGN_SEPARATION_MODELS", str(tmp_path / "elsewhere"))
-    assert SEP.models_dir() == tmp_path / "elsewhere"
+    assert (d / "UVR-MDX-NET-Inst_HQ_3.onnx").read_bytes() == b"mdx"
+    assert not any(old.iterdir()) and not any(earlier.iterdir())  # moved, not downloaded again
+
+
+def test_alignment_model_is_loaded_from_the_app_models_folder(tmp_path, monkeypatch):
+    from kara_align.align.backends import wav2vec2_ctc as W
+
+    hub = tmp_path / "hf" / "hub" / "models--org--m"
+    (hub / "blobs").mkdir(parents=True)
+    (hub / "blobs" / "abc").write_bytes(b"w")
+    (hub / "snapshots" / "rev").mkdir(parents=True)
+    (hub / "snapshots" / "rev" / "model.safetensors").symlink_to("../../blobs/abc")
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hf" / "hub"))
+    monkeypatch.setenv("KARA_ALIGN_MODELS", str(tmp_path / "app-models"))
+    d = W.model_cache_dir("org/m")
+    assert d == str(tmp_path / "app-models" / "alignment")
+    copied = tmp_path / "app-models" / "alignment" / "models--org--m" / "snapshots" / "rev" / "model.safetensors"
+    assert copied.read_bytes() == b"w" and (hub / "blobs" / "abc").exists()  # copied, the original stays
+    assert W.model_cache_dir(str(tmp_path)) is None  # a local folder is used as it is

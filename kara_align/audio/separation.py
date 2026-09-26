@@ -143,33 +143,35 @@ def fix_stem_length(stem: np.ndarray, original_len: int, leading_padding: int = 
     return x, action
 
 
-# where the separator used to keep its models (it downloads there by default): gone after a reboot
-_OLD_MODEL_DIR = Path("/tmp/audio-separator-models")
+# where separation models were kept before (the separator's own default is a temporary folder)
+_OLD_MODEL_DIRS = [Path("/tmp/audio-separator-models")]
 
 
 def models_dir() -> Path:
-    """Where separation models are kept for good: ``$KARA_ALIGN_SEPARATION_MODELS``, else
-    ``<KARA_ALIGN_HOME>/models/separation`` (not the cache folder: it may be cleared).  A model is
-    downloaded there the first time it is used; models the separator left in its old temporary
-    folder are moved here (no second download)."""
-    from ..project.store import home_dir
+    """The separation models: ``<models>/separation`` (store.models_dir), passed to the separator
+    explicitly.  A model is downloaded there the first time it is used; models found in the old
+    places (the separator's temporary folder, ``<home>/models/separation``) are moved here, so
+    nothing is downloaded twice."""
+    from ..project.store import home_dir, models_dir as root
 
-    env = os.environ.get("KARA_ALIGN_SEPARATION_MODELS")
-    d = Path(env).expanduser() if env else home_dir() / "models" / "separation"
-    d.mkdir(parents=True, exist_ok=True)
-    try:
-        old = [f for f in _OLD_MODEL_DIR.iterdir() if f.is_file()] if _OLD_MODEL_DIR.is_dir() else []
-    except OSError:
-        old = []
-    for f in old:
-        dest = d / f.name
-        if dest.exists():
-            continue
+    d = root("separation")
+    for old in [*_OLD_MODEL_DIRS, home_dir() / "models" / "separation"]:
         try:
-            shutil.move(str(f), str(dest.with_name(dest.name + ".part")))
-            os.replace(dest.with_name(dest.name + ".part"), dest)
+            if not old.is_dir() or old.resolve() == d.resolve():
+                continue
+            files = [f for f in old.iterdir() if f.is_file()]
         except OSError:
-            pass  # left where it is: downloaded again when needed
+            continue
+        for f in files:
+            dest = d / f.name
+            if dest.exists():
+                continue
+            try:
+                tmp = dest.with_name(dest.name + ".part")
+                shutil.move(str(f), str(tmp))
+                os.replace(tmp, dest)
+            except OSError:
+                pass  # left where it is: downloaded again when needed
     return d
 
 

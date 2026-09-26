@@ -29,3 +29,6 @@ frontend/*.tsbuildinfo
 
 # third-party tools deployed locally for comparison
 /third_party/
+
+# model files (separation / alignment): kept in the app folder, loaded from there
+/models/

@@ -36,6 +36,22 @@ def home_dir() -> Path:
     return Path(os.environ.get("KARA_ALIGN_HOME", Path.home() / ".kara_align")).expanduser()
 
 
+def models_dir(kind: str = "") -> Path:
+    """Where model files are kept and loaded from (always passed explicitly to the loaders, never a
+    library's default cache): ``$KARA_ALIGN_MODELS``, else the ``models`` folder of the app itself
+    (a source checkout or an unpacked app — everything in one place, ready to run offline), else
+    ``<home>/models`` when installed as a package (its folder may not be writable)."""
+    env = os.environ.get("KARA_ALIGN_MODELS")
+    if env:
+        root = Path(env).expanduser()
+    else:
+        app = Path(__file__).resolve().parents[2]
+        root = app / "models" if (app / "pyproject.toml").exists() or (app / "models").is_dir() else home_dir() / "models"
+    p = root / kind if kind else root
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def cache_dir(kind: str = "") -> Path:
     p = home_dir() / "cache"
     if kind:
