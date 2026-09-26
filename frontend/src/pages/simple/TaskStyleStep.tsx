@@ -4,9 +4,10 @@
 // it is added and remembered for the next one.
 
 import { Plus, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
+import { useApp } from '@/store/app';
 import { loadSavedStyles, useLibrary } from '@/store/styles';
 import { Segmented, Select, SliderField, Switch } from '@/components/ui';
 import { ColorRow } from '@/components/karaoke/ThemeColors';
@@ -25,6 +26,10 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const saved = useLibrary((s) => s.saved);
   const [theme, setTheme] = useState<KaraokeStyle | null>(null);
   const set = (patch: Partial<TaskStyleOptions>) => onChange({ ...o, ...patch });
+  // “降低人声” needs the separation: switched on in the settings and installed on this computer
+  const sepInstalled = useApp((s) => s.info?.separation_available ?? true);
+  const canSeparate = settings.separate && sepInstalled;
+  const themeSeq = useRef(0);
 
   useEffect(() => { if (!saved) void loadSavedStyles().catch(() => undefined); }, [saved]);
   useEffect(() => {
@@ -34,12 +39,14 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   useEffect(() => {
     if (o.source !== 'template') return;
     let stop = false;
+    // debounced (dragging the colour picker changes the colour many times) and numbered: only the latest answer counts
+    const my = ++themeSeq.current;
     const t = setTimeout(async () => {
       try {
         const r = await api.post<ThemePreview>('/api/karaoke/theme', { template: o.template, color: o.color, secondary: o.secondary || null });
-        if (!stop) setTheme(r.style);
+        if (!stop && my === themeSeq.current) setTheme(r.style);
       } catch { /* keep the last preview */ }
-    }, 150);
+    }, 200);
     return () => { stop = true; clearTimeout(t); };
   }, [o.source, o.template, o.color, o.secondary]);
 
@@ -59,7 +66,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
 
   return (
     <div className="space-y-4">
-      <Segmented<TaskStyleOptions['source']> value={o.source}
+      <Segmented<TaskStyleOptions['source']> label="字幕样式来源" value={o.source}
         onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null })} options={[
         { value: 'template', label: '模版配色' },
         { value: 'saved', label: '保存的预设' },
@@ -71,7 +78,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
           {o.source === 'template' && (
             <>
               <div className="space-y-1.5">
-                <Segmented<TaskStyleOptions['template']> size="sm" value={o.template} onChange={(v) => set({ template: v })} options={[
+                <Segmented<TaskStyleOptions['template']> size="sm" label="配色模版" value={o.template} onChange={(v) => set({ template: v })} options={[
                   { value: 'plain', label: '朴素' }, { value: 'glow', label: '荧光' },
                 ]} />
                 <p className="text-xs text-muted">{TEMPLATE_HINT[o.template]}</p>
@@ -97,7 +104,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
             </Select>
           )}
           {o.source === 'default' && (
-            <p className="text-[13px] text-muted">使用「设置 → 卡拉OK字幕样式」里的完整样式。</p>
+            <p className="text-[13px] text-muted">使用设置页“字幕样式”卡片里的完整样式（详细模式里点“设为极简默认”也会改它）。</p>
           )}
 
           <div className="space-y-3 border-t border-line pt-3">
@@ -107,7 +114,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
               <span className="w-14 shrink-0 text-muted">注音</span>
-              <Segmented<RubyChoice> size="sm" value={ruby} onChange={(v) => set({ ruby: v })} options={[
+              <Segmented<RubyChoice> size="sm" label="注音" value={ruby} onChange={(v) => set({ ruby: v })} options={[
                 { value: 'off', label: '无' }, { value: 'hiragana', label: '平假名' },
                 { value: 'katakana', label: '片假名' }, { value: 'romaji', label: '罗马音' },
               ]} />
@@ -119,16 +126,19 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
               <div className="space-y-2 text-[13px]">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                   <span className="w-14 shrink-0 text-muted">视频声音</span>
-                  <Segmented<'original' | 'mix' | 'none'> size="sm" value={audio} onChange={(v) => set({ video_audio: v })} options={[
+                  <Segmented<'original' | 'mix' | 'none'> size="sm" label="视频声音" value={audio} onChange={(v) => set({ video_audio: v })} options={[
                     { value: 'original', label: '原声' },
-                    { value: 'mix', label: '降低人声', disabled: !settings.separate, title: settings.separate ? undefined : '需要在设置里开启人声分离' },
+                    { value: 'mix', label: '降低人声', disabled: !canSeparate,
+                      title: canSeparate ? undefined : !sepInstalled ? '这台电脑没有安装人声分离组件' : '需要在设置里开启人声分离' },
                     { value: 'none', label: '无声' },
                   ]} />
                 </div>
-                {audio === 'mix' && !settings.separate && (
-                  <p className="pl-[4.5rem] text-xs text-warn">人声分离已在设置里关闭，视频会使用原声。</p>
+                {audio === 'mix' && !canSeparate && (
+                  <p className="pl-[4.5rem] text-xs text-warn">
+                    {!sepInstalled ? '这台电脑没有安装人声分离组件，视频会使用原声。' : '人声分离已在设置里关闭，视频会使用原声。'}
+                  </p>
                 )}
-                {audio === 'mix' && settings.separate && (
+                {audio === 'mix' && canSeparate && (
                   <div className="max-w-md pl-[4.5rem]">
                     <SliderField name="人声保留" label={<span className="text-muted">人声保留</span>} value={vocal}
                       onChange={(v) => set({ vocal_keep_pct: v })} min={0} max={100} step={1} unit="%" trackClassName="min-w-32" />

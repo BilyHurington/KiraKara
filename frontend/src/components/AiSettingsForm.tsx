@@ -5,10 +5,11 @@ import { Bot, CheckCircle2, KeyRound, PlugZap, RefreshCw, TerminalSquare, XCircl
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
+import { isEnter } from '@/lib/keys';
 import type { AiProviderId, AppSettings } from '@/lib/types';
 import { run, toast } from '@/store/app';
-import { loadProviders, saveSettings, useSimple } from '@/store/simple';
-import { Badge, Button, Field, Input } from '@/components/ui';
+import { loadProviders, saveSettings, settingsSaved, useSimple } from '@/store/simple';
+import { arrowNav, Badge, Button, Field, Input } from '@/components/ui';
 
 const CHOICES: { id: AiProviderId; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'none', label: '不使用', hint: '只用规则读音；也可以手动网页聊天往返', icon: <XCircle className="size-4" /> },
@@ -36,6 +37,10 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
   const runTest = () => run(async () => {
     setTesting(true);
     try {
+      // a field edited just before (its save starts on blur, i.e. with this click) must be saved first:
+      // the server tests the saved settings
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      await settingsSaved();
       const r = await api.post<{ ok: boolean; reply?: string; error?: string; model?: string; elapsed_s?: number; cost_usd?: number | null }>('/api/ai/test', {});
       setTest(r.ok
         ? { ok: true, text: `回复「${r.reply}」 · ${r.elapsed_s} 秒${r.model ? ` · ${r.model}` : ''}${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(4)}` : ''}` }
@@ -47,12 +52,12 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
 
   return (
     <div className="space-y-4">
-      <div role="radiogroup" aria-label="AI 提供方" className={cn('grid gap-2', compact ? 'sm:grid-cols-4' : 'sm:grid-cols-2')}>
+      <div role="radiogroup" aria-label="AI 提供方" onKeyDown={(e) => arrowNav(e)} className={cn('grid gap-2', compact ? 'sm:grid-cols-4' : 'sm:grid-cols-2')}>
         {CHOICES.map((c) => {
           const on = ai.provider === c.id;
           const info = avail(c.id);
           return (
-            <button key={c.id} type="button" role="radio" aria-checked={on} onClick={() => save({ provider: c.id })}
+            <button key={c.id} type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} onClick={() => { if (!on) void save({ provider: c.id }); }}
               className={cn('focus-ring flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition',
                 on ? 'border-accent bg-accent-soft/60 ring-1 ring-accent' : 'border-line hover:border-line-strong hover:bg-surface-2')}>
               <span className={cn('mt-0.5', on ? 'text-accent' : 'text-muted')}>{c.icon}</span>
@@ -84,8 +89,19 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
                 hint={ai.has_api_key ? '已保存在本机（不会写进项目或导出包）' : ai.env_key_present ? `未保存；将使用环境变量 ${ai.api_key_env}` : `可留空并设置环境变量 ${ai.api_key_env}`}>
                 <div className="flex gap-2">
                   <Input type="password" autoComplete="off" placeholder={ai.has_api_key ? '••••••••（已保存）' : 'sk-…'}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                    onBlur={(e) => { const v = e.target.value.trim(); if (v) { void save({ api_key: v }); e.target.value = ''; toast('ok', '已保存 API Key'); } }} />
+                    aria-label="API Key"
+                    onKeyDown={(e) => { if (isEnter(e)) (e.target as HTMLInputElement).blur(); }}
+                    onBlur={(e) => {
+                      const input = e.target;
+                      const v = input.value.trim();
+                      if (!v) return;
+                      void run(async () => {
+                        await saveSettings({ ai: { api_key: v } });
+                        input.value = '';
+                        setTest(null);
+                        toast('ok', '已保存 API Key');  // only once the server has it
+                      }, '保存 API Key 失败');
+                    }} />
                   {ai.has_api_key && <Button variant="ghost" size="sm" onClick={() => save({ clear_api_key: true })}>清除</Button>}
                 </div>
               </Field>
@@ -111,7 +127,10 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
               </span>
             )}
           </div>
-          <p className="text-xs text-subtle">使用 AI 时，歌词会发送给所选的服务（和网页聊天一样）。命令行工具在空的临时目录中运行，不能使用任何工具，也看不到你的文件。</p>
+          <p className="text-xs text-subtle">
+            使用 AI 时，歌词会发送给所选的服务（和网页聊天一样），音频不会发送。命令行工具在一个空的临时目录中运行，并被要求只回答注音；
+            它们仍以你的账号运行（Codex 的只读沙箱也能读取本机文件），介意的话请改用 API 或网页聊天往返。
+          </p>
         </div>
       )}
     </div>

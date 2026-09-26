@@ -11,25 +11,47 @@ import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import {
-  addTask, forgetOwnTask, hasActiveTasks, markOwnTask, openInDetail, saveSettings, setSimplePage, taskAction, useSimple,
+  addTask, forgetOwnTask, getTaskStyleDraft, hasActiveTasks, markOwnTask, openInDetail, saveSettings, saveTaskStyle, setSimplePage, taskAction,
+  useSimple,
 } from '@/store/simple';
-import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Progress, Segmented, Textarea } from '@/components/ui';
+import {
+  Badge, Button, Card, CardBody, CardHeader, ConfirmButton, DropZone, EmptyState, Input, Progress, Segmented, Textarea,
+} from '@/components/ui';
+import { DownloadLink } from '@/components/DownloadButton';
 import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
 import { CalibrateDialog } from './CalibrateDialog';
 import { TaskStyleStep } from './TaskStyleStep';
 
 const PROVIDER_LABEL = { none: '', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
 
-/** What the pasted text looks like (mirrors the server's link detection). */
-export function detectLyrics(text: string): { kind: 'empty' | 'link' | 'lrc' | 'text'; label: string } {
+const EXPLICIT = /^\s*(netease|ncm|163|wyy|qq|qqmusic)\s*[:：]\s*(?:(song|album|playlist)\s*[:：]\s*)?([A-Za-z0-9]+)\s*$/i;
+const URL_RE = /https?:\/\/[^\s，。！？、）)"'<>【】「」]+/gi;
+
+/** A URL the server can read lyrics from (NetEase / QQ Music, their short links). */
+export function musicPlatform(url: string): 'netease' | 'qq' | null {
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  if (host.endsWith('music.163.com') || host === '163cn.tv') return 'netease';
+  if (host.endsWith('y.qq.com')) return 'qq';
+  return null;
+}
+
+/** What the pasted text looks like (mirrors the server's link detection: pipeline.is_music_link). */
+export function detectLyrics(text: string): { kind: 'empty' | 'link' | 'badlink' | 'lrc' | 'text'; label: string } {
   const t = text.trim();
   if (!t) return { kind: 'empty', label: '' };
   const lines = t.split('\n').filter((l) => l.trim());
-  const url = /https?:\/\/\S+/i.test(t) || /^\s*(netease|ncm|163|wyy|qq|qqmusic)\s*[:：]/i.test(t);
   const timed = lines.filter((l) => /^\s*\[\d+:\d+/.test(l)).length;
-  if (url && lines.length <= 3 && !timed) {
-    const where = /163|netease|ncm|wyy/i.test(t) ? '网易云音乐' : /qq/i.test(t) ? 'QQ 音乐' : '音乐';
-    return { kind: 'link', label: `${where}链接 · 会自动获取歌词` };
+  const explicit = EXPLICIT.exec(t);
+  if (explicit) {
+    const where = explicit[1].toLowerCase().startsWith('qq') ? 'QQ 音乐' : '网易云音乐';
+    return { kind: 'link', label: `${where}歌曲 ID · 会自动获取歌词` };
+  }
+  const urls = t.match(URL_RE) ?? [];
+  if (urls.length && lines.length <= 3 && !timed) {
+    const platform = urls.map(musicPlatform).find(Boolean);
+    if (!platform) return { kind: 'badlink', label: '只支持网易云音乐 / QQ 音乐的链接；其他网站请直接粘贴歌词文字' };
+    return { kind: 'link', label: `${platform === 'qq' ? 'QQ 音乐' : '网易云音乐'}链接 · 会自动获取歌词` };
   }
   if (timed > 0) return { kind: 'lrc', label: `LRC 歌词 · ${timed} 行带时间` };
   return { kind: 'text', label: `纯文本歌词 · ${lines.length} 行（没有时间）` };
@@ -43,7 +65,9 @@ export function SimpleHome() {
   const [lyrics, setLyrics] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  const [styleOpts, setStyleOpts] = useState<TaskStyleOptions | null>(settings?.simple.task_style ?? null);
+  const [upload, setUpload] = useState<number | null>(null);
+  // start from the choices still being saved (left and came back quickly), else the saved ones
+  const [styleOpts, setStyleOpts] = useState<TaskStyleOptions | null>(() => getTaskStyleDraft() ?? settings?.simple.task_style ?? null);
   const styleDirty = useRef(false);
   const [calibrating, setCalibrating] = useState<string | null>(null);
   const own = useSimple((s) => s.ownTasks);
@@ -56,7 +80,7 @@ export function SimpleHome() {
 
   // the subtitle choices start from the last ones used, and are saved as they change
   useEffect(() => {
-    if (settings && !styleOpts) setStyleOpts(settings.simple.task_style);
+    if (settings && !styleOpts) setStyleOpts(getTaskStyleDraft() ?? settings.simple.task_style);
   }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
   const pendingStyle = useRef<TaskStyleOptions | null>(null);
   useEffect(() => {
@@ -64,13 +88,13 @@ export function SimpleHome() {
     pendingStyle.current = styleOpts;
     const t = setTimeout(() => {
       pendingStyle.current = null;
-      void saveSettings({ simple: { task_style: styleOpts } }).catch(() => undefined);
+      void saveTaskStyle(styleOpts).catch(() => undefined);
     }, 500);
     return () => clearTimeout(t);
   }, [styleOpts]);
   useEffect(() => () => {  // leaving the page (e.g. to the detailed mode): save what is still pending now
     const p = pendingStyle.current;
-    if (p) void saveSettings({ simple: { task_style: p } }).catch(() => undefined);
+    if (p) void saveTaskStyle(p).catch(() => undefined);
   }, []);
   const changeStyle = (next: TaskStyleOptions) => { styleDirty.current = true; setStyleOpts(next); };
 
@@ -90,10 +114,13 @@ export function SimpleHome() {
   };
 
   const start = () => run(async () => {
-    if (!file) return;
+    if (!file || busy) return;
     setBusy(true);
     try {
-      const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined);
+      // big files show how far the upload is (small ones are sent at once)
+      const progress = file.size > 8 * 1024 * 1024 ? (f: number) => setUpload(f) : undefined;
+      if (progress) setUpload(0);
+      const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined, progress);
       markOwnTask(t.id);
       toast('ok', '已开始', mode === 'lrc' ? '读取视频和歌词后请确认开头位置，之后全部自动完成' : active ? '前面的任务完成后自动继续' : '马上开始');
       setFile(null);
@@ -101,8 +128,16 @@ export function SimpleHome() {
       setName('');
     } finally {
       setBusy(false);
+      setUpload(null);
     }
   }, '无法开始');
+
+  // why “开始制作” cannot be used yet (shown on the button and next to it)
+  const blocked = !file ? '先放入视频或音频（第 2 步）'
+    : detected.kind === 'empty' ? '先粘贴歌词或音乐链接（第 3 步）'
+      : detected.kind === 'badlink' ? '这个链接不能获取歌词：只支持网易云音乐 / QQ 音乐'
+        : styleOpts?.source === 'saved' && !styleOpts.saved_id ? '第 4 步选了“保存的预设”，请选择一个预设'
+          : null;
 
   const s = settings?.simple;
   const ai = settings?.ai.provider && settings.ai.provider !== 'none' && s?.ai_readings ? PROVIDER_LABEL[settings.ai.provider] : null;
@@ -118,7 +153,7 @@ export function SimpleHome() {
         <CardHeader icon={<Sparkles className="size-4" />} title="做一首卡拉OK" description="放入视频和歌词，其余全部自动完成：注音、人声分离、对齐、生成带字幕的视频。" />
         <CardBody className="space-y-6">
           <StepBlock n={1} title="模式">
-            <Segmented<Mode> value={mode} onChange={chooseMode} options={[
+            <Segmented<Mode> label="模式" value={mode} onChange={chooseMode} options={[
               { value: 'lrc', label: 'LRC 增强（推荐）', title: '使用歌词里的行时间，长前奏和重复副歌更稳' },
               { value: 'plain', label: '普通', title: '只用歌词文字' },
             ]} />
@@ -151,14 +186,22 @@ export function SimpleHome() {
               placeholder={'粘贴网易云音乐 / QQ 音乐的歌曲链接（或分享文字），\n或者直接粘贴 LRC / 纯文本歌词'} />
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {detected.kind !== 'empty' && (
-                <Badge tone={detected.kind === 'link' ? 'accent' : detected.kind === 'lrc' ? 'ok' : 'neutral'}>
-                  {detected.kind === 'link' ? <Link2 className="mr-1 inline size-3" /> : <ListMusic className="mr-1 inline size-3" />}
+                <Badge tone={detected.kind === 'link' ? 'accent' : detected.kind === 'badlink' ? 'warn' : detected.kind === 'lrc' ? 'ok' : 'neutral'}>
+                  {detected.kind === 'link' || detected.kind === 'badlink' ? <Link2 className="mr-1 inline size-3" /> : <ListMusic className="mr-1 inline size-3" />}
                   {detected.label}
                 </Badge>
               )}
               <Input value={name} onChange={(e) => setName(e.target.value)} className="h-8 max-w-64 flex-1 text-[13px]"
-                placeholder="歌曲名（可选，链接会自动识别）" />
+                aria-label="歌曲名（可选）" placeholder="歌曲名（可选，链接会自动识别）" />
             </div>
+            {mode === 'plain' && detected.kind === 'lrc' && (
+              <p className="mt-1.5 text-xs text-warn">
+                这是带时间的 LRC，但第 1 步选的是普通模式：歌词里的时间不会被使用。想利用这些时间（长前奏、重复副歌更稳）请改选 LRC 增强。
+              </p>
+            )}
+            {mode === 'lrc' && detected.kind === 'text' && (
+              <p className="mt-1.5 text-xs text-muted">纯文本歌词没有时间：任务会自动改用普通模式。</p>
+            )}
           </StepBlock>
 
           {s && styleOpts && (
@@ -174,10 +217,18 @@ export function SimpleHome() {
                 <Settings2 className="size-3.5" />更改设置
               </button>
             </div>
-            <Button variant="primary" size="lg" icon={<Play className="size-4" />} loading={busy}
-              disabled={!file || detected.kind === 'empty' || (styleOpts?.source === 'saved' && !styleOpts.saved_id)} onClick={start}>
-              开始制作
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {upload !== null && (
+                <span className="flex items-center gap-2 text-xs text-muted">
+                  <Progress value={upload} className="w-32" label="上传进度" />上传中 {Math.round(upload * 100)}%
+                </span>
+              )}
+              {blocked && !busy && <span className="text-xs text-muted" id="start-blocked">{blocked}</span>}
+              <Button variant="primary" size="lg" icon={<Play className="size-4" />} loading={busy}
+                disabled={!!blocked} disabledReason={blocked} aria-describedby={blocked ? 'start-blocked' : undefined} onClick={start}>
+                开始制作
+              </Button>
+            </div>
           </div>
         </CardBody>
       </Card>
@@ -234,13 +285,13 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
     <li className="px-5 py-4">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             {canOpen ? (
-              <button className="focus-ring truncate rounded text-left text-[14px] font-semibold hover:text-accent" onClick={open}
-                title="在详细模式中打开">
+              <button className="focus-ring max-w-full min-w-0 truncate rounded text-left text-[14px] font-semibold break-all hover:text-accent" onClick={open}
+                title={`${t.name || t.media_filename}（在详细模式中打开）`}>
                 {t.name || t.media_filename}
               </button>
-            ) : <span className="truncate text-[14px] font-semibold">{t.name || t.media_filename}</span>}
+            ) : <span className="max-w-full min-w-0 truncate text-[14px] font-semibold" title={t.name || t.media_filename}>{t.name || t.media_filename}</span>}
             <Badge tone={st.tone} dot>{st.label}</Badge>
             <Badge tone={t.mode === 'lrc' ? 'accent' : 'neutral'}>{t.mode === 'lrc' ? 'LRC' : '普通'}</Badge>
             {t.style_label && (
@@ -256,9 +307,7 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {t.status === 'succeeded' && t.outputs.video && (
-            <a href={t.outputs.video.url} download>
-              <Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</Button>
-            </a>
+            <DownloadLink href={t.outputs.video.url} filename={t.outputs.video.filename} icon={<Download className="size-4" />}>下载视频</DownloadLink>
           )}
           {t.project_deleted && <Badge tone="neutral">项目已删除</Badge>}
           {!t.project_deleted && (t.status === 'failed' || t.status === 'cancelled' || t.status === 'interrupted') && (
@@ -266,7 +315,10 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
               title="从没完成的步骤继续，并再试一次出错时跳过的 AI 注音 / 人声分离。已有的分轨和对齐结果会保留；若 AI 注音这次改了读音，会重新对齐（锁定的手动时间保留），也会再次使用 AI 额度">重试</Button>
           )}
           {canOpen && <Button size="sm" variant="ghost" icon={<ArrowRight className="size-4" />} onClick={open}>详细模式</Button>}
-          {live && <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={() => act('cancel')}>取消</Button>}
+          {live && (
+            <ConfirmButton size="sm" variant="ghost" icon={<X className="size-4" />} question="取消这个任务？（之后可以重试）"
+              confirmLabel="取消任务" keepLabel="继续" onConfirm={() => void act('cancel')}>取消</ConfirmButton>
+          )}
           {!live && (confirmDel ? (
             <span className="flex items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1 text-xs text-muted">
               从列表移除？{t.project_id ? '项目和视频仍保留在详细模式' : ''}

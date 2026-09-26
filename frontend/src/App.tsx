@@ -1,6 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { WifiOff } from 'lucide-react';
 import { player } from '@/audio/player';
-import { loadInfo, loadProjects, openProject, run, useApp } from '@/store/app';
+import { useConnection } from '@/lib/api';
+import { ignoreShortcut } from '@/lib/keys';
+import { loadInfo, loadProjects, openProject, refreshProject, run, toast, useApp } from '@/store/app';
 import { redo, undo } from '@/store/edits';
 import { Sidebar } from '@/components/shell/Sidebar';
 import { StudioDock } from '@/components/shell/StudioDock';
@@ -18,7 +21,7 @@ import { ReviewPage } from '@/pages/Review';
 import { KaraokePage } from '@/pages/Karaoke';
 import { ExportPage } from '@/pages/Export';
 import { SimpleApp } from '@/pages/simple/SimpleApp';
-import { setUi, startTaskPolling, taskOnProject, useSimple } from '@/store/simple';
+import { loadSettings, loadTasks, setUi, startTaskPolling, taskOnProject, useSimple } from '@/store/simple';
 import { Button, Callout } from '@/components/ui';
 
 const PAGES = {
@@ -32,6 +35,14 @@ const PAGES = {
   export: ExportPage,
 };
 
+/** First load: app info, projects and the project open last time. */
+async function startup() {
+  await Promise.all([loadInfo(), loadProjects()]);
+  let last: string | null = null;
+  try { last = localStorage.getItem('kara.pid'); } catch { /* ignore */ }
+  if (last && !useApp.getState().pid && useApp.getState().projects.some((p) => p.id === last)) await openProject(last);
+}
+
 export default function App() {
   const pid = useApp((s) => s.pid);
   const step = useApp((s) => s.step);
@@ -41,30 +52,25 @@ export default function App() {
   useEffect(() => { startTaskPolling(); }, []);
 
   useEffect(() => {
-    void run(async () => {
-      await Promise.all([loadInfo(), loadProjects()]);
-      let last: string | null = null;
-      try { last = localStorage.getItem('kara.pid'); } catch { /* ignore */ }
-      if (last && useApp.getState().projects.some((p) => p.id === last)) await openProject(last);
-    }, '无法连接本地服务');
+    void run(startup, '无法连接本地服务');
   }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (useSimple.getState().ui === 'simple') return;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+      if (useSimple.getState().ui === 'simple' || !useApp.getState().pid) return;
+      // Space / Enter on a focused control, arrows in radio groups, anything in a dialog or an IME: not ours
+      if (ignoreShortcut(e)) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         void (e.shiftKey ? redo() : undo());
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.key === ' ') {
         e.preventDefault();
         player.toggle();
-      } else if (e.key.toLowerCase() === 'l') {
-        player.toggleLoop();
+      } else if (e.key.toLowerCase() === 'l' && !e.shiftKey) {
+        if (!player.toggleLoop()) toast('info', '请先在波形上拖选循环区间');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -76,7 +82,10 @@ export default function App() {
   if (ui === 'simple') {
     return (
       <TooltipProvider>
-        <SimpleApp />
+        <div className="flex h-full flex-col">
+          <ConnectionBanner />
+          <div className="min-h-0 flex-1"><SimpleApp /></div>
+        </div>
         <Toaster />
       </TooltipProvider>
     );
@@ -84,25 +93,60 @@ export default function App() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-full overflow-hidden">
-        <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar />
-          <main className="min-h-0 flex-1 overflow-y-auto">
-            <div key={`${pid}-${step}`} className="mx-auto max-w-6xl animate-slide-up px-6 py-8 xl:px-10">
-              <ErrorBoundary resetKey={`${pid}-${step}`}>
-                <TaskBusyBanner />
-                <Page />
-              </ErrorBoundary>
-            </div>
-          </main>
-          <ErrorBoundary resetKey={pid ?? ''}>
-            <StudioDock />
-          </ErrorBoundary>
+      <div className="flex h-full flex-col">
+        <ConnectionBanner />
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <Sidebar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <Topbar />
+            <main className="min-h-0 flex-1 overflow-y-auto">
+              <div key={`${pid}-${step}`} className="mx-auto max-w-6xl animate-slide-up px-6 py-8 xl:px-10">
+                <ErrorBoundary resetKey={`${pid}-${step}`}>
+                  <TaskBusyBanner />
+                  <Page />
+                </ErrorBoundary>
+              </div>
+            </main>
+            <ErrorBoundary resetKey={pid ?? ''}>
+              <StudioDock />
+            </ErrorBoundary>
+          </div>
         </div>
       </div>
       <Toaster />
     </TooltipProvider>
+  );
+}
+
+/** The local server does not answer: say so until it does, with a retry. */
+export function ConnectionBanner() {
+  const down = useConnection((s) => s.down);
+  const [busy, setBusy] = useState(false);
+  if (!down) return null;
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const s = useApp.getState();
+      if (!s.info || !s.projects.length) await startup();
+      else await Promise.all([loadProjects(), refreshProject()]);
+      await loadTasks().catch(() => undefined);
+      if (!useSimple.getState().settings) await loadSettings().catch(() => undefined);
+      toast('ok', '已重新连接本地服务');
+    } catch {
+      // still down: the banner stays
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div role="alert" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-danger/40 bg-danger-soft px-4 py-2 text-[13px] text-fg">
+      <WifiOff className="size-4 shrink-0 text-danger" />
+      <span className="min-w-0 flex-1">
+        <b className="font-semibold">无法连接本地服务。</b>
+        请确认运行 <code className="rounded bg-surface px-1 font-mono text-xs">kara-align serve</code> 的终端仍在运行；恢复后会自动继续，也可以手动重试。
+      </span>
+      <Button size="xs" variant="secondary" loading={busy} onClick={() => void retry()}>重试连接</Button>
+    </div>
   );
 }
 
@@ -116,7 +160,7 @@ export function TaskBusyBanner() {
   return (
     <Callout tone="warn" className="mb-6" title={`极简模式任务「${task.name || task.media_filename}」正在处理这个项目（${doing}）`}
       actions={<Button size="sm" variant="secondary" onClick={() => setUi('simple')}>查看任务队列</Button>}>
-      完成前这里不能对齐、人声分离、AI 注音或烧录视频；任务每完成一步，这里会自动更新。
+      完成前这里不能对齐、人声分离、AI 注音或生成视频；任务每完成一步，这里会自动更新。
     </Callout>
   );
 }

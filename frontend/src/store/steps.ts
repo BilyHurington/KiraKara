@@ -24,7 +24,10 @@ export function stepStatus(step: Step, pv: ProjectView | null, running: Set<stri
       if (running.has('separate')) return { state: 'running', note: '分离中' };
       const uncertain = p.lyrics.lines.reduce((n, l) => n + l.segments.filter((s) => s.uncertain && !s.confirmed).length, 0);
       if (uncertain > 0) return { state: 'optional', note: `${uncertain} 处读音待确认` };
-      const vocals = p.audio.some((a) => a.role === 'vocals');
+      if (pv.view.audio.vocals?.outdated || pv.view.audio.instrumental?.outdated) {
+        return { state: 'attention', note: '分轨来自更换前的原曲，需重新分离' };
+      }
+      const vocals = !!pv.view.audio.vocals?.available;
       return { state: vocals ? 'done' : 'optional', note: vocals ? '已有人声分轨' : '可选' };
     }
     case 'calibrate':
@@ -46,8 +49,8 @@ export function stepStatus(step: Step, pv: ProjectView | null, running: Set<stri
       return { state: 'done' };
     }
     case 'karaoke':
-      if (running.has('burn')) return { state: 'running', note: '烧录中' };
-      return active ? { state: 'optional', note: p.video ? '字幕 · 烧录进视频' : '字幕 · 纯黑背景视频' } : { state: 'todo', note: '需要对齐结果' };
+      if (running.has('burn')) return { state: 'running', note: '生成视频中' };
+      return active ? { state: 'optional', note: p.video ? '字幕 · 生成带字幕的视频' : '字幕 · 纯黑背景视频' } : { state: 'todo', note: '需要对齐结果' };
     case 'export':
       return { state: active ? 'todo' : 'todo', note: active ? '可导出' : undefined };
   }

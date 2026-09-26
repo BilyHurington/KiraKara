@@ -7,7 +7,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, fmtSigned, parseTime } from '@/lib/format';
 import type { PipelineTask } from '@/lib/types';
-import { run, toast } from '@/store/app';
+import { run, toast, useApp } from '@/store/app';
+import { isEnter, isEscape } from '@/lib/keys';
 import { confirmCalibration, loadTasks } from '@/store/simple';
 import { Button, Callout, Dialog, Input } from '@/components/ui';
 
@@ -70,6 +71,17 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
     raf.current = requestAnimationFrame(tick);
   };
 
+  // the canvas follows its size and the theme: redraw when either changes
+  const [sizeKey, setSizeKey] = useState(0);
+  const theme = useApp((s) => s.theme);
+  useEffect(() => {
+    const cv = canvas.current;
+    if (!cv || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setSizeKey((k) => k + 1));
+    ro.observe(cv);
+    return () => ro.disconnect();
+  }, []);
+
   // draw the waveform window
   useEffect(() => {
     const cv = canvas.current;
@@ -119,7 +131,7 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
     line(c.lrc_ms, col('--c-subtle', '#999'), [4, 4], 1.5);
     line(marker, col('--c-accent', '#5b5bd6'), [], 2.5);
     if (playhead !== null) line(playhead, col('--c-fg', '#111'), [], 1);
-  }, [peaks, view0, span, marker, playhead, c.lrc_ms]);
+  }, [peaks, view0, span, marker, playhead, c.lrc_ms, sizeKey, theme]);
 
   const pickAt = (clientX: number) => {
     const cv = canvas.current;
@@ -131,10 +143,13 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
   const dragging = useRef(false);
 
   const nudge = (d: number) => setMarker((m) => Math.min(Math.max(0, m + d), duration));
-  const pan = (d: number) => setView0((v) => Math.max(0, v + d));
+  // never past the end of the audio (at most the last window)
+  const maxView = Number.isFinite(duration) ? Math.max(0, duration - span * 0.5) : Infinity;
+  const pan = (d: number) => setView0((v) => Math.min(maxView, Math.max(0, v + d)));
   const zoom = () => {
     const next = SPANS[(SPANS.indexOf(span) + 1) % SPANS.length];
-    setView0(Math.max(0, marker - next * 0.35));
+    const limit = Number.isFinite(duration) ? Math.max(0, duration - next * 0.5) : Infinity;
+    setView0(Math.min(limit, Math.max(0, marker - next * 0.35)));
     setSpan(next);
   };
 
@@ -169,7 +184,7 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
       wide
       onOpenChange={(o) => { if (!o) { stop(); onClose(); } }}
       title={<>确认开头位置 · {task.name || task.media_filename}</>}
-      description="视频的声音经常和歌词里的时间对不上。请把标记放在第一句开始唱的位置，之后所有歌词按同样的偏移对齐。确认后其余步骤全部自动完成。"
+      description="视频的声音经常和歌词里的时间对不上。请把标记放在第一句开始唱的位置，之后所有歌词按同样的偏移对齐。确认后其余步骤全部自动完成（这一步就是详细模式里的“首音校准”）。"
       footer={
         <>
           <Button variant="ghost" className="mr-auto" disabled={busy} onClick={() => confirm({ plain: true })}>不用歌词时间（改普通模式）</Button>
@@ -214,6 +229,8 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
             onPointerDown={(e) => { dragging.current = true; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); pickAt(e.clientX); }}
             onPointerMove={(e) => { if (dragging.current) pickAt(e.clientX); }}
             onPointerUp={() => { dragging.current = false; }}
+            onPointerCancel={() => { dragging.current = false; }}
+            onLostPointerCapture={() => { dragging.current = false; }}
           />
           <div className="mt-1 flex justify-between font-mono text-[11px] text-subtle">
             <span>{fmtMs(view0, false)}</span><span>{fmtMs(view0 + span, false)}</span>
@@ -224,7 +241,7 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
           <span className="text-[13px] font-medium">标记</span>
           <Input aria-label="标记时间" className="h-8 w-28 font-mono text-[13px]" value={draft ?? fmtMs(marker)}
             onFocus={() => setDraft(fmtMs(marker))} onChange={(e) => setDraft(e.target.value)} onBlur={commitDraft}
-            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setDraft(null); }} />
+            onKeyDown={(e) => { if (isEnter(e)) (e.target as HTMLInputElement).blur(); if (isEscape(e)) setDraft(null); }} />
           <span className="text-xs text-muted">偏移 <b className="tabular font-mono">{fmtSigned(shift)}</b></span>
           <span className="mx-1 h-5 w-px bg-line" />
           {[-100, -10, 10, 100].map((d) => (

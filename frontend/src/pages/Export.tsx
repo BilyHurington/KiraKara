@@ -1,13 +1,14 @@
 // Step 7: exports. alignment.json is the complete standard output; other
 // formats may lose information and show explicit loss warnings.
 
-import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, Music2, Package, Sparkles, Subtitles } from 'lucide-react';
+import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, History, Music2, Package, Sparkles, Subtitles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
 import type { ExportInline, Job } from '@/lib/types';
 import { player, usePlayer } from '@/audio/player';
-import { ppath, run, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
+import { ppath, resumeJobs, run, toast, trackJob, useApp, useFinishedJobs, useJob, useProject, useView } from '@/store/app';
+import { DownloadButton } from '@/components/DownloadButton';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, Dialog, EmptyState, Field, PageHeader, Segmented, Select, SliderField,
   Spinner, Tip,
@@ -18,12 +19,14 @@ const FORMAT_META: Record<string, { icon: typeof FileJson; group: 'result' | 'ly
   csv: { icon: FileSpreadsheet, group: 'result' },
   'lrc-line': { icon: FileText, group: 'result', note: '模型对齐后聚合的行级 LRC' },
   'lrc-unit': { icon: FileText, group: 'result', note: '模型对齐后的逐单元（增强）LRC' },
-  'karaoke-ass': { icon: Subtitles, group: 'result', note: '卡拉OK字幕：样式在“卡拉OK字幕”页设置；有视频时时间与原视频对齐' },
+  'karaoke-ass': { icon: Subtitles, group: 'result', note: '卡拉OK字幕：总是按项目的当前结果（● 当前）和“卡拉OK字幕”页保存的样式生成；有视频时时间与原视频对齐' },
   prepared: { icon: FileJson, group: 'lyrics', note: '可编辑的歌词与读音，可重新导入' },
   'lrc-calibrated': { icon: FileText, group: 'lyrics', note: '仅校准原锚点（整体平移）的 LRC，不含模型结果；已清除 [offset]' },
   project: { icon: Package, group: 'project' },
 };
-const NEEDS_RESULT = new Set(['alignment', 'csv', 'lrc-line', 'lrc-unit']);
+const NEEDS_RESULT = new Set(['alignment', 'csv', 'lrc-line', 'lrc-unit', 'karaoke-ass']);
+/** formats that follow the result chosen above (karaoke-ass always uses the active one) */
+const USES_CHOSEN = new Set(['alignment', 'csv', 'lrc-line', 'lrc-unit']);
 
 export function ExportPage() {
   const project = useProject()!;
@@ -33,7 +36,10 @@ export function ExportPage() {
   useEffect(() => {
     if (!rid || !view.results.some((r) => r.id === rid)) setRid(currentId ?? project.active_result_id);
   }, [rid, currentId, project.active_result_id, view.results]);
+  // mix / video exports made while this page was closed (or before a reload) keep their download links
+  useEffect(() => { void resumeJobs(project.id); }, [project.id]);
   const sum = view.results.find((r) => r.id === rid) ?? null;
+  const hasActive = !!project.active_result_id && view.results.some((r) => r.id === project.active_result_id);
 
   return (
     <>
@@ -46,9 +52,9 @@ export function ExportPage() {
         <Card>
           <CardHeader
             title="导出的结果"
-            description="基于该结果生成结果类格式（JSON / CSV / 对齐 LRC）"
+            description="基于该结果生成结果类格式（JSON / CSV / 对齐 LRC）；卡拉OK字幕 ASS 总是使用当前结果"
             actions={view.results.length > 0 && (
-              <Select className="w-72" value={rid ?? ''} onChange={(e) => setRid(e.target.value)}>
+              <Select className="w-72" value={rid ?? ''} onChange={(e) => setRid(e.target.value)} aria-label="导出的结果">
                 {[...view.results].reverse().map((r) => (
                   <option key={r.id} value={r.id}>
                     {fmtRelative(r.created)} · {r.mode === 'lrc' ? 'LRC' : '普通'} · {ROLE_LABEL[r.audio_role] ?? r.audio_role}
@@ -77,8 +83,11 @@ export function ExportPage() {
           </CardBody>
         </Card>
 
-        <FormatSection title="对齐结果" group="result" rid={rid} hasResult={!!sum} />
-        <FormatSection title="歌词与校准" group="lyrics" rid={rid} hasResult={!!sum} />
+        <FormatSection title="对齐结果" group="result" rid={rid} hasResult={!!sum} hasActive={hasActive}
+          chosenIsActive={rid === project.active_result_id} />
+        <FormatSection title="歌词与校准" group="lyrics" rid={rid} hasResult={!!sum} hasActive={hasActive} chosenIsActive />
+
+        <RecentExports />
 
         <div className="grid gap-6 lg:grid-cols-2">
           <MixCard />
@@ -94,14 +103,16 @@ export function ExportPage() {
 
 // ------------------------------------------------------------------ text formats
 
-function FormatSection({ title, group, rid, hasResult }: { title: string; group: 'result' | 'lyrics'; rid: string | null; hasResult: boolean }) {
+function FormatSection({ title, group, rid, hasResult, hasActive, chosenIsActive }: {
+  title: string; group: 'result' | 'lyrics'; rid: string | null; hasResult: boolean; hasActive: boolean; chosenIsActive: boolean;
+}) {
   const info = useApp((s) => s.info);
   const formats = Object.entries(info?.export_formats ?? {}).filter(([fmt]) => (FORMAT_META[fmt]?.group ?? 'project') === group);
   const [preview, setPreview] = useState<{ fmt: string; data: ExportInline | null } | null>(null);
   if (!formats.length) return null;
 
   const url = (fmt: string, download: boolean) =>
-    ppath(`/export/${fmt}?${download ? 'download=1&' : ''}${rid && NEEDS_RESULT.has(fmt) ? `result_id=${rid}` : ''}`);
+    ppath(`/export/${fmt}?${download ? 'download=1&' : ''}${rid && USES_CHOSEN.has(fmt) ? `result_id=${rid}` : ''}`);
 
   const open = (fmt: string) => {
     setPreview({ fmt, data: null });
@@ -119,10 +130,11 @@ function FormatSection({ title, group, rid, hasResult }: { title: string; group:
         {formats.map(([fmt, f]) => {
           const meta = FORMAT_META[fmt];
           const Icon = meta?.icon ?? FileText;
-          const disabled = NEEDS_RESULT.has(fmt) && !hasResult;
+          const needs = NEEDS_RESULT.has(fmt) && (fmt === 'karaoke-ass' ? !hasActive : !hasResult);
+          const disabledReason = fmt === 'karaoke-ass' ? '需要一个当前对齐结果（在“对齐”中设为当前）' : '需要对齐结果：先在“对齐”中运行一次';
           const primary = fmt === 'alignment';
           return (
-            <Card key={fmt} className={cn('flex flex-col p-4 transition', primary && 'ring-1 ring-accent/40', disabled && 'opacity-55')}>
+            <Card key={fmt} className={cn('flex flex-col p-4 transition', primary && 'ring-1 ring-accent/40', needs && 'opacity-55')}>
               <div className="flex items-start gap-3">
                 <div className={cn('grid size-10 shrink-0 place-items-center rounded-xl', primary ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-muted')}>
                   <Icon className="size-5" />
@@ -131,19 +143,17 @@ function FormatSection({ title, group, rid, hasResult }: { title: string; group:
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="truncate font-mono text-[13px] font-semibold">{f.filename}</span>
                     {primary && <Badge tone="accent"><Sparkles className="size-3" />完整</Badge>}
+                    {fmt === 'karaoke-ass' && !chosenIsActive && hasActive && <Badge tone="info">用当前结果</Badge>}
                   </div>
                   <p className="mt-1 text-xs leading-5 text-muted">{meta?.note ?? f.description}</p>
                 </div>
               </div>
               <div className="mt-4 flex gap-2">
-                {disabled ? (
-                  <Button size="sm" disabled className="flex-1" icon={<Download className="size-4" />}>需要对齐结果</Button>
-                ) : (
-                  <a href={url(fmt, true)} download className="flex-1">
-                    <Button size="sm" variant={primary ? 'primary' : 'secondary'} className="w-full" icon={<Download className="size-4" />}>下载</Button>
-                  </a>
-                )}
-                <Button size="sm" variant="outline" disabled={disabled} onClick={() => open(fmt)} icon={<Eye className="size-4" />}>预览</Button>
+                <DownloadButton href={url(fmt, true)} size="sm" variant={primary ? 'primary' : 'secondary'} className="w-full" wrapperClassName="flex-1"
+                  disabled={needs} disabledReason={disabledReason} icon={<Download className="size-4" />}>
+                  {needs ? '需要对齐结果' : '下载'}
+                </DownloadButton>
+                <Button size="sm" variant="outline" disabled={needs} disabledReason={disabledReason} onClick={() => open(fmt)} icon={<Eye className="size-4" />}>预览</Button>
               </div>
             </Card>
           );
@@ -179,11 +189,11 @@ function PreviewDialog({ preview, onClose, downloadUrl }: {
       footer={<>
         <Button variant="ghost" onClick={onClose}>关闭</Button>
         <Button onClick={copy} disabled={!data} icon={copied ? <Check className="size-4" /> : <Copy className="size-4" />}>{copied ? '已复制' : '复制'}</Button>
-        <a href={downloadUrl} download><Button variant="primary" disabled={!data} icon={<Download className="size-4" />}>下载</Button></a>
+        <DownloadButton href={downloadUrl} variant="primary" disabled={!data} icon={<Download className="size-4" />}>下载</DownloadButton>
       </>}
     >
       {!data ? (
-        <div className="flex items-center gap-2 py-10 text-sm text-muted"><Spinner />正在生成…</div>
+        <div className="flex items-center gap-2 py-10 text-sm text-muted" role="status"><Spinner />正在生成…</div>
       ) : (
         <div className="space-y-3">
           {data.warnings.map((w) => <Callout key={w} tone="warn">{w}</Callout>)}
@@ -196,6 +206,31 @@ function PreviewDialog({ preview, onClose, downloadUrl }: {
   );
 }
 
+// ------------------------------------------------------------------ recent exports
+
+const EXPORT_KIND: Record<string, string> = { burn: '带字幕的视频', mix: '混音 WAV', video: '降低人声的视频' };
+
+/** Videos and mixes made for this project (while the server runs), with their download links. */
+function RecentExports() {
+  const jobs = useFinishedJobs(['burn', 'mix', 'video']).filter((j) => j.output?.url);
+  if (!jobs.length) return null;
+  return (
+    <Card>
+      <CardHeader icon={<History className="size-4" />} title="最近导出"
+        description="本次运行服务以来生成的视频和混音；文件保存在项目的 exports 文件夹里，重启服务后仍在。" />
+      <div className="p-2">
+        {jobs.slice(0, 8).map((j) => (
+          <Row key={j.id}
+            title={<span className="flex flex-wrap items-center gap-2">{EXPORT_KIND[j.kind] ?? j.kind}<span className="font-mono text-xs font-normal text-muted">{j.output.filename}</span></span>}
+            sub={fmtRelative(j.finished ?? j.created)}
+            action={<DownloadButton href={j.output.url} big filename={j.output.filename} size="xs" variant="outline" icon={<Download className="size-3.5" />}>下载</DownloadButton>}
+          />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 // ------------------------------------------------------------------ audio
 
 function MixCard() {
@@ -203,14 +238,16 @@ function MixCard() {
   const view = useView()!;
   const job = useJob('mix');
   const canMix = !!view.audio.vocals?.available && !!view.audio.instrumental?.available;
+  const outdated = !!(view.audio.vocals?.outdated || view.audio.instrumental?.outdated);
   const [p, setP] = useState(project.mix.vocal_keep_pct);
   const [q, setQ] = useState(project.mix.instrumental_pct);
   const [master, setMaster] = useState(project.mix.master);
   const [limiter, setLimiter] = useState(project.mix.limiter);
   const [gain, setGain] = useState<{ bus_gain: number; peak_before: number } | null>(null);
-  const [out, setOut] = useState<{ url: string; filename: string; report: Record<string, any> } | null>(null);
   const videoJob = useJob('video');
-  const [videoOut, setVideoOut] = useState<{ url: string; filename: string } | null>(null);
+  // the latest finished exports (also after leaving the page)
+  const out = job?.status === 'succeeded' && job.output ? job.output as { url: string; filename: string; report: Record<string, any> } : null;
+  const videoOut = videoJob?.status === 'succeeded' && videoJob.output ? videoJob.output as { url: string; filename: string } : null;
   const hasVideo = !!project.video;
 
   // “试听此混音” plays exactly these settings through the player
@@ -224,44 +261,41 @@ function MixCard() {
     else { player.setSource('mix'); if (!player.playing) player.play(); }
   };
 
+  // the one bus-gain request: these settings, this limiter; the preview uses the same gain as the export
   useEffect(() => {
     if (!canMix) return;
+    let stop = false;
     const t = setTimeout(() => {
       api.post<{ bus_gain: number; peak_before: number }>(ppath('/mix/preview-gain'), { vocal_keep_pct: p, instrumental_pct: q, master, limiter })
-        .then((g) => { setGain(g); player.setMix({ bus: g.bus_gain }); }).catch(() => setGain(null));
+        .then((g) => { if (!stop) { setGain(g); player.setMix({ bus: g.bus_gain }); } })
+        .catch(() => { if (!stop) setGain(null); });
     }, 300);
-    return () => clearTimeout(t);
+    return () => { stop = true; clearTimeout(t); };
   }, [canMix, p, q, master, limiter]);
 
   const videoRunning = videoJob && (videoJob.status === 'queued' || videoJob.status === 'running');
   const exportVideo = () => run(async () => {
-    setVideoOut(null);
     const j = await api.post<Job>(ppath('/video/export'), { vocal_keep_pct: p, instrumental_pct: q, master, limiter });
-    trackJob(j, {
-      label: '视频导出',
-      onDone: (done) => { if (done.status === 'succeeded' && done.output) setVideoOut(done.output); },
-    });
+    trackJob(j, { label: '视频导出' });
   }, '无法导出视频');
 
   const running = job && (job.status === 'queued' || job.status === 'running');
   const exportMix = () => run(async () => {
-    setOut(null);
     const j = await api.post<Job>(ppath('/mix/export'), { vocal_keep_pct: p, instrumental_pct: q, master, limiter });
-    trackJob(j, {
-      label: '混音导出',
-      onDone: (done) => { if (done.status === 'succeeded' && done.output) setOut(done.output); },
-    });
+    trackJob(j, { label: '混音导出' });
   }, '无法导出混音');
 
   return (
     <Card>
       <CardHeader icon={<Music2 className="size-4" />} title={hasVideo ? '人声保留混音（WAV / 视频）' : '人声保留混音 WAV'}
-        description="正常速度、原始时长与原点；与播放器“自定义混音”试听使用同一规则，监听音量不写入导出。" />
+        description="正常速度、原始时长与原点；“试听此混音”与导出使用同一规则，监听音量不写入导出。" />
       <CardBody className="space-y-5">
         {!canMix ? (
           <EmptyState
-            title="需要人声与伴奏两条分轨"
-            description="只有原曲时无法单独降低完整混音中的人声。可在“注音与分离”中分离，或在“音频与歌词”中导入已有分轨。"
+            title={outdated ? '分轨来自更换前的原曲，需重新分离' : '需要人声与伴奏两条分轨'}
+            description={outdated
+              ? '现有的人声 / 伴奏是从更换前的原曲分离的，不能用于混音。请在“注音与分离”中重新分离。'
+              : '只有原曲时无法单独降低完整混音中的人声。可在“注音与分离”中分离，或在“音频与歌词”中导入已有分轨。'}
           />
         ) : (
           <>
@@ -274,20 +308,20 @@ function MixCard() {
               mix = master × (p/100·V + q/100·I) = {master.toFixed(2)} × ({(p / 100).toFixed(2)}·V + {(q / 100).toFixed(2)}·I)
               <div className="mt-1 font-sans">“人声保留 {Math.round(p)}%” 表示人声线性幅度 ×{(p / 100).toFixed(2)}，不是主观响度；0% 时伴奏中仍可能残留人声。</div>
             </div>
-            <Field label="防削波">
+            <Field group label="防削波">
               <div className="flex flex-wrap items-center gap-3">
-                <Segmented value={limiter} onChange={setLimiter}
+                <Segmented value={limiter} onChange={setLimiter} label="防削波"
                   options={[{ value: 'normalize_peak', label: '共同母线峰值归一' }, { value: 'none', label: '不处理' }]} />
                 {gain && (
                   <Tip content="对整段混音统一施加，保持两轨相对比例">
-                    <span className="tabular text-xs text-muted">母线增益 ×{gain.bus_gain.toFixed(3)} · 峰值 {gain.peak_before.toFixed(3)}</span>
+                    <span tabIndex={0} className="tabular rounded text-xs text-muted">母线增益 ×{gain.bus_gain.toFixed(3)} · 峰值 {gain.peak_before.toFixed(3)}</span>
                   </Tip>
                 )}
               </div>
             </Field>
             <div className="flex flex-wrap justify-end gap-2">
               <Tip content="用播放器按当前比例试听（与导出同一混音规则）">
-                <Button variant={previewing ? 'soft' : 'ghost'} onClick={togglePreview} icon={<Headphones className="size-4" />}>
+                <Button variant={previewing ? 'soft' : 'ghost'} onClick={togglePreview} icon={<Headphones className="size-4" />} aria-pressed={previewing}>
                   {previewing ? '停止试听混音' : '试听此混音'}
                 </Button>
               </Tip>
@@ -302,16 +336,16 @@ function MixCard() {
             {videoJob?.status === 'failed' && <Callout tone="danger" title="视频导出失败">{videoJob.error ?? videoJob.message}</Callout>}
             {videoOut && (
               <Callout tone="ok" title={videoOut.filename}
-                actions={<a href={videoOut.url} download><Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</Button></a>}>
-                人声保留 {Math.round(p)}% · 伴奏 {Math.round(q)}%；画面未重新编码。
+                actions={<DownloadButton href={videoOut.url} big filename={videoOut.filename} size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</DownloadButton>}>
+                降低人声的视频（{fmtRelative(videoJob!.finished ?? videoJob!.created)}）；画面未重新编码。
               </Callout>
             )}
             {out && (
               <Callout tone="ok" title={out.filename}
-                actions={<a href={out.url} download><Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载 WAV</Button></a>}>
+                actions={<DownloadButton href={out.url} big filename={out.filename} size="sm" variant="primary" icon={<Download className="size-4" />}>下载 WAV</DownloadButton>}>
                 <span className="tabular">
-                  母线增益 ×{Number(out.report.bus_gain).toFixed(3)} · 峰值 {Number(out.report.peak_before).toFixed(3)} → {Number(out.report.peak_after).toFixed(3)}
-                  {' · '}削波采样 {out.report.clipped_samples}
+                  母线增益 ×{Number(out.report?.bus_gain).toFixed(3)} · 峰值 {Number(out.report?.peak_before).toFixed(3)} → {Number(out.report?.peak_after).toFixed(3)}
+                  {' · '}削波采样 {out.report?.clipped_samples}
                 </span>
               </Callout>
             )}
@@ -333,14 +367,16 @@ function StemsCard() {
         {assets.length === 0 ? (
           <p className="px-3 py-3 text-[13px] text-muted">还没有音频。</p>
         ) : assets.map((a) => {
-          const ok = !!view.audio[a.role as 'original']?.available;
+          const v = view.audio[a.role as 'original'];
+          const ok = !!v?.available;
           return (
             <Row key={a.id}
-              title={ROLE_LABEL[a.role] ?? a.role}
-              sub={`${a.source.filename ?? a.sha256.slice(0, 12)} · ${fmtMs(a.duration_ms, false)} · ${a.sample_rate} Hz${a.source.kind === 'separation' ? ` · 分离：${a.source.model ?? ''}` : ''}`}
+              title={<span className="flex flex-wrap items-center gap-2">{ROLE_LABEL[a.role] ?? a.role}{v?.outdated && <Badge tone="warn" dot>来自更换前的原曲</Badge>}</span>}
+              sub={v?.outdated ? '需重新分离；在此之前不会用于对齐、试听或混音'
+                : `${a.source.filename ?? a.sha256.slice(0, 12)} · ${fmtMs(a.duration_ms, false)} · ${a.sample_rate} Hz${a.source.kind === 'separation' ? ` · 分离：${a.source.model ?? ''}` : ''}`}
               action={ok
-                ? <a href={ppath(`/audio/${a.id}/playback.wav`)} download><Button size="xs" variant="outline" icon={<Download className="size-3.5" />}>WAV</Button></a>
-                : <Badge tone="warn">文件缺失</Badge>}
+                ? <DownloadButton href={ppath(`/audio/${a.id}/playback.wav`)} big size="xs" variant="outline" icon={<Download className="size-3.5" />} aria-label={`下载${ROLE_LABEL[a.role] ?? a.role} WAV`}>WAV</DownloadButton>
+                : v?.outdated ? null : <Badge tone="warn">文件缺失</Badge>}
             />
           );
         })}
@@ -355,9 +391,9 @@ function PackageCard() {
       <CardHeader icon={<Package className="size-4" />} title="项目" description="歌词、校准、AI 往返、人工修改与结果都在项目文件中；不含模型权重或本机路径。" />
       <div className="p-2">
         <Row title="便携项目包（含音频）" sub=".kara.zip，可在另一台电脑直接导入"
-          action={<a href={ppath('/package?include_audio=1')} download><Button size="xs" variant="primary" icon={<Download className="size-3.5" />}>下载</Button></a>} />
+          action={<DownloadButton href={ppath('/package?include_audio=1')} big check={false} size="xs" variant="primary" icon={<Download className="size-3.5" />} aria-label="下载便携项目包（含音频）">下载</DownloadButton>} />
         <Row title="项目包（不含音频）" sub="体积小；导入后按内容指纹重新上传音频"
-          action={<a href={ppath('/package?include_audio=0')} download><Button size="xs" variant="outline" icon={<Download className="size-3.5" />}>下载</Button></a>} />
+          action={<DownloadButton href={ppath('/package?include_audio=0')} size="xs" variant="outline" icon={<Download className="size-3.5" />} aria-label="下载项目包（不含音频）">下载</DownloadButton>} />
       </div>
     </Card>
   );

@@ -2,7 +2,7 @@
 // Settings and tasks live on the server; this store only mirrors them.
 
 import { create } from 'zustand';
-import { api } from '@/lib/api';
+import { api, readableError, uploadWithProgress } from '@/lib/api';
 import type { AiProviderInfo, AppSettings, KaraokeStyle, PipelineTask, SettingsPatch, TaskStyleOptions } from '@/lib/types';
 import { loadProjects, openProject, refreshProject, run, setStep, toast, useApp, type Step } from './app';
 
@@ -13,6 +13,8 @@ interface SimpleState {
   ui: Ui;
   page: SimplePage;
   settings: AppSettings | null;
+  /** reading the settings failed (shown with a retry) */
+  settingsError: string | null;
   providers: AiProviderInfo[] | null;
   tasks: PipelineTask[];
   /** tasks added from this browser: their offset dialog opens by itself when they are ready */
@@ -27,7 +29,7 @@ function storedUi(): Ui {
   }
 }
 
-export const useSimple = create<SimpleState>(() => ({ ui: storedUi(), page: 'home', settings: null, providers: null, tasks: [], ownTasks: [] }));
+export const useSimple = create<SimpleState>(() => ({ ui: storedUi(), page: 'home', settings: null, settingsError: null, providers: null, tasks: [], ownTasks: [] }));
 const set = useSimple.setState;
 const get = useSimple.getState;
 
@@ -54,22 +56,57 @@ export async function openInDetail(pid: string, step: Step = 'review') {
 // ------------------------------------------------------------------ settings
 
 export async function loadSettings() {
-  set({ settings: await api.get<AppSettings>('/api/settings') });
+  try {
+    set({ settings: await api.get<AppSettings>('/api/settings'), settingsError: null });
+  } catch (e: any) {
+    set({ settingsError: readableError(e?.message ?? e) });
+    throw e;
+  }
 }
 
-export async function saveSettings(patch: SettingsPatch) {
-  const s = await api.put<AppSettings>('/api/settings', patch);
-  set({ settings: s });
-  return s;
+// settings saves go out one after another, so an older answer never lands last
+let saving: Promise<unknown> = Promise.resolve();
+let pendingSaves = 0;
+export function saveSettings(patch: SettingsPatch): Promise<AppSettings> {
+  pendingSaves += 1;
+  const next = saving.then(async () => {
+    try {
+      const s = await api.put<AppSettings>('/api/settings', patch);
+      set({ settings: s, settingsError: null });
+      return s;
+    } finally {
+      pendingSaves -= 1;
+    }
+  });
+  saving = next.catch(() => undefined);
+  return next;
+}
+
+/** Wait for settings saves still on their way (e.g. before testing the AI connection). */
+export function settingsSaved(): Promise<unknown> {
+  return pendingSaves ? saving : Promise.resolve();
 }
 
 /** Make a style the simple mode's default *and* have the next tasks use it as a whole: step ④ switches to
  * "设置里的样式" and its ruby / translation / title card switches follow the style again. */
 export async function setSimpleDefault(style: KaraokeStyle) {
   if (!get().settings) await loadSettings();
-  const cur = get().settings!.simple.task_style;
-  const taskStyle: TaskStyleOptions = { ...cur, source: 'default', translation: null, song_info: null, ruby: 'style', ruby_target: null };
+  const cur = get().settings?.simple.task_style;
+  if (!cur) throw new Error('无法读取设置，请稍后重试');
+  const taskStyle: TaskStyleOptions = { ...(taskStyleDraft ?? cur), source: 'default', translation: null, song_info: null, ruby: 'style', ruby_target: null };
+  taskStyleDraft = null;
   return saveSettings({ simple: { karaoke: style, task_style: taskStyle } });
+}
+
+// the new-task form's step ④ choices while their save is on its way (so returning to the form shows them)
+let taskStyleDraft: TaskStyleOptions | null = null;
+export const getTaskStyleDraft = () => taskStyleDraft;
+export function saveTaskStyle(opts: TaskStyleOptions) {
+  taskStyleDraft = opts;
+  return saveSettings({ simple: { task_style: opts } }).then((s) => {
+    if (taskStyleDraft === opts) taskStyleDraft = null;
+    return s;
+  });
 }
 
 export async function loadProviders(refresh = false) {
@@ -84,7 +121,7 @@ const ACTIVE = new Set(['preparing', 'queued', 'running']);
 const footprint = (t: PipelineTask) => `${t.status}|${t.stages.map((x) => x.status).join(',')}`;
 
 export async function loadTasks() {
-  const tasks = await api.get<PipelineTask[]>('/api/tasks');
+  const tasks = (await api.get<PipelineTask[]>('/api/tasks')).map((t) => (t.error ? { ...t, error: readableError(t.error) } : t));
   const old = new Map(get().tasks.map((t) => [t.id, t]));
   const before = new Map(get().tasks.map((t) => [t.id, t.status]));
   // the detailed mode shows a project a task is working on: reload it when the task moves on
@@ -137,14 +174,17 @@ export function hasActiveTasks(tasks: PipelineTask[]) {
   return tasks.some((t) => ACTIVE.has(t.status));
 }
 
-export async function addTask(file: File, lyrics: string, mode: string, name: string, style?: TaskStyleOptions) {
+export async function addTask(file: File, lyrics: string, mode: string, name: string, style?: TaskStyleOptions,
+  onProgress?: (f: number) => void) {
   const fd = new FormData();
   fd.append('file', file, file.name);
   fd.append('lyrics', lyrics);
   fd.append('mode', mode);
   fd.append('name', name);
   if (style) fd.append('style', JSON.stringify(style));
-  const t = await api.post<PipelineTask>('/api/tasks', fd);
+  const t = onProgress
+    ? await uploadWithProgress<PipelineTask>('/api/tasks', fd, onProgress)
+    : await api.post<PipelineTask>('/api/tasks', fd);
   set({ tasks: [t, ...get().tasks.filter((x) => x.id !== t.id)] });
   return t;
 }

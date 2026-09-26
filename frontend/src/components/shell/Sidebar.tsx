@@ -11,8 +11,11 @@ export function Sidebar() {
   const pv = useApp((s) => s.pv);
   const step = useApp((s) => s.step);
   const version = useApp((s) => s.info?.version);
-  const jobs = useApp((s) => s.jobs);
-  const running = new Set(Object.values(jobs).filter((j) => j.status === 'queued' || j.status === 'running').map((j) => j.kind));
+  const pid = useApp((s) => s.pid);
+  const history = useApp((s) => s.jobHistory);
+  // only the open project's operations mark its steps as running
+  const running = new Set(Object.values(history)
+    .filter((j) => j.project_id === pid && (j.status === 'queued' || j.status === 'running')).map((j) => j.kind));
 
   return (
     <aside className="flex w-16 shrink-0 flex-col border-r border-line bg-surface lg:w-64">
@@ -136,7 +139,7 @@ function ProjectSwitcher() {
             {projects.map((p) => (
               <DropdownMenu.Item
                 key={p.id}
-                onSelect={() => run(() => openProject(p.id), '打开项目失败')}
+                onSelect={() => { if (p.id !== pv?.project.id) void run(() => openProject(p.id), '打开项目失败'); }}
                 className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-[13px] outline-none data-[highlighted]:bg-surface-2"
               >
                 <span className="min-w-0 flex-1">

@@ -8,8 +8,9 @@ import {
   Check, ChevronDown, Download, Languages, Music, Palette, Plus, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
   LayoutTemplate, CaseSensitive,
 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/format';
+import { isEnter, isEscape } from '@/lib/keys';
 import { api } from '@/lib/api';
 import type { EffectKind, FontFamily, KaraokeStyle, SongInfo, SongInfoField, ThemePreview } from '@/lib/types';
 import { run, toast } from '@/store/app';
@@ -36,10 +37,12 @@ export interface SongInfoEditing {
 
 // ------------------------------------------------------------------ small building blocks
 
+/** A labelled group (its controls — segmented buttons, sliders — get the row's name). */
 function Row({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
+  const id = useId();
   return (
-    <div className="space-y-1.5">
-      <div className="text-[13px] font-medium">{label}</div>
+    <div className="space-y-1.5" role="group" aria-labelledby={id}>
+      <div id={id} className="text-[13px] font-medium">{label}</div>
       {children}
       {hint && <div className="text-xs text-muted">{hint}</div>}
     </div>
@@ -336,21 +339,62 @@ function themedLook(s: KaraokeStyle) {
     r.color_sung, r.outline_color, tr.color, tr.outline_color, tr.glow, i.color, i.accent, s.glow, s.effects]);
 }
 
+/**
+ * Take only what a colour template decides (the fields of `themedLook` and the
+ * theme itself) from `themed` into `current`: edits made while the request was
+ * on its way (size, layout, timing …) survive.
+ */
+export function mergeThemeColors(current: KaraokeStyle, themed: KaraokeStyle): KaraokeStyle {
+  const next = structuredClone(current);
+  const { text: t, ruby: r, translation: tr, info: i } = themed;
+  Object.assign(next.text, { color_unsung: t.color_unsung, color_sung: t.color_sung, outline_color: t.outline_color, shadow_color: t.shadow_color });
+  Object.assign(next.ruby, { follow_colors: r.follow_colors, color_unsung: r.color_unsung, color_sung: r.color_sung, outline_color: r.outline_color });
+  Object.assign(next.translation, { color: tr.color, outline_color: tr.outline_color, glow: tr.glow });
+  Object.assign(next.info, { color: i.color, accent: i.accent });
+  next.glow = structuredClone(themed.glow);
+  next.effects = structuredClone(themed.effects);
+  next.theme = themed.theme ? { ...themed.theme } : null;
+  return next;
+}
+
+type ThemeChoice = { template: 'plain' | 'glow'; color: string; secondary: string };
+
 /** Colour template + one or two theme colours; every colour below is re-derived from them. */
 function ThemeBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: KaraokeStyle) => void }) {
-  const th = style.theme ?? null;
+  // requests are debounced (dragging the colour picker fires dozens of changes) and numbered:
+  // only the answer to the latest choice is applied, on top of the style as it is by then
+  const latest = useRef({ style, onChange });
+  latest.current = { style, onChange };
+  const seq = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pending, setPending] = useState<ThemeChoice | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const th = pending ?? style.theme ?? null;
   const template = th?.template ?? (style.glow.enabled ? 'glow' : 'plain');
   const color = th?.color ?? style.text.color_sung.toUpperCase();
   const secondary = th?.secondary ?? '';
-  const apply = (t: 'plain' | 'glow', c: string, c2: string) => run(async () => {
-    const r = await api.post<ThemePreview>('/api/karaoke/theme', { template: t, color: c, secondary: c2 || null, base: style });
-    onChange({ ...r.style, output: style.output });
-  }, '应用配色失败');
+  const apply = (t: 'plain' | 'glow', c: string, c2: string) => {
+    setPending({ template: t, color: c, secondary: c2 });
+    const my = ++seq.current;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      timer.current = null;
+      try {
+        const r = await api.post<ThemePreview>('/api/karaoke/theme', { template: t, color: c, secondary: c2 || null, base: latest.current.style });
+        if (my !== seq.current) return;  // a newer choice is on its way
+        latest.current.onChange(mergeThemeColors(latest.current.style, r.style));
+      } catch (e: any) {
+        if (my === seq.current) toast('error', '应用配色失败', e?.message ?? String(e));
+      } finally {
+        if (my === seq.current) setPending(null);
+      }
+    }, 200);
+  };
   return (
     <div className="space-y-2.5 rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold tracking-wide text-muted">配色模版</span>
-        <Segmented<'plain' | 'glow'> size="sm" value={(th?.template ?? '') as 'plain'} onChange={(v) => apply(v, color, secondary)}
+        <Segmented<'plain' | 'glow'> size="sm" label="配色模版" value={(th?.template ?? '') as 'plain'} onChange={(v) => apply(v, color, secondary)}
           options={[{ value: 'plain', label: '朴素' }, { value: 'glow', label: '荧光' }]} />
         {!th && <Badge tone="warn">自定义</Badge>}
       </div>
@@ -401,12 +445,21 @@ function PresetBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: Kar
     onChange({ ...structuredClone(s.style), output: style.output });
     setConfirmDelete(false);
   };
-  const saveAs = (name: string) => run(async () => {
-    const s = await saveStyle(name.trim(), style);
-    onChange({ ...style, preset: s.name });
-    setNaming(null);
-    toast('ok', `已保存预设「${s.name}」`);
-  }, '保存预设失败');
+  const [savingAs, setSavingAs] = useState(false);
+  const saveAs = (name: string) => {
+    if (savingAs || !name.trim()) return;  // Enter and the button save once
+    setSavingAs(true);
+    return run(async () => {
+      try {
+        const s = await saveStyle(name.trim(), style);
+        onChange({ ...style, preset: s.name });
+        setNaming(null);
+        toast('ok', `已保存预设「${s.name}」`);
+      } finally {
+        setSavingAs(false);
+      }
+    }, '保存预设失败');
+  };
   const overwrite = () => current && run(async () => {
     await saveStyle(current.name, style, current.id);
     toast('ok', `已更新预设「${current.name}」`);
@@ -441,8 +494,8 @@ function PresetBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: Kar
         <div className="mt-2 flex items-center gap-2">
           <Input autoFocus aria-label="预设名称" className="h-8 flex-1 text-[13px]" placeholder="给这套样式起个名字" value={naming}
             onChange={(e) => setNaming(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && naming.trim()) void saveAs(naming); if (e.key === 'Escape') setNaming(null); }} />
-          <Button size="xs" variant="primary" icon={<Check className="size-3.5" />} disabled={!naming.trim()} onClick={() => saveAs(naming)}>保存</Button>
+            onKeyDown={(e) => { if (isEnter(e) && naming.trim()) void saveAs(naming); if (isEscape(e)) setNaming(null); }} />
+          <Button size="xs" variant="primary" icon={<Check className="size-3.5" />} disabled={!naming.trim()} loading={savingAs} onClick={() => void saveAs(naming)}>保存</Button>
           <Button size="xs" variant="ghost" aria-label="取消" icon={<X className="size-3.5" />} onClick={() => setNaming(null)} />
         </div>
       )}
@@ -509,11 +562,24 @@ function InfoEditor({ style, patch, songInfo }: { style: KaraokeStyle; patch: Pa
 
 function InfoText({ auto, custom, onText }: { auto: string; custom: string | null; onText: (t: string | null) => void }) {
   const [draft, setDraft] = useState<string | null>(null); // what is being typed, saved shortly after
+  // text still waiting for its save when the panel goes away (another step, another mode) is saved then
+  const unsaved = useRef<{ text: string; onText: typeof onText } | null>(null);
   useEffect(() => {
-    if (draft === null) return;
-    const t = setTimeout(() => { if (draft !== (custom ?? auto)) onText(draft); }, 500);
+    if (draft === null || draft === (custom ?? auto)) {
+      unsaved.current = null;
+      return;
+    }
+    unsaved.current = { text: draft, onText };
+    const t = setTimeout(() => {
+      unsaved.current = null;
+      onText(draft);
+    }, 500);
     return () => clearTimeout(t);
   }, [draft]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    const u = unsaved.current;
+    if (u) u.onText(u.text);
+  }, []);
   return (
     <Row label={<span className="flex items-center gap-2">显示的文字{custom !== null && <Badge tone="accent">自定义</Badge>}</span>}
       hint="每行一条，第一行是标题（大字）。可以改成任何内容，例如「赤城みりあ（CV：黒沢ともよ）」。">

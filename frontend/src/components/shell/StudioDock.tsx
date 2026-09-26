@@ -6,12 +6,13 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { isEnter, isEscape } from '@/lib/keys';
 import { cn, fmtMs, parseTime, ROLE_LABEL } from '@/lib/format';
 import type { Source } from '@/lib/types';
 import { player, usePlayer, usePlayhead } from '@/audio/player';
 import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
 import { waveformRef } from '@/audio/waveformRef';
-import { ppath, resultFrom, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
+import { resultFrom, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
 import { setUnitTimes } from '@/store/edits';
 import { Badge, IconButton, Kbd, ResizeHandle, Segmented, SliderField, Tip } from '@/components/ui';
 
@@ -23,7 +24,7 @@ export function StudioDock() {
   const p = usePlayer();
 
   // keep decoded buffers in sync with the project's audio assets
-  const assetKey = pv ? pv.project.audio.map((a) => `${a.role}:${a.id}:${pv.view.audio[a.role as 'original']?.available}`).join('|') : '';
+  const assetKey = pv ? pv.project.audio.map((a) => `${a.role}:${a.id}:${pv.view.audio[a.role as 'original']?.available}:${pv.view.audio[a.role as 'original']?.outdated ?? false}`).join('|') : '';
   useEffect(() => {
     if (pid && pv) void player.syncAssets(pid, pv);
     else player.reset();
@@ -70,23 +71,9 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
   const p = usePlayer();
   const ms = usePlayhead();
   const open = useApp((s) => s.dockOpen);
-  const pv = useApp((s) => s.pv)!;
   const sources = p.availableSources();
   const loading = Object.keys(p.loading);
-  const canMix = sources.includes('mix');
-
-  // “自定义混音” plays the project's mix settings (set on the Export page);
-  // keep the anti-clipping bus gain in sync so it sounds like the export
-  const mix = pv.project.mix;
-  useEffect(() => {
-    if (!canMix) return;
-    const t = setTimeout(() => {
-      api.post<{ bus_gain: number }>(ppath('/mix/preview-gain'), {
-        vocal_keep_pct: p.mix.p, instrumental_pct: p.mix.q, master: p.mix.master, limiter: mix.limiter,
-      }).then((r) => player.setMix({ bus: r.bus_gain })).catch(() => {});
-    }, 250);
-    return () => clearTimeout(t);
-  }, [canMix, p.mix.p, p.mix.q, p.mix.master, mix.limiter]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the mix preview (and its anti-clipping bus gain) is run by the Export page's mix card only
 
   return (
     <>
@@ -98,9 +85,9 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
             onClick={() => player.toggle()}
             disabled={!sources.length}
             className="focus-ring grid size-10 place-items-center rounded-full bg-accent text-accent-fg shadow-md shadow-accent/30 transition hover:scale-105 disabled:opacity-40"
-            aria-label={p.playing ? '暂停' : '播放'}
+            aria-label={p.playing || p.starting ? '暂停' : '播放'}
           >
-            {p.playing ? <Pause className="size-4 fill-current" /> : <Play className="ml-0.5 size-4 fill-current" />}
+            {p.playing || p.starting ? <Pause className="size-4 fill-current" /> : <Play className="ml-0.5 size-4 fill-current" />}
           </button>
         </Tip>
         <Tip content={<span>循环所选区间 <Kbd>L</Kbd>（在波形上拖动选择）</span>}>
@@ -108,6 +95,7 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
             onClick={() => { if (!player.toggleLoop()) toast('info', '请先在波形上拖选循环区间'); }}
             className={cn('focus-ring grid size-8 place-items-center rounded-lg transition', p.loop.on ? 'bg-warn-soft text-warn' : 'text-muted hover:bg-surface-2 hover:text-fg')}
             aria-label="循环"
+            aria-pressed={p.loop.on}
           >
             <Repeat className="size-4" />
           </button>
@@ -123,7 +111,7 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
       </div>
 
       {sources.length > 0 ? (
-        <Segmented<Source>
+        <Segmented<Source> label="播放的音轨"
           size="sm"
           value={p.source}
           onChange={(v) => player.setSource(v)}
@@ -135,7 +123,7 @@ function Transport({ hasAudio }: { hasAudio: boolean }) {
         <span className="text-xs text-muted">{hasAudio ? '音频加载中…' : '尚未上传音频'}</span>
       )}
 
-      <Segmented<string>
+      <Segmented<string> label="播放速度"
         size="sm"
         value={String(p.rate)}
         onChange={(v) => player.setRate(Number(v))}
@@ -203,8 +191,8 @@ function TimeJump({ ms, disabled }: { ms: number; disabled: boolean }) {
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => go(e.currentTarget.value)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-        if (e.key === 'Escape') setDraft(null);
+        if (isEnter(e)) e.currentTarget.blur();
+        if (isEscape(e)) setDraft(null);
       }}
     />
   );
@@ -230,10 +218,23 @@ function HintLabel({ tip, children }: { tip: string; children: React.ReactNode }
 
 // ------------------------------------------------------------------ waveform
 
-function useOverlays(): () => Overlays {
-  // read the latest state on every frame without re-rendering React
+/** Overlays from the store, rebuilt only when one of their inputs changed. */
+export function makeOverlays(): () => Overlays {
+  let key: unknown[] | null = null;
+  let cached: Overlays | null = null;
   return () => {
     const s = useApp.getState();
+    const L = player.loop;
+    const next = [s.pv, s.resultId, s.step, s.selLineId, s.selUnitId, s.calibLineId, s.candidateId, s.compareWithId, L.on, L.start, L.end];
+    if (cached && key && key.every((v, i) => v === next[i])) return cached;
+    key = next;
+    cached = buildOverlays(s);
+    return cached;
+  };
+}
+
+function buildOverlays(s: ReturnType<typeof useApp.getState>): Overlays {
+  {
     const pv = s.pv;
     const out: Overlays = { units: [], candUnits: [], lineStarts: [], loop: player.loop, selectedUnitId: s.selUnitId, marks: [] };
     if (!pv) return out;
@@ -274,7 +275,7 @@ function useOverlays(): () => Overlays {
       }
     }
     return out;
-  };
+  }
 }
 
 function WaveArea() {
@@ -292,8 +293,10 @@ function WaveArea() {
     return (audio.find((a) => a.role === waveRole) ?? audio.find((a) => a.role === 'original'))?.id ?? null;
   });
   const lastPid = useRef<string | null>(null);
-  const getOverlays = useOverlays();
+  const [getOverlays] = useState(makeOverlays);
   const [scroll, setScroll] = useState({ start: 0, size: 1 });
+  const open = useApp((s) => s.dockOpen);
+  const theme = useApp((s) => s.theme);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -316,18 +319,30 @@ function WaveArea() {
       },
     });
     waveformRef.current = wf;
-    let raf = 0;
-    const loop = () => {
-      wf.draw();
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
+    // draw only when something shown changed (store, player) or while playing
+    const unsubApp = useApp.subscribe((s, prev) => {
+      if (s.pv !== prev.pv || s.resultId !== prev.resultId || s.step !== prev.step || s.selLineId !== prev.selLineId
+        || s.selUnitId !== prev.selUnitId || s.calibLineId !== prev.calibLineId || s.candidateId !== prev.candidateId
+        || s.compareWithId !== prev.compareWithId) wf.invalidate();
+    });
+    const unsubPlayer = player.subscribe(() => wf.invalidate());
+    const onVisible = () => wf.setActive(!document.hidden && useApp.getState().dockOpen);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
-      cancelAnimationFrame(raf);
+      unsubApp();
+      unsubPlayer();
+      document.removeEventListener('visibilitychange', onVisible);
       wf.dispose();
       waveformRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // no frames while the dock is collapsed or the page is in the background
+  useEffect(() => {
+    waveformRef.current?.setActive(open && !(typeof document !== 'undefined' && document.hidden));
+  }, [open]);
+  // theme colours are read once per theme, not on every frame
+  useEffect(() => { waveformRef.current?.refreshColors(); }, [theme]);
 
   useEffect(() => {
     const wf = waveformRef.current;
@@ -371,6 +386,9 @@ function WaveArea() {
       <div className="mt-1 hidden flex-wrap gap-x-4 text-[11px] text-subtle lg:flex">
         <span>点击定位 · 拖动选择循环区间 · 滚轮缩放 · Shift+滚轮平移 · 拖动上边缘调整高度</span>
         <span>在“人工检查”中选中单元后可拖动两端修改起止</span>
+        {effectiveHeight < waveHeight && (
+          <span className="text-warn">窗口较矮：波形最多占窗口高度的 1/4（现为 {effectiveHeight} px，设置为 {waveHeight} px，窗口变高后恢复）</span>
+        )}
       </div>
     </div>
   );

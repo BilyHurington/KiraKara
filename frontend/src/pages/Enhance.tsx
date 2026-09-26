@@ -7,40 +7,36 @@
 // hidden, so a half-done AI round trip survives a look at the readings.
 
 import { ArrowRight, Bot, Languages, Loader2, Scissors } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
-import { setStep, useApp, useJob, useProject } from '@/store/app';
+import { resumeJobs, setStep, useApp, useJob, useProject, useView } from '@/store/app';
 import { useSimple } from '@/store/simple';
-import { Button, PageHeader } from '@/components/ui';
+import { arrowNav, Button, PageHeader } from '@/components/ui';
 import { AiRoundtripCard } from './enhance/AiRoundtrip';
 import { ReadingsCard } from './enhance/Readings';
 import { SeparationCard } from './enhance/Separation';
+import { loadEnhanceTab, saveEnhanceTab, type EnhanceTab } from './enhance/tab';
 
-type Task = 'readings' | 'ai' | 'separation';
+type Task = EnhanceTab;
 type Tone = 'ok' | 'warn' | 'accent' | 'neutral';
 
-const TAB_KEY = 'kara.enhanceTab';
 const RT_STATUS: Record<string, string> = { prompted: '已生成提示词', validated: '已校验', applied: '已应用', rejected: '已拒绝' };
-
-function loadTab(): Task {
-  try {
-    const v = localStorage.getItem(TAB_KEY);
-    if (v === 'readings' || v === 'ai' || v === 'separation') return v;
-  } catch { /* ignore */ }
-  return 'readings';
-}
 
 export function EnhancePage() {
   const project = useProject()!;
+  const view = useView()!;
   const info = useApp((s) => s.info);
   const sepJob = useJob('separate');
   const aiJob = useJob('ai');
   const aiProvider = useSimple((s) => s.settings?.ai.provider ?? 'none');
-  const [tab, setTabState] = useState<Task>(loadTab);
+  const [tab, setTabState] = useState<Task>(loadEnhanceTab);
   const setTab = (t: Task) => {
     setTabState(t);
-    try { localStorage.setItem(TAB_KEY, t); } catch { /* ignore */ }
+    saveEnhanceTab(t);
   };
+  // finished operations (AI report, separation result) are known after a reload / on return
+  useEffect(() => { void resumeJobs(project.id); }, [project.id]);
+  const outdated = !!(view.audio.vocals?.outdated || view.audio.instrumental?.outdated);
   const next = project.mode === 'lrc' ? 'calibrate' : 'align';
 
   const readings = useMemo(() => {
@@ -81,6 +77,7 @@ export function EnhancePage() {
         status: <span className="flex items-center gap-1.5"><Loader2 className="size-3 animate-spin" />分离中 {Math.round((sepJob!.progress ?? 0) * 100)}%</span>,
         tone: 'accent' as Tone,
       } : sepJob?.status === 'failed' ? { status: '上次分离失败', tone: 'warn' as Tone }
+        : outdated ? { status: '分轨来自更换前的原曲，需重新分离', tone: 'warn' as Tone }
         : stems.length ? { status: `已有 ${stems.map((a) => (a.role === 'vocals' ? '人声' : '伴奏')).join(' + ')}`, tone: 'ok' as Tone }
           : { status: info?.separation_available === false ? '未安装分离组件' : '未分离（可选）', tone: 'neutral' as Tone }),
     },
@@ -98,33 +95,34 @@ export function EnhancePage() {
           </Button>
         }
       />
-      <div role="tablist" aria-label="注音与人声分离" className="mb-5 grid gap-3 sm:grid-cols-3">
+      <div role="tablist" aria-label="注音与人声分离" className="mb-5 grid gap-3 sm:grid-cols-3" onKeyDown={(e) => arrowNav(e, 'tab')}>
         {cards.map((c) => (
           <TaskTab key={c.id} {...c} active={tab === c.id} onClick={() => setTab(c.id)} />
         ))}
       </div>
-      <div role="tabpanel" hidden={tab !== 'readings'} aria-label="读音与发音单元"><ReadingsCard /></div>
-      <div role="tabpanel" hidden={tab !== 'ai'} aria-label="AI 注音"><AiRoundtripCard /></div>
-      <div role="tabpanel" hidden={tab !== 'separation'} aria-label="人声分离"><SeparationCard /></div>
+      <div role="tabpanel" id="enh-panel-readings" aria-labelledby="enh-tab-readings" hidden={tab !== 'readings'}><ReadingsCard /></div>
+      <div role="tabpanel" id="enh-panel-ai" aria-labelledby="enh-tab-ai" hidden={tab !== 'ai'}><AiRoundtripCard /></div>
+      <div role="tabpanel" id="enh-panel-separation" aria-labelledby="enh-tab-separation" hidden={tab !== 'separation'}><SeparationCard /></div>
     </>
   );
 }
 
 const DOT: Record<Tone, string> = { ok: 'bg-ok', warn: 'bg-warn', accent: 'bg-accent', neutral: 'bg-line-strong' };
 
-function TaskTab({ icon, title, status, tone, active, onClick }: {
-  icon: ReactNode; title: string; status: ReactNode; tone: Tone; active: boolean; onClick: () => void;
+function TaskTab({ id, icon, title, status, tone, active, onClick }: {
+  id: Task; icon: ReactNode; title: string; status: ReactNode; tone: Tone; active: boolean; onClick: () => void;
 }) {
   return (
     <button
-      type="button" role="tab" aria-selected={active} onClick={onClick}
+      type="button" role="tab" id={`enh-tab-${id}`} aria-controls={`enh-panel-${id}`} aria-selected={active}
+      tabIndex={active ? 0 : -1} onClick={onClick}
       className={cn(
         'focus-ring flex min-w-0 items-start gap-3 rounded-xl border px-4 py-3 text-left transition',
         active ? 'border-accent bg-accent-soft/60 ring-1 ring-accent' : 'border-line bg-surface hover:border-line-strong hover:bg-surface-2',
       )}
     >
       <span className={cn('mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg',
-        active ? 'bg-accent text-white' : 'bg-surface-2 text-muted')}>{icon}</span>
+        active ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-muted')}>{icon}</span>
       <span className="min-w-0">
         <span className="block text-[14px] font-semibold">{title}</span>
         <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted">

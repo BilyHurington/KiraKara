@@ -56,13 +56,13 @@
   --c-line-strong: #d1d5db;
   --c-fg: #0f172a;
   --c-muted: #5b6474;
-  --c-subtle: #8b93a1;
+  --c-subtle: #667085;  /* ≥ 4.5:1 on surface / surface-2 (WCAG AA) */
   --c-accent: #5b5bf0;
   --c-accent-fg: #ffffff;
   --c-accent-soft: #eef0ff;
-  --c-ok: #15924a;
+  --c-ok: #11813f;
   --c-ok-soft: #e8f7ee;
-  --c-warn: #b86e00;
+  --c-warn: #9a5800;
   --c-warn-soft: #fff5e0;
   --c-danger: #d42a2a;
   --c-danger-soft: #fdecec;
@@ -88,7 +88,7 @@
   --c-line-strong: #323950;
   --c-fg: #e7e9f2;
   --c-muted: #9aa1b5;
-  --c-subtle: #6b7289;
+  --c-subtle: #8a91a8;
   --c-accent: #7c7cff;
   --c-accent-fg: #0b0d14;
   --c-accent-soft: #1d1f3d;
