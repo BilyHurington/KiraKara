@@ -1,14 +1,20 @@
 // Manual unit edits with an undo/redo stack. Every change goes through the
 // server (which keeps the model prediction and a history); undo/redo restores
 // the exact previous ManualEdit via /restore.
+//
+// Edits, undo and redo run one after another (a fast ⌘Z ⌘Z never lands out of
+// order); a failed undo / redo puts its entry back; entries of a result that
+// became stale or was replaced are dropped with a message instead of silently
+// changing an old result.
 
 import { api } from '@/lib/api';
 import type { AlignmentResult, ManualEdit, UnitTiming } from '@/lib/types';
-import { currentResult, patchResult, ppath, run, toast, useApp, type UndoEntry } from './app';
+import { currentResult, patchResult, resultFrom, run, toast, useApp, type UndoEntry } from './app';
 
-function applyUnit(rid: string, ut: UnitTiming) {
+function applyUnit(pid: string, rid: string, ut: UnitTiming) {
   const pv = useApp.getState().pv;
-  const r = pv?.project.results.find((x) => x.id === rid);
+  if (!pv || pv.project.id !== pid) return;  // another project was opened meanwhile
+  const r = pv.project.results.find((x) => x.id === rid);
   if (!r) return;
   const units = r.units.map((u) => (u.unit_id === ut.unit_id ? ut : u));
   // keep the line range in sync (the server does the same)
@@ -29,60 +35,93 @@ function push(entry: UndoEntry) {
   useApp.setState((s) => ({ undo: [...s.undo.slice(-199), entry], redo: [] }));
 }
 
-async function restore(rid: string, uid: string, manual: ManualEdit | null) {
-  const ut = await api.post<UnitTiming>(ppath(`/results/${rid}/units/${uid}/restore`), { manual });
-  applyUnit(rid, ut);
+// one edit at a time, in the order they were made
+let queue: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const next = queue.then(fn, fn);
+  queue = next.catch(() => undefined);
+  return next;
+}
+
+const upath = (pid: string, rid: string, uid: string, tail = '') => `/api/projects/${pid}/results/${rid}/units/${uid}${tail}`;
+
+async function edit(rid: string | undefined, uid: string, label: (ut: UnitTiming) => string,
+  call: (pid: string, rid: string) => Promise<UnitTiming>, errTitle = '修改失败') {
+  const pid = useApp.getState().pid;
+  if (!rid || !pid) return;
+  await serial(() => run(async () => {
+    const before = unitOf(rid, uid)?.manual ?? null;
+    const ut = await call(pid, rid);
+    applyUnit(pid, rid, ut);
+    if (useApp.getState().pid === pid) push({ rid, uid, before, after: ut.manual, label: label(ut) });
+  }, errTitle));
 }
 
 /** Set start/end of a unit (locks it). */
-export async function setUnitTimes(uid: string, start: number | null, end: number | null, rid = currentResult()?.id) {
-  if (!rid) return;
-  const before = unitOf(rid, uid)?.manual ?? null;
-  await run(async () => {
-    const ut = await api.put<UnitTiming>(ppath(`/results/${rid}/units/${uid}`), { start_ms: start, end_ms: end, locked: true });
-    applyUnit(rid, ut);
-    push({ rid, uid, before, after: ut.manual, label: `修改 ${ut.reading}` });
-  }, '修改失败');
+export function setUnitTimes(uid: string, start: number | null, end: number | null, rid = currentResult()?.id) {
+  return edit(rid, uid, (ut) => `修改 ${ut.reading}`,
+    (pid, r) => api.put<UnitTiming>(upath(pid, r, uid), { start_ms: start, end_ms: end, locked: true }));
 }
 
-export async function setUnitLock(uid: string, locked: boolean, rid = currentResult()?.id) {
-  if (!rid) return;
-  const before = unitOf(rid, uid)?.manual ?? null;
-  await run(async () => {
-    const ut = await api.post<UnitTiming>(ppath(`/results/${rid}/units/${uid}/lock`), { locked });
-    applyUnit(rid, ut);
-    push({ rid, uid, before, after: ut.manual, label: locked ? `锁定 ${ut.reading}` : `解锁 ${ut.reading}` });
+export function setUnitLock(uid: string, locked: boolean, rid = currentResult()?.id) {
+  return edit(rid, uid, (ut) => (locked ? `锁定 ${ut.reading}` : `解锁 ${ut.reading}`),
+    (pid, r) => api.post<UnitTiming>(upath(pid, r, uid, '/lock'), { locked }), '操作失败');
+}
+
+export function clearUnitManual(uid: string, rid = currentResult()?.id) {
+  return edit(rid, uid, (ut) => `恢复模型时间 ${ut.reading}`,
+    (pid, r) => api.del<UnitTiming>(upath(pid, r, uid, '/manual')), '操作失败');
+}
+
+/** Units of these lines were replaced (adopting a rerun / candidate): their undo steps no longer apply. */
+export function forgetEdits(rid: string, lineIds: string[]) {
+  const lines = new Set(lineIds);
+  const r = useApp.getState().pv?.project.results.find((x) => x.id === rid);
+  const units = new Set((r?.units ?? []).filter((u) => lines.has(u.line_id)).map((u) => u.unit_id));
+  const keep = (e: UndoEntry) => !(e.rid === rid && units.has(e.uid));
+  useApp.setState((s) => ({ undo: s.undo.filter(keep), redo: s.redo.filter(keep) }));
+}
+
+/** Why an entry cannot be applied any more (null: it can). */
+function blocked(e: UndoEntry): string | null {
+  const r = resultFrom(useApp.getState().pv, e.rid);
+  if (!r) return '该修改所在的对齐结果已不存在';
+  if (r.stale) return '该修改所在的对齐结果已过期（输入已修改），不能再改它的时间';
+  if (!r.units.some((u) => u.unit_id === e.uid)) return '该单元已不在结果中';
+  return null;
+}
+
+function step(from: 'undo' | 'redo') {
+  return serial(async () => {
+    const s = useApp.getState();
+    const e = s[from].at(-1);
+    const pid = s.pid;
+    if (!e || !pid) return;
+    const to = from === 'undo' ? 'redo' : 'undo';
+    useApp.setState((st) => ({ [from]: st[from].slice(0, -1) }) as any);
+    const why = blocked(e);
+    if (why) {
+      toast('warn', `无法${from === 'undo' ? '撤销' : '重做'}：${e.label}`, `${why}；这一步已从记录中移除`);
+      return;
+    }
+    const manual: ManualEdit | null = from === 'undo' ? e.before : e.after;
+    try {
+      const ut = await api.post<UnitTiming>(upath(pid, e.rid, e.uid, '/restore'), { manual });
+      applyUnit(pid, e.rid, ut);
+      if (useApp.getState().pid !== pid) return;
+      useApp.setState((st) => ({ [to]: [...st[to], e] }) as any);
+      if (e.rid !== useApp.getState().resultId) {
+        toast('info', `已${from === 'undo' ? '撤销' : '重做'}：${e.label}`, '这一步属于另一个对齐结果', 2500);
+      } else {
+        toast('info', `已${from === 'undo' ? '撤销' : '重做'}：${e.label}`, undefined, 1800);
+      }
+    } catch (err: any) {
+      // keep the step so it can be tried again
+      if (useApp.getState().pid === pid) useApp.setState((st) => ({ [from]: [...st[from], e] }) as any);
+      toast('error', `${from === 'undo' ? '撤销' : '重做'}失败`, err?.message ?? String(err));
+    }
   });
 }
 
-export async function clearUnitManual(uid: string, rid = currentResult()?.id) {
-  if (!rid) return;
-  const before = unitOf(rid, uid)?.manual ?? null;
-  await run(async () => {
-    const ut = await api.del<UnitTiming>(ppath(`/results/${rid}/units/${uid}/manual`));
-    applyUnit(rid, ut);
-    push({ rid, uid, before, after: null, label: `恢复模型时间 ${ut.reading}` });
-  });
-}
-
-export async function undo() {
-  const e = useApp.getState().undo.at(-1);
-  if (!e) return;
-  useApp.setState((s) => ({ undo: s.undo.slice(0, -1) }));
-  await run(async () => {
-    await restore(e.rid, e.uid, e.before);
-    useApp.setState((s) => ({ redo: [...s.redo, e] }));
-    toast('info', `已撤销：${e.label}`, undefined, 1800);
-  }, '撤销失败');
-}
-
-export async function redo() {
-  const e = useApp.getState().redo.at(-1);
-  if (!e) return;
-  useApp.setState((s) => ({ redo: s.redo.slice(0, -1) }));
-  await run(async () => {
-    await restore(e.rid, e.uid, e.after);
-    useApp.setState((s) => ({ undo: [...s.undo, e] }));
-    toast('info', `已重做：${e.label}`, undefined, 1800);
-  }, '重做失败');
-}
+export const undo = () => step('undo');
+export const redo = () => step('redo');

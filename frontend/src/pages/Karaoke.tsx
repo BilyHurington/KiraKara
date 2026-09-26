@@ -4,13 +4,17 @@
 import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, Sparkles, Subtitles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { fmtMs, parseTime } from '@/lib/format';
+import { fmtMs, fmtRelative, parseTime } from '@/lib/format';
+import { isEnter, isEscape } from '@/lib/keys';
 import type { FontFamily, Job, KaraokeStyle, ProjectView, SongInfo } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
-import { ppath, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useResult } from '@/store/app';
 import {
-  Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Segmented, Select, SliderField, Tip,
+  ppath, resumeJobs, run, setPV, setStep, toast, trackJob, useActiveResult, useApp, useJob, useProject, useResult,
+} from '@/store/app';
+import { DownloadButton } from '@/components/DownloadButton';
+import {
+  Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Progress, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { setSimpleDefault } from '@/store/simple';
@@ -19,26 +23,46 @@ interface LineSpan { id: string; index: number; text: string; start: number; end
 
 export function KaraokePage() {
   const project = useProject()!;
-  const result = useResult();
+  // subtitles, preview, ASS and the video always use the project's current (active) result
+  const result = useActiveResult();
+  const viewed = useResult();
   const [style, setStyle] = useState<KaraokeStyle | null>(project.karaoke ?? null);
   const [fonts, setFonts] = useState<{ default: string; families: FontFamily[] }>({ default: '', families: [] });
   const [songInfo, setSongInfo] = useState<SongInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const dirty = useRef(false);
+  const pid = project.id;
+
+  useEffect(() => { void resumeJobs(pid); }, [pid]);  // a video made while this page was closed keeps its download link
 
   useEffect(() => {
-    void run(async () => {
-      const [f, k, info] = await Promise.all([
-        api.get<{ default: string; families: FontFamily[] }>('/api/fonts'),
-        api.get<KaraokeStyle>(ppath('/karaoke')),
-        api.get<SongInfo>(ppath('/karaoke/info')),
-      ]);
-      setFonts(f);
-      setStyle(k);
-      setSongInfo(info);
-    }, '加载字幕设置失败');
-  }, [project.id]);
+    let stop = false;
+    setLoadError(null);
+    // fonts and song data are optional: the page works without them; only the style is needed
+    void Promise.allSettled([
+      api.get<{ default: string; families: FontFamily[] }>('/api/fonts'),
+      api.get<KaraokeStyle>(`/api/projects/${pid}/karaoke`),
+      api.get<SongInfo>(`/api/projects/${pid}/karaoke/info`),
+    ]).then(([f, k, info]) => {
+      if (stop) return;
+      if (f.status === 'fulfilled') setFonts(f.value);
+      if (info.status === 'fulfilled') setSongInfo(info.value);
+      if (k.status === 'fulfilled') {
+        if (!dirty.current) setStyle(k.value);
+      } else {
+        const msg = k.reason?.message ?? String(k.reason);
+        // keep working with the style the project view carried, if any
+        setStyle((cur) => cur ?? project.karaoke ?? null);
+        setLoadError(msg);
+        if (project.karaoke) toast('warn', '读取字幕样式失败，暂用项目里的样式', msg);
+      }
+    });
+    return () => { stop = true; };
+  }, [pid, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
   const saveInfoText = (text: string | null) => run(async () => {
-    setSongInfo(await api.put<SongInfo>(ppath('/karaoke/info'), { text }));
+    const out = await api.put<SongInfo>(`/api/projects/${pid}/karaoke/info`, { text });
+    if (useApp.getState().pid === pid) setSongInfo(out);
   }, '保存歌曲信息失败');
 
   // autosave (debounced); exports and burn-in always use the saved style, so an edit still waiting
@@ -114,23 +138,43 @@ export function KaraokePage() {
       </>
     );
   }
-  if (!style) return <><Header /><div className="flex items-center gap-2 text-sm text-muted"><Loader2 className="size-4 animate-spin" />加载中…</div></>;
+  if (!style) {
+    return (
+      <>
+        <Header />
+        {loadError ? (
+          <Callout tone="danger" title="读取字幕样式失败" actions={<Button size="sm" onClick={() => setAttempt((n) => n + 1)}>重试</Button>}>
+            {loadError}
+          </Callout>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-muted" role="status"><Loader2 className="size-4 animate-spin" />加载中…</div>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
       <Header />
+      {viewed && viewed.id !== result.id && (
+        <Callout tone="info" className="mb-4" title="字幕使用项目的当前结果"
+          actions={<Button size="sm" variant="secondary" onClick={() => setStep('align')}>去“对齐”切换当前结果</Button>}>
+          你在“人工检查”里看的是另一个结果；这里的预览、ASS 字幕和生成的视频都按当前结果（对齐页标 ● 当前 的那个）生成。
+        </Callout>
+      )}
       {result.stale && <Callout tone="warn" className="mb-4" title="当前对齐结果已过期">{result.stale_reason}。字幕仍按该结果生成。</Callout>}
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <PreviewCard style={style} lines={lines} refreshKey={songInfo?.text ?? ''} />
           <BurnCard style={style} patch={patch} beforeBurn={flush} />
         </div>
-        <div className="space-y-6 xl:sticky xl:top-4">
+        {/* next to the preview from 1024 px on (not below the burn card), sticky while scrolling */}
+        <div className="min-w-0 space-y-6 lg:sticky lg:top-4">
           <Card>
             <CardHeader title="字幕样式" actions={
               <Tip content="极简模式之后的任务完整使用这套样式（配色、布局、注音、翻译、时间与特效）：第 4 步会切到“设置里的样式”，注音、翻译、歌曲信息跟随这套样式">
                 <Button size="xs" variant="ghost" icon={<Sparkles className="size-3.5" />}
-                  onClick={() => run(async () => { await setSimpleDefault(style); toast('ok', '已设为极简模式默认样式', '第 4 步已改为使用这套样式'); }, '保存失败')}>
+                  onClick={() => run(async () => { await setSimpleDefault(style); toast('ok', '已设为极简模式默认样式', '第 4 步已改为使用“设置里的样式”'); }, '保存失败')}>
                   设为极简默认
                 </Button>
               </Tip>
@@ -153,7 +197,7 @@ function Header() {
     <PageHeader
       eyebrow="第 7 步（可选）"
       title="卡拉OK字幕"
-      description="选择样式并预览任意时刻的画面；导出 ASS 字幕，或一键烧录成视频（没有视频时使用纯黑背景）。设置会自动保存。"
+      description="选择样式并预览任意时刻的画面；导出 ASS 字幕，或一键生成带字幕的视频（把字幕烧录进画面；没有视频时使用纯黑背景）。设置会自动保存；总是使用项目的当前对齐结果。"
       actions={<Button onClick={() => setStep('export')} icon={<ArrowRight className="size-4" />}>下一步：导出</Button>}
     />
   );
@@ -220,7 +264,7 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
       <CardHeader icon={<Subtitles className="size-4" />} title="预览"
         description={`${w}×${h} · ${project.video ? '原视频画面' : '纯黑背景'} · 与烧录使用同一渲染器（libass）`}
         actions={project.video ? (
-          <Segmented size="sm" value={bg} onChange={setBg} options={[{ value: 'auto', label: '视频画面' }, { value: 'black', label: '纯黑' }]} />
+          <Segmented size="sm" label="预览背景" value={bg} onChange={setBg} options={[{ value: 'auto', label: '视频画面' }, { value: 'black', label: '纯黑' }]} />
         ) : undefined} />
       <CardBody className="space-y-4">
         <div className="relative overflow-hidden rounded-xl bg-black ring-1 ring-line" style={{ aspectRatio: `${w} / ${h}` }}>
@@ -256,7 +300,7 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
                 <Input autoFocus className="h-8 w-32 font-mono" value={timeDraft} aria-label="预览时间"
                   onChange={(e) => setTimeDraft(e.target.value)}
                   onBlur={(e) => { const v = parseTime(e.currentTarget.value); setTimeDraft(null); if (v !== null) setCustom(v); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setTimeDraft(null); }} />
+                  onKeyDown={(e) => { if (isEnter(e)) e.currentTarget.blur(); if (isEscape(e)) setTimeDraft(null); }} />
               )}
               <Tip content="使用播放器当前位置"><Button size="sm" variant="ghost" icon={<Crosshair className="size-4" />} onClick={followPlayhead}>播放头</Button></Tip>
               <Button size="sm" variant="ghost" onClick={listen}>试听本行</Button>
@@ -287,49 +331,51 @@ function BurnCard({ style, patch, beforeBurn }: {
   const [background, setBackground] = useState<'auto' | 'black'>('auto');
   const [audio, setAudio] = useState<'original' | 'mix' | 'none'>('original');
   const [quality, setQuality] = useState<'standard' | 'high'>('standard');
-  const [out, setOut] = useState<{ url: string; filename: string; warnings: string[] } | null>(null);
+  // the latest finished video of this project (kept after leaving the page)
+  const out = job?.status === 'succeeded' && job.output ? job.output as { url: string; filename: string; warnings: string[] } : null;
   const canMix = !!view?.audio.vocals?.available && !!view?.audio.instrumental?.available;
+  const stemsOutdated = !!(view?.audio.vocals?.outdated || view?.audio.instrumental?.outdated);
   const running = job && (job.status === 'queued' || job.status === 'running');
   const vocalPct = style.output?.vocal_keep_pct ?? 20;
   const setVocalPct = (v: number) => patch((s) => { s.output = { ...s.output, vocal_keep_pct: v }; });
 
   const start = () => run(async () => {
-    setOut(null);
     await beforeBurn();  // the burn uses the saved style: save the latest edit first
     const j = await api.post<Job>(ppath('/karaoke/burn'), { background, audio, quality, vocal_keep_pct: vocalPct });
-    trackJob(j, { label: '字幕烧录', onDone: (d) => { if (d.status === 'succeeded' && d.output) setOut(d.output); } });
-  }, '无法开始烧录');
+    trackJob(j, { label: '生成视频（烧录字幕）' });
+  }, '无法开始生成视频');
 
   return (
     <Card>
-      <CardHeader icon={<Film className="size-4" />} title="导出字幕 / 烧录视频"
-        description="ASS 可用于任何支持 ASS 的播放器或剪辑软件；烧录会把字幕画进画面（H.264 MP4）。" />
+      <CardHeader icon={<Film className="size-4" />} title="导出字幕 / 生成视频"
+        description="ASS 可用于任何支持 ASS 的播放器或剪辑软件；生成视频会把字幕烧录进画面（H.264 MP4），和极简模式的“生成视频”相同。" />
       <CardBody className="space-y-5">
         <div className="flex flex-wrap items-center gap-3">
-          <a href={ppath('/export/karaoke-ass?download=1')} download>
-            <Button variant="outline" icon={<Download className="size-4" />}>下载 ASS 字幕</Button>
-          </a>
-          <span className="text-xs text-muted">{project.video ? '时间已与原视频对齐（含音轨起点偏移）' : '时间从音频起点开始'}</span>
+          <DownloadButton href={ppath('/export/karaoke-ass?download=1')} before={beforeBurn} variant="outline" icon={<Download className="size-4" />}>
+            下载 ASS 字幕
+          </DownloadButton>
+          <span className="text-xs text-muted">{project.video ? '时间已与原视频对齐（含音轨起点偏移）' : '时间从音频起点开始'}；使用当前结果和已保存的样式</span>
         </div>
 
         <div className="grid gap-4 rounded-xl border border-line p-4 md:grid-cols-3">
           <div className="space-y-1.5">
             <div className="text-[13px] font-medium">背景</div>
-            <Segmented size="sm" value={project.video ? background : 'black'} onChange={setBackground}
+            <Segmented size="sm" label="背景" value={project.video ? background : 'black'} onChange={setBackground}
               options={[{ value: 'auto', label: '原视频', disabled: !project.video }, { value: 'black', label: '纯黑' }]} />
             {!project.video && <div className="text-xs text-subtle">上传视频作为原曲即可使用原视频画面</div>}
           </div>
           <div className="space-y-1.5">
             <div className="text-[13px] font-medium">音频</div>
-            <Segmented size="sm" value={audio} onChange={setAudio} options={[
+            <Segmented size="sm" label="音频" value={audio} onChange={setAudio} options={[
               { value: 'original', label: '原声' },
-              { value: 'mix', label: '降低人声', disabled: !canMix, title: canMix ? undefined : '需要先分离人声' },
+              { value: 'mix', label: '降低人声', disabled: !canMix,
+                title: canMix ? undefined : stemsOutdated ? '分轨来自更换前的原曲：请先重新分离' : '需要先分离人声' },
               { value: 'none', label: '无' },
             ]} />
           </div>
           <div className="space-y-1.5">
             <div className="text-[13px] font-medium">画质</div>
-            <Segmented size="sm" value={quality} onChange={setQuality} options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
+            <Segmented size="sm" label="画质" value={quality} onChange={setQuality} options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
           </div>
           {audio === 'mix' && canMix && (
             <div className="space-y-1.5 md:col-span-3">
@@ -344,22 +390,20 @@ function BurnCard({ style, patch, beforeBurn }: {
         <div className="flex flex-wrap items-center justify-end gap-3">
           {running && (
             <div className="flex min-w-60 flex-1 items-center gap-3">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${Math.max(2, (job!.progress ?? 0) * 100)}%` }} />
-              </div>
+              <Progress value={job!.progress ?? 0} className="flex-1" label="生成视频进度" />
               <span className="text-xs text-muted">{job!.message}</span>
             </div>
           )}
-          <Button variant="primary" onClick={start} loading={!!running} icon={<Flame className="size-4" />}>一键烧录</Button>
+          <Button variant="primary" onClick={start} loading={!!running} icon={<Flame className="size-4" />}>一键烧录（生成视频）</Button>
         </div>
-        {job?.status === 'failed' && <Callout tone="danger" title="烧录失败">{job.error ?? job.message}</Callout>}
+        {job?.status === 'failed' && <Callout tone="danger" title="生成视频失败">{job.error ?? job.message}</Callout>}
         {out && (
           <Callout tone="ok" title={out.filename}
-            actions={<a href={out.url} download><Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</Button></a>}>
-            {out.warnings.length ? out.warnings.join('；') : '烧录完成。'}
+            actions={<DownloadButton href={out.url} big filename={out.filename} size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</DownloadButton>}>
+            {out.warnings.length ? out.warnings.join('；') : `生成完成（${fmtRelative(job!.finished ?? job!.created)}）。`}
           </Callout>
         )}
-        <p className="text-xs text-subtle">烧录耗时约为歌曲时长的 0.3–1 倍，可以离开本页，任务在后台继续（右上角可查看进度或取消）。</p>
+        <p className="text-xs text-subtle">生成视频耗时约为歌曲时长的 0.3–1 倍，可以离开本页，操作在后台继续（右上角可查看进度或取消）；完成后回到这里也能下载。</p>
         {!project.video && <Badge tone="neutral">无视频：输出 1920×1080 纯黑背景视频</Badge>}
       </CardBody>
     </Card>

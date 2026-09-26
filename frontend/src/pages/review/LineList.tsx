@@ -31,7 +31,7 @@ export function LineList({ stats, selected, onSelect, checked, onToggleCheck, fi
   return (
     <div className="flex min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2.5">
-        <Segmented<LineFilter>
+        <Segmented<LineFilter> label="筛选歌词行"
           size="sm"
           value={filter}
           onChange={onFilter}
@@ -48,43 +48,43 @@ export function LineList({ stats, selected, onSelect, checked, onToggleCheck, fi
           const isSel = s.line.id === selected;
           const isChecked = checked.has(s.line.id);
           return (
+            // two sibling controls (no button inside a button): the check box and the row itself
             <div
               key={s.line.id}
               data-line={s.line.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(s.line.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter') onSelect(s.line.id); }}
               className={cn(
-                'focus-ring group flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-2 transition',
+                'group flex items-start gap-2.5 rounded-lg px-2 py-2 transition',
                 isSel ? 'bg-accent-soft ring-1 ring-accent/40' : 'hover:bg-surface-2',
               )}
             >
               <button
                 type="button"
-                aria-label={isChecked ? '取消选择' : '选择用于局部重跑'}
+                role="checkbox"
+                aria-checked={isChecked}
+                aria-label={`第 ${s.index + 1} 行用于局部重跑`}
                 title="选择用于局部重跑"
-                onClick={(e) => { e.stopPropagation(); onToggleCheck(s.line.id); }}
+                onClick={() => onToggleCheck(s.line.id)}
                 className={cn(
                   'focus-ring mt-0.5 grid size-4 shrink-0 place-items-center rounded border transition',
-                  isChecked ? 'border-accent bg-accent text-accent-fg' : 'border-line-strong bg-surface opacity-60 group-hover:opacity-100',
+                  isChecked ? 'border-accent bg-accent text-accent-fg' : 'border-line-strong bg-surface opacity-60 group-hover:opacity-100 focus-visible:opacity-100',
                 )}
               >
                 {isChecked && <Check className="size-3" strokeWidth={3} />}
               </button>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
+              <button type="button" aria-current={isSel || undefined} onClick={() => onSelect(s.line.id)}
+                className="focus-ring min-w-0 flex-1 cursor-pointer rounded text-left">
+                <span className="flex items-baseline gap-2">
                   <span className="tabular w-6 shrink-0 text-right text-[11px] text-subtle">{s.index + 1}</span>
                   <span className={cn('truncate text-[13px]', isSel ? 'font-semibold text-fg' : 'text-fg')}>{s.line.text || '（空）'}</span>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-1 pl-8">
+                </span>
+                <span className="mt-1 flex flex-wrap items-center gap-1 pl-8">
                   <span className="tabular font-mono text-[11px] text-muted">{fmtMs(s.start)}</span>
                   {s.failed > 0 && <Badge tone="danger">{s.failed} 无时间</Badge>}
                   {s.issues.length > 0 && <Badge tone="warn">{s.issues.length} 提示</Badge>}
                   {s.manual > 0 && <Badge tone="ok">{s.manual} 人工</Badge>}
                   {s.candidates > 0 && <Badge tone="accent">{s.candidates} 候选</Badge>}
-                </div>
-              </div>
+                </span>
+              </button>
             </div>
           );
         })}

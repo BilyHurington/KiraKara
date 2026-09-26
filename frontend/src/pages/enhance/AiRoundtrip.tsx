@@ -7,10 +7,11 @@ import { api } from '@/lib/api';
 import { cn, copyText, fmtRelative, readFileText } from '@/lib/format';
 import type { Job, PatchLine, ProjectView } from '@/lib/types';
 import { cancelJob, ppath, run, setPV, toast, trackJob, useJob, useProject } from '@/store/app';
+import { useDraft } from '@/store/drafts';
 import { loadSettings, useSimple } from '@/store/simple';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
 import {
-  Badge, Button, Callout, Card, CardBody, CardHeader, DropZone, Progress, Segmented, Textarea,
+  Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, DropZone, Progress, Segmented, Textarea,
 } from '@/components/ui';
 
 interface Report {
@@ -49,13 +50,26 @@ export function AiRoundtripCard() {
   const [prompt, setPrompt] = useState<{ prompt: string; snapshot_id: string; copied: boolean } | null>(null);
   const [busyPrompt, setBusyPrompt] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  // step 2
-  const [reply, setReply] = useState('');
+  // step 2 (the pasted reply is kept while the page is left)
+  const [reply, setReply] = useDraft('ai.reply', '');
   const [busyValidate, setBusyValidate] = useState(false);
   // step 3
   const [report, setReport] = useState<{ id: string; report: Report } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busyApply, setBusyApply] = useState(false);
+
+  // a one-click AI reading that finished while this page was not open (or before a reload): show its report
+  const aiJob = useJob('ai');
+  const restored = useRef<string | null>(null);
+  useEffect(() => {
+    if (!aiJob || aiJob.status !== 'succeeded' || restored.current === aiJob.id || report) return;
+    const out = aiJob.output as { report_id?: string; report?: Report } | null;
+    if (!out?.report_id || !out.report) return;
+    restored.current = aiJob.id;
+    const rt = out.report.roundtrip_id ? project.ai_roundtrips.find((x) => x.id === out.report!.roundtrip_id) : null;
+    if (rt && (rt.status === 'applied' || rt.status === 'rejected')) return;  // already dealt with
+    showReport({ report_id: out.report_id, report: out.report });
+  }, [aiJob, report]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // text routed here from the lyrics page
   useEffect(() => {
@@ -124,7 +138,7 @@ export function AiRoundtripCard() {
         description="让 AI 检查每个片段的读音。可以一键交给本机的 Claude Code / Codex 或 API，也可以复制提示词到任意网页聊天再贴回结果。AI 的回复只作为注音补丁：校验并预览后才会应用，不能修改时间、偏移或锁定的读音。"
       />
       <CardBody className="space-y-6">
-        <AutoAi scope={scope} setScope={setScope} total={sung.length} uncertainIds={uncertainIds} onReport={showReport} />
+        <AutoAi scope={scope} setScope={setScope} total={sung.length} uncertainIds={uncertainIds} />
 
         <div className="flex items-center gap-3 text-xs font-medium text-subtle">
           <span className="h-px flex-1 bg-line" />或者：网页聊天往返（复制提示词 → 粘贴回复）<span className="h-px flex-1 bg-line" />
@@ -133,7 +147,7 @@ export function AiRoundtripCard() {
         {/* step 1 */}
         <Step n={1} title="生成并复制提示词" done={!!prompt}>
           <div className="flex flex-wrap items-center gap-3">
-            <Segmented<'all' | 'uncertain'>
+            <Segmented<'all' | 'uncertain'> label="提示词范围"
               size="sm"
               value={scope}
               onChange={setScope}
@@ -232,38 +246,38 @@ export function AiRoundtripCard() {
 const PROVIDER_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', openai: 'API' };
 
 /** One click: the server sends the prompt to the configured CLI / API and validates the reply. */
-function AutoAi({ scope, setScope, total, uncertainIds, onReport }: {
+function AutoAi({ scope, setScope, total, uncertainIds }: {
   scope: 'all' | 'uncertain'; setScope: (s: 'all' | 'uncertain') => void; total: number; uncertainIds: string[];
-  onReport: (out: { report_id: string; report: Report }) => void;
 }) {
   const settings = useSimple((s) => s.settings);
+  const settingsError = useSimple((s) => s.settingsError);
   const job = useJob('ai');
   const [editing, setEditing] = useState(false);
-  const [meta, setMeta] = useState<string | null>(null);
   const running = !!job && (job.status === 'queued' || job.status === 'running');
-  useEffect(() => { if (!settings) void run(() => loadSettings()); }, [settings]);
-  if (!settings) return null;
+  useEffect(() => { if (!settings && !settingsError) void run(() => loadSettings(), '读取设置失败'); }, [settings, settingsError]);
+  if (!settings) {
+    return settingsError ? (
+      <Callout tone="warn" title="读取 AI 设置失败" actions={<Button size="xs" onClick={() => void run(() => loadSettings(), '读取设置失败')}>重试</Button>}>
+        {settingsError}
+      </Callout>
+    ) : null;
+  }
   const ai = settings.ai;
   const configured = ai.provider !== 'none';
+  // what the last reply cost (from the finished job, also after leaving the page)
+  const out = job?.status === 'succeeded' ? job.output as { report_id: string; report: Report; meta?: { attempts: { elapsed_s: number; model: string }[]; cost_usd: number | null } } | null : null;
+  const m = out?.meta;
+  const meta = m ? (() => {
+    const secs = m.attempts.reduce((a, x) => a + x.elapsed_s, 0);
+    const model = m.attempts.at(-1)?.model;
+    return `${Math.round(secs)} 秒${model ? ` · ${model}` : ''}${m.cost_usd != null ? ` · $${m.cost_usd.toFixed(3)}` : ''}${m.attempts.length > 1 ? ' · 自动重试了一次' : ''}`;
+  })() : null;
 
   const start = () => run(async () => {
-    setMeta(null);
     const body = scope === 'uncertain' ? { line_ids: uncertainIds } : {};
     const j = await api.post<Job>(ppath('/ai/auto'), body);
-    trackJob(j, {
-      label: 'AI 注音',
-      onDone: (d) => {
-        const out = d.output as { report_id: string; report: Report; meta?: { attempts: { elapsed_s: number; model: string }[]; cost_usd: number | null } } | null;
-        if (d.status !== 'succeeded' || !out) return;
-        onReport(out);
-        const m = out.meta;
-        if (m) {
-          const secs = m.attempts.reduce((a, x) => a + x.elapsed_s, 0);
-          const model = m.attempts.at(-1)?.model;
-          setMeta(`${Math.round(secs)} 秒${model ? ` · ${model}` : ''}${m.cost_usd != null ? ` · $${m.cost_usd.toFixed(3)}` : ''}${m.attempts.length > 1 ? ' · 自动重试了一次' : ''}`);
-        }
-      },
-    });
+    // the report shows up in step 3 once the job is done (see the restore in AiRoundtripCard)
+    trackJob(j, { label: 'AI 注音', doneText: 'AI 注音已返回结果：请在第 3 步预览并应用' });
   }, '无法开始 AI 注音');
 
   return (
@@ -285,7 +299,7 @@ function AutoAi({ scope, setScope, total, uncertainIds, onReport }: {
       )}
       {configured && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Segmented<'all' | 'uncertain'> size="sm" value={scope} onChange={setScope} options={[
+          <Segmented<'all' | 'uncertain'> size="sm" label="AI 注音范围" value={scope} onChange={setScope} options={[
             { value: 'all', label: `全部 ${total} 行` },
             { value: 'uncertain', label: `仅待确认 ${uncertainIds.length} 行`, disabled: uncertainIds.length === 0 },
           ]} />
@@ -294,9 +308,10 @@ function AutoAi({ scope, setScope, total, uncertainIds, onReport }: {
           </Button>
           {running && (
             <>
-              <Progress value={job!.progress} className="w-32" />
+              <Progress value={job!.progress} className="w-32" label="AI 注音进度" />
               <span className="text-xs text-muted">{job!.message}</span>
-              <Button size="xs" variant="ghost" onClick={() => run(() => cancelJob(job!.id))}>取消</Button>
+              <ConfirmButton size="xs" variant="ghost" question="取消 AI 注音？" confirmLabel="取消" keepLabel="继续等待"
+                onConfirm={() => void run(() => cancelJob(job!.id))}>取消</ConfirmButton>
             </>
           )}
           {!running && meta && <span className="text-xs text-muted">已收到回复：{meta}；在下方第 3 步预览并应用</span>}

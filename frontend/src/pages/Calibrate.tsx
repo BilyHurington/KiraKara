@@ -7,15 +7,16 @@
 import {
   ArrowRight, ChevronLeft, ChevronRight, Crosshair, Flag, MapPin, Play, PlayCircle, RotateCcw, Timer, Undo2, Wand2,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs, fmtSigned } from '@/lib/format';
+import { ignoreShortcut, MOD_KEY } from '@/lib/keys';
 import type { Job, Line, ProjectView } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
-import { ppath, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
+import { ppath, resumeJobs, run, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
 import {
-  Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Kbd, KV, NumberInput, PageHeader, Tip,
+  Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, EmptyState, Kbd, KV, NumberInput, PageHeader, Tip,
 } from '@/components/ui';
 
 export function CalibratePage() {
@@ -81,6 +82,11 @@ function Calibration() {
       toast('info', '请先上传并加载音频');
       return;
     }
+    if (line.imported_start_ms === null && !line.anchor) {
+      // the shift is "marked − LRC time": a line without a time cannot give one
+      toast('warn', '这一行没有歌词时间，不能用来标记', '请选择一行带时间的歌词（右侧列表里显示时间的行）');
+      return;
+    }
     const ms = Math.round(player.positionMs());
     void post('/calibration/mark', { line_id: line.id, marked_ms: ms },
       (pv) => `已标记 ${fmtMs(ms)} · 全局平移 ${fmtSigned(pv.project.calibration.user_shift_ms)}`);
@@ -89,11 +95,10 @@ function Calibration() {
   const setShift = (v: number) => post('/calibration/shift', { user_shift_ms: Math.round(v) },
     (pv) => `全局平移 ${fmtSigned(pv.project.calibration.user_shift_ms)}`);
 
-  // keyboard M = mark at playhead
+  // keyboard M = mark at playhead (not while typing, in a dialog, or held down)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (ignoreShortcut(e)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.toLowerCase() === 'm') {
         e.preventDefault();
@@ -131,13 +136,14 @@ function Calibration() {
 
   // automatic suggestion: a trial alignment on the (separated) vocals
   type Suggestion = { shift_ms: number; agree: number; lines_checked: number; audio_role: string; vocal_onset_ms: number | null };
+  // the suggestion comes from the latest finished job, so it is still there after leaving the page
   const sugJob = useJob('calibrate');
-  const [sug, setSug] = useState<Suggestion | null>(null);
+  useEffect(() => { void resumeJobs(project.id); }, [project.id]);
+  const sug = sugJob?.status === 'succeeded' && sugJob.output ? sugJob.output as Suggestion : null;
   const suggesting = !!sugJob && (sugJob.status === 'queued' || sugJob.status === 'running');
   const suggest = () => run(async () => {
-    setSug(null);
     const j = await api.post<Job>(ppath('/calibration/suggest'));
-    trackJob(j, { label: '自动匹配', onDone: (d) => { if (d.status === 'succeeded' && d.output) setSug(d.output as Suggestion); } });
+    trackJob(j, { label: '自动匹配偏移', doneText: '自动匹配完成：建议已显示在“首音校准”页' });
   }, '无法开始自动匹配');
   const baseOf = (l: Line | null) => (l?.imported_start_ms == null ? null : l.imported_start_ms + doc.embedded_shift_ms);
   const playSuggested = () => {
@@ -149,13 +155,14 @@ function Calibration() {
   };
 
   const noTimes = timed.length === 0;
+  const lineTimed = !!line && (line.imported_start_ms !== null || !!line.anchor);
 
   return (
     <>
       <PageHeader
         eyebrow="第 4 步 · LRC 增强"
         title="首音校准"
-        description="选择一句歌词，在它第一处实际发音的位置标记，程序据此计算全局偏移。音频不会被移动或剪掉前奏，只计算歌词锚点。"
+        description="选择一句歌词，在它第一处实际发音的位置标记，程序据此计算全局偏移（极简模式里的“确认开头位置”就是这一步）。音频不会被移动或剪掉前奏，只计算歌词锚点。"
         actions={<Button variant="primary" onClick={() => setStep('align')} icon={<ArrowRight className="size-4" />}>下一步：对齐</Button>}
       />
 
@@ -210,7 +217,8 @@ function Calibration() {
                 <Button variant="outline" onClick={playBefore} disabled={!eff} icon={<PlayCircle className="size-4" />}>
                   从有效句首前 2 秒播放
                 </Button>
-                <Button variant="primary" size="lg" onClick={mark} disabled={!line || noTimes} icon={<Flag className="size-4" />}>
+                <Button variant="primary" size="lg" onClick={mark} disabled={!line || noTimes || !lineTimed} icon={<Flag className="size-4" />}
+                  disabledReason={noTimes ? '歌词没有行时间' : !lineTimed ? '这一行没有歌词时间：请选择一行带时间的歌词' : null}>
                   在播放头标记首个发音 <Kbd>M</Kbd>
                 </Button>
               </div>
@@ -256,16 +264,28 @@ function Calibration() {
                     <Button key={d} size="sm" variant="secondary" onClick={() => setShift(cal.user_shift_ms + d)}>+{d} ms</Button>
                   ))}
                   <span className="mx-1 h-6 w-px bg-line" />
-                  <Tip content="确认当前 LRC 时间无需平移（零偏移也需要明确确认）">
-                    <Button size="sm" variant="soft" onClick={() => post('/calibration/confirm-zero', undefined, () => '已确认零偏移')} icon={<RotateCcw className="size-3.5" />}>
-                      确认零偏移
-                    </Button>
+                  {cal.user_shift_ms === 0 ? (
+                    <Tip content="确认当前 LRC 时间无需平移（零偏移也需要明确确认）">
+                      <Button size="sm" variant="soft" onClick={() => post('/calibration/confirm-zero', undefined, () => '已确认零偏移')} icon={<RotateCcw className="size-3.5" />}>
+                        确认零偏移
+                      </Button>
+                    </Tip>
+                  ) : (
+                    <ConfirmButton size="sm" variant="soft" icon={<RotateCcw className="size-3.5" />}
+                      question={`把全局平移 ${fmtSigned(cal.user_shift_ms)} 清零并确认？`} confirmLabel="清零并确认" keepLabel="保留"
+                      onConfirm={() => void post('/calibration/confirm-zero', undefined, () => '已清零全局平移并确认')}>
+                      设为零偏移
+                    </ConfirmButton>
+                  )}
+                  <Tip content={`撤销上一次标记或平移（${MOD_KEY}+Z 只撤销“人工检查”里的时间修改，不撤销校准）`}>
+                    <span className="inline-flex">
+                      <Button size="sm" variant="ghost" disabled={!cal.history.length}
+                        onClick={() => post('/calibration/undo', undefined, (pv) => `已撤销 · 平移 ${fmtSigned(pv.project.calibration.user_shift_ms)}`)}
+                        icon={<Undo2 className="size-3.5" />}>
+                        撤销校准
+                      </Button>
+                    </span>
                   </Tip>
-                  <Button size="sm" variant="ghost" disabled={!cal.history.length}
-                    onClick={() => post('/calibration/undo', undefined, (pv) => `已撤销 · 平移 ${fmtSigned(pv.project.calibration.user_shift_ms)}`)}
-                    icon={<Undo2 className="size-3.5" />}>
-                    撤销
-                  </Button>
                 </div>
               </div>
             </CardBody>
@@ -338,7 +358,7 @@ function ChecksCard({ line, lineNo }: { line: Line | null; lineNo: Map<string, n
         icon={<MapPin className="size-4" />}
         title="中段 / 末段检查"
         description="单点只能确定整体平移。在中段、末段句子的首个发音处添加检查点，核对整曲是否一致。"
-        actions={<Button size="sm" onClick={addCheck} disabled={!line}>以播放头为所选行添加检查点</Button>}
+        actions={<Button size="sm" onClick={addCheck} disabled={!line || (line.imported_start_ms === null && !line.anchor)} disabledReason="所选行没有歌词时间">以播放头为所选行添加检查点</Button>}
       />
       <CardBody className="space-y-3">
         {cal.checks.length === 0 ? (

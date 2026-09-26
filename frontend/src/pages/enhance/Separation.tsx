@@ -6,11 +6,12 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs, ROLE_LABEL } from '@/lib/format';
 import type { AudioAsset, Job } from '@/lib/types';
-import { cancelJob, ppath, refreshProject, run, trackJob, useApp, useJob, useProject } from '@/store/app';
-import { Badge, Button, Callout, Card, CardBody, CardHeader, Progress, Segmented } from '@/components/ui';
+import { cancelJob, isOpenProject, ppath, refreshProject, run, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
+import { Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, Progress, Segmented } from '@/components/ui';
 
 export function SeparationCard() {
   const project = useProject()!;
+  const view = useView()!;
   const info = useApp((s) => s.info);
   const job = useJob('separate');
   const running = job && (job.status === 'queued' || job.status === 'running');
@@ -23,7 +24,7 @@ export function SeparationCard() {
 
   const start = () => run(async () => {
     const j = await api.post<Job>(ppath('/separate'), { preset, device });
-    trackJob(j, { label: '人声分离', onDone: refreshProject });
+    trackJob(j, { label: '人声分离', onDone: (d) => (isOpenProject(d.project_id) ? refreshProject() : undefined) });
   }, '无法开始分离');
 
   return (
@@ -34,7 +35,8 @@ export function SeparationCard() {
         description="可选：生成人声与伴奏分轨，用于对齐输入、试听和“人声保留”混音。分离不保证更准，异常句可在对齐时切回原曲比较。"
         actions={
           <Button variant="primary" size="sm" icon={<Scissors className="size-4" />} loading={!!running}
-            disabled={!available || !hasOriginal || !!running} onClick={start}>
+            disabled={!available || !hasOriginal || !!running} onClick={start}
+            disabledReason={!available ? '未安装分离组件（见下方说明）' : !hasOriginal ? '请先在“音频与歌词”中上传原曲' : null}>
             开始分离
           </Button>
         }
@@ -51,7 +53,7 @@ export function SeparationCard() {
         <div className="flex flex-wrap items-center gap-3 text-[13px]">
           <span className="font-medium text-muted">运行设备</span>
           <Segmented<'auto' | 'cpu'>
-            size="sm"
+            size="sm" label="运行设备"
             value={device}
             onChange={setDevice}
             options={[
@@ -95,7 +97,7 @@ export function SeparationCard() {
             <p className="text-[13px] text-subtle">还没有人声 / 伴奏分轨。也可以在“音频与歌词”中导入已有的同源分轨。</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              {stems.map((a) => <StemTile key={a.id} asset={a} />)}
+              {stems.map((a) => <StemTile key={a.id} asset={a} outdated={!!view.audio[a.role as 'vocals']?.outdated} />)}
             </div>
           )}
         </div>
@@ -115,10 +117,13 @@ function JobStatus({ job }: { job: Job }) {
         </Badge>
         {live && <span className="tabular text-xs text-muted">{Math.round(job.progress * 100)}%</span>}
         {live && (
-          <Button className="ml-auto" size="xs" variant="ghost" icon={<X className="size-3.5" />} onClick={() => run(() => cancelJob(job.id))}>取消</Button>
+          <span className="ml-auto">
+            <ConfirmButton size="xs" variant="ghost" icon={<X className="size-3.5" />} question="取消分离？已完成的部分会丢弃"
+              confirmLabel="取消分离" keepLabel="继续" onConfirm={() => void run(() => cancelJob(job.id))}>取消</ConfirmButton>
+          </span>
         )}
       </div>
-      {live && <Progress value={job.progress} className="mt-2" />}
+      {live && <Progress value={job.progress} className="mt-2" label="人声分离进度" />}
       <div className={cn('mt-1.5 text-xs break-words', job.status === 'failed' ? 'text-danger' : 'text-muted')}>
         {job.status === 'failed' ? `失败原因：${job.error ?? job.message}（不会自动回退为原曲）` : job.message}
       </div>
@@ -126,15 +131,17 @@ function JobStatus({ job }: { job: Job }) {
   );
 }
 
-function StemTile({ asset }: { asset: AudioAsset }) {
+function StemTile({ asset, outdated }: { asset: AudioAsset; outdated: boolean }) {
   const sync = asset.sync_report as Record<string, any> | null;
   return (
-    <div className="rounded-xl border border-line px-4 py-3">
-      <div className="flex items-center gap-2">
+    <div className={cn('rounded-xl border px-4 py-3', outdated ? 'border-warn/50 bg-warn-soft/50' : 'border-line')}>
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-semibold">{ROLE_LABEL[asset.role]}</span>
         <Badge tone="neutral">{asset.source.kind === 'separation' ? '分离' : '导入'}</Badge>
-        {sync && <Badge tone={sync.ok ? 'ok' : 'warn'} dot className="ml-auto">{sync.ok ? '同步正常' : '同步未验证'}</Badge>}
+        {outdated ? <Badge tone="warn" dot className="ml-auto">来自更换前的原曲</Badge>
+          : sync && <Badge tone={sync.ok ? 'ok' : 'warn'} dot className="ml-auto">{sync.ok ? '同步正常' : '同步未验证'}</Badge>}
       </div>
+      {outdated && <div className="mt-1 text-xs text-warn">来自更换前的原曲，需重新分离（点上方“开始分离”）；在此之前不会被使用。</div>}
       <div className="mt-1 text-xs text-muted">
         {fmtMs(asset.duration_ms)} · {asset.sample_rate} Hz · {asset.channels} 声道
         {asset.source.model && <> · {asset.source.model}</>}

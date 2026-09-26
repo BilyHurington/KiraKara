@@ -5,17 +5,36 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, FontFamily, KaraokeStyle } from '@/lib/types';
 import { loadProjects, run, toast, useApp } from '@/store/app';
-import { saveSettings, useSimple } from '@/store/simple';
+import { loadSettings, saveSettings, useSimple } from '@/store/simple';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
 import { StylePanel } from '@/components/karaoke/StylePanel';
-import { Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Switch } from '@/components/ui';
+import { Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
 
 type Simple = AppSettings['simple'];
 
 export function SimpleSettings() {
   const settings = useSimple((s) => s.settings);
+  const settingsError = useSimple((s) => s.settingsError);
   const info = useApp((s) => s.info);
-  if (!settings) return null;
+  const [retrying, setRetrying] = useState(false);
+  if (!settings) {
+    const retry = async () => {
+      setRetrying(true);
+      try { await run(() => loadSettings(), '读取设置失败'); } finally { setRetrying(false); }
+    };
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
+        {settingsError ? (
+          <Callout tone="danger" title="读取设置失败" actions={<Button size="sm" loading={retrying} onClick={() => void retry()}>重试</Button>}>
+            {settingsError}
+          </Callout>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-muted" role="status"><Spinner />正在读取设置…</div>
+        )}
+      </div>
+    );
+  }
   const s = settings.simple;
   const save = (patch: Partial<Simple>) => run(() => saveSettings({ simple: patch }), '保存设置失败');
 
@@ -46,12 +65,16 @@ export function SimpleSettings() {
           {s.separate && (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="模型">
-                <Select value={s.separation_preset} onChange={(e) => save({ separation_preset: e.target.value })}>
+                <Select value={s.separation_preset} disabled={!info} onChange={(e) => save({ separation_preset: e.target.value })}>
+                  {/* the saved choice is always listed, also while the list loads or when it is no longer offered */}
+                  {!info?.separation_presets.some((p) => p.name === s.separation_preset) && (
+                    <option value={s.separation_preset}>{s.separation_preset}{info ? '（不可用）' : '（读取模型列表中…）'}</option>
+                  )}
                   {(info?.separation_presets ?? []).map((p) => <option key={p.name} value={p.name}>{p.name}（{p.architecture}）</option>)}
                 </Select>
               </Field>
               <Group label="运行设备">
-                <Segmented<'auto' | 'cpu'> value={s.separation_device} onChange={(v) => save({ separation_device: v })}
+                <Segmented<'auto' | 'cpu'> label="运行设备" value={s.separation_device} onChange={(v) => save({ separation_device: v })}
                   options={[{ value: 'auto', label: '自动（GPU / MPS）' }, { value: 'cpu', label: '仅 CPU' }]} />
               </Group>
             </div>
@@ -69,7 +92,7 @@ export function SimpleSettings() {
             <>
               <p className="text-xs text-muted">视频里的声音（原声 / 降低人声 / 无声）每首歌在“制作”页第 4 步选择，并会记住上次的选择。</p>
               <Group label="画质">
-                <Segmented<Simple['quality']> value={s.quality} onChange={(v) => save({ quality: v })}
+                <Segmented<Simple['quality']> label="画质" value={s.quality} onChange={(v) => save({ quality: v })}
                   options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
               </Group>
             </>
@@ -108,7 +131,7 @@ function DefaultStyleCard({ style }: { style: KaraokeStyle }) {
 
   return (
     <Card>
-      <CardHeader icon={<Subtitles className="size-4" />} title="卡拉OK字幕样式"
+      <CardHeader icon={<Subtitles className="size-4" />} title="字幕样式（第 4 步的“设置里的样式”）"
         description="第 4 步选“设置里的样式”时完整使用这套样式；选“模版配色”时使用它的布局、字号、时间等，配色和荧光由模版决定。可以保存成预设，随时切换。" />
       <CardBody className="space-y-3 pt-3">
         <StylePanel style={draft} onChange={change} fonts={fonts.families} defaultFont={fonts.default}

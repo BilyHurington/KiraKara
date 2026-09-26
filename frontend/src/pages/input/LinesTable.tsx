@@ -4,6 +4,7 @@ import { Anchor, Combine, ListOrdered, Scissors } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs } from '@/lib/format';
+import { isEnter, isEscape } from '@/lib/keys';
 import type { Line, ProjectView } from '@/lib/types';
 import { player } from '@/audio/player';
 import { ppath, run, setPV, toast, useProject, useView } from '@/store/app';
@@ -113,7 +114,7 @@ export function LinesTable() {
                         {Object.entries(KIND_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </Select>
                     </Td>
-                    <Td><Switch checked={l.sing} onChange={(v) => patchLine(l.id, { sing: v })} /></Td>
+                    <Td><Switch checked={l.sing} ariaLabel={`第 ${i + 1} 行参与对齐`} onChange={(v) => patchLine(l.id, { sing: v })} /></Td>
                     <Td className="text-right">
                       <div className="flex justify-end gap-0.5 opacity-60 transition group-hover:opacity-100">
                         <IconButton label="单行锚点（原音频绝对时间）" size="xs" onClick={() => setAnchorLine(l)}>
@@ -163,10 +164,11 @@ function InlineText({ value, onCommit }: { value: string; onCommit: (v: string) 
       onChange={(e) => setDraft(e.target.value)}
       onBlur={(e) => commit(e.currentTarget.value)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-        if (e.key === 'Escape') { setDraft(null); (e.currentTarget as HTMLInputElement).value = value; e.currentTarget.blur(); }
+        if (isEnter(e)) e.currentTarget.blur();
+        if (isEscape(e)) { setDraft(null); (e.currentTarget as HTMLInputElement).value = value; e.currentTarget.blur(); }
       }}
       title="编辑文本（修改后该行读音会重新生成，旧结果标记为过期）"
+      aria-label="歌词文本（回车保存，Esc 取消）"
     />
   );
 }
@@ -200,7 +202,7 @@ function AnchorDialog({ line, onClose }: { line: Line; onClose: () => void }) {
         <p className="text-[13px] text-muted">
           使用原音频绝对时间，不随全局平移移动。适合中段 / 末段与整体平移不一致（版本或速度差异）时逐行约束；程序不会自动拉伸整曲时间。
         </p>
-        <Field label="句首时间（ms）" hint={ms !== null ? fmtMs(ms) : undefined}>
+        <Field group label="句首时间（ms）" hint={ms !== null ? fmtMs(ms) : undefined}>
           <div className="flex gap-2">
             <NumberInput value={ms} onCommit={(v) => setMs(v === null ? null : Math.max(0, Math.round(v)))} suffix="ms" min={0} className="flex-1" />
             <Button size="sm" onClick={() => setMs(Math.round(player.positionMs()))}>取播放头</Button>

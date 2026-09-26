@@ -1,10 +1,12 @@
 import * as Popover from '@radix-ui/react-popover';
 import { Activity, Download, Moon, Redo2, Sparkles, Sun, Undo2, X } from 'lucide-react';
 import { cn } from '@/lib/format';
-import { cancelJob, ppath, run, setTheme, STEPS, useApp } from '@/store/app';
+import { MOD_KEY, SHIFT_KEY } from '@/lib/keys';
+import { cancelJob, isOpenProject, ppath, projectName, run, setTheme, STEPS, useApp } from '@/store/app';
 import { hasActiveTasks, setUi, useSimple } from '@/store/simple';
 import { redo, undo } from '@/store/edits';
-import { Badge, Button, IconButton, Kbd, Progress, Tip } from '@/components/ui';
+import { DownloadButton } from '@/components/DownloadButton';
+import { Badge, ConfirmButton, IconButton, Kbd, Progress, Tip } from '@/components/ui';
 
 export function Topbar() {
   const pv = useApp((s) => s.pv);
@@ -33,17 +35,18 @@ export function Topbar() {
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {pv && (
           <>
-            <IconButton label={`撤销人工修改（${nUndo}） ⌘Z`} disabled={!nUndo} onClick={() => void undo()}><Undo2 className="size-4" /></IconButton>
-            <IconButton label={`重做（${nRedo}） ⌘⇧Z`} disabled={!nRedo} onClick={() => void redo()}><Redo2 className="size-4" /></IconButton>
+            <IconButton label={`撤销人工修改的时间（${nUndo}） ${MOD_KEY}+Z`} disabledReason="还没有可撤销的时间修改（只记录人工检查中对单元时间的修改）"
+              disabled={!nUndo} onClick={() => void undo()}><Undo2 className="size-4" /></IconButton>
+            <IconButton label={`重做（${nRedo}） ${MOD_KEY}+${SHIFT_KEY}+Z`} disabledReason="没有可重做的修改"
+              disabled={!nRedo} onClick={() => void redo()}><Redo2 className="size-4" /></IconButton>
             <span className="mx-1 h-5 w-px bg-line" />
           </>
         )}
         <JobsIndicator />
         {pv && (
           <Tip content="下载便携项目包（含音频），可在另一台电脑导入">
-            <a href={ppath('/package?include_audio=1')} download>
-              <Button size="sm" variant="ghost" icon={<Download className="size-4" />}><span className="hidden md:inline">项目包</span></Button>
-            </a>
+            <DownloadButton href={ppath('/package?include_audio=1')} big check={false} size="sm" variant="ghost" aria-label="下载项目包"
+              icon={<Download className="size-4" />}><span className="hidden md:inline">项目包</span></DownloadButton>
           </Tip>
         )}
         <span className="mx-1 h-5 w-px bg-line" />
@@ -67,8 +70,8 @@ function JobsIndicator() {
   const active = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
   if (!jobs.length) {
     return (
-      <Tip content={<span>快捷键：<Kbd>Space</Kbd> 播放 <Kbd>L</Kbd> 循环 <Kbd>M</Kbd> 标记</span>}>
-        <span className="hidden items-center gap-1.5 px-2 text-xs text-subtle lg:flex"><Activity className="size-3.5" />空闲</span>
+      <Tip content={<span>没有进行中的操作。快捷键：<Kbd>Space</Kbd> 播放 <Kbd>L</Kbd> 循环 <Kbd>M</Kbd> 标记（首音校准） <Kbd>{MOD_KEY}</Kbd>+<Kbd>Z</Kbd> 撤销</span>}>
+        <span tabIndex={0} className="focus-ring hidden items-center gap-1.5 rounded px-2 text-xs text-subtle lg:flex"><Activity className="size-3.5" />空闲</span>
       </Tip>
     );
   }
@@ -78,29 +81,33 @@ function JobsIndicator() {
         <button className={cn('focus-ring flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition',
           active.length ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2')}>
           {active.length ? <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-accent" /></span> : <Activity className="size-3.5" />}
-          <span className="hidden md:inline">{active.length ? `${active.length} 个任务运行中` : '任务'}</span>
+          <span className="hidden md:inline">{active.length ? `${active.length} 个操作进行中` : '操作'}</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" sideOffset={8} className="z-50 w-80 animate-in rounded-xl border border-line bg-surface p-2 shadow-[var(--shadow-pop)]">
-          <div className="px-2 pt-1 pb-2 text-xs font-semibold text-muted">任务</div>
+        <Popover.Content align="end" sideOffset={8} aria-label="进行中的操作" className="z-50 w-80 animate-in rounded-xl border border-line bg-surface p-2 shadow-[var(--shadow-pop)]">
+          <div className="px-2 pt-1 pb-2 text-xs font-semibold text-muted">详细模式的操作（极简模式的任务在“极简模式”里）</div>
           <div className="space-y-1">
             {jobs.map((j) => {
               const live = j.status === 'queued' || j.status === 'running';
               return (
                 <div key={j.id} className="rounded-lg px-2 py-2 hover:bg-surface-2">
-                  <div className="flex items-center gap-2 text-[13px]">
+                  <div className="flex flex-wrap items-center gap-2 text-[13px]">
                     <span className="font-medium">{j.label ?? j.kind}</span>
+                    {j.project_id && !isOpenProject(j.project_id) && (
+                      <span className="max-w-32 truncate text-xs text-muted" title={projectName(j.project_id) ?? undefined}>· {projectName(j.project_id) ?? '其他项目'}</span>
+                    )}
                     <Badge tone={{ queued: 'neutral', running: 'accent', succeeded: 'ok', failed: 'danger', cancelled: 'neutral' }[j.status] as any}>
                       {{ queued: '排队中', running: '运行中', succeeded: '完成', failed: '失败', cancelled: '已取消' }[j.status]}
                     </Badge>
                     {live && (
-                      <button className="ml-auto text-muted hover:text-danger" title="取消" onClick={() => run(() => cancelJob(j.id))}>
-                        <X className="size-3.5" />
-                      </button>
+                      <span className="ml-auto">
+                        <ConfirmButton size="xs" variant="ghost" aria-label={`取消${j.label ?? ''}`} icon={<X className="size-3.5" />}
+                          question="取消这个操作？" confirmLabel="取消操作" keepLabel="继续" onConfirm={() => void run(() => cancelJob(j.id))} />
+                      </span>
                     )}
                   </div>
-                  {live && <Progress value={j.progress} className="mt-2" />}
+                  {live && <Progress value={j.progress} className="mt-2" label={`${j.label ?? j.kind}进度`} />}
                   <div className={cn('mt-1 truncate text-xs', j.status === 'failed' ? 'text-danger' : 'text-muted')} title={j.error ?? j.message}>
                     {j.error ?? j.message}
                   </div>

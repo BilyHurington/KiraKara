@@ -58,6 +58,13 @@ export class Waveform {
   msPerPx = 20;
   follow = true;
   dirty = true;
+  /** drawing happens only while active (dock open, page visible) */
+  active = true;
+  /** frames drawn so far (tests / diagnostics) */
+  frames = 0;
+  private raf = 0;
+  private lastPlayhead = -1;
+  private colors: Record<string, string> | null = null;
   private drag: Drag | null = null;
   private hoverX: number | null = null;
   private ro: ResizeObserver;
@@ -74,13 +81,66 @@ export class Waveform {
 
   dispose() {
     this.ro.disconnect();
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
     for (const d of this.disposers) d();
+  }
+
+  /**
+   * Something visible changed: draw on the next frame.  Frames are only
+   * requested while something changes or the audio plays; nothing runs while
+   * the waveform is hidden (dock collapsed, page in the background).
+   */
+  invalidate() {
+    this.dirty = true;
+    this.schedule();
+  }
+
+  private schedule() {
+    if (this.raf || !this.active || typeof requestAnimationFrame === 'undefined') return;
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0;
+      if (!this.active) return;
+      const ph = this.cb.getPlayhead();
+      if (this.dirty || ph.playing || ph.ms !== this.lastPlayhead) this.draw();
+      if (ph.playing) this.schedule();  // follow the playhead while playing
+    });
+  }
+
+  /** Show / hide: hidden waveforms stop requesting frames. */
+  setActive(on: boolean) {
+    if (on === this.active) return;
+    this.active = on;
+    if (!on && this.raf) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    if (on) this.invalidate();
+  }
+
+  /** Re-read the theme colours (on a theme switch, not on every frame). */
+  refreshColors() {
+    this.colors = null;
+    this.invalidate();
+  }
+
+  private themeColors() {
+    if (!this.colors) {
+      const css = getComputedStyle(document.documentElement);
+      const v = (n: string, d: string) => css.getPropertyValue(n).trim() || d;
+      this.colors = {
+        bg: v('--wave-bg', '#101322'), fg: v('--wave-fg', '#7c83ff'), fg2: v('--wave-fg-2', '#a5b4fc'),
+        text: v('--wave-text', '#c7cbe0'), grid: v('--wave-grid', 'rgba(255,255,255,0.06)'),
+        played: v('--wave-played', 'rgba(124,131,255,0.18)'),
+      };
+    }
+    return this.colors;
   }
 
   setPeaks(p: Peaks | null) {
     this.peaks = p ? { per_second: p.per_second, mins: Float32Array.from(p.mins), maxs: Float32Array.from(p.maxs) } : null;
     if (p) this.setDuration(Math.max(this.durationMs, p.duration_ms));
-    this.dirty = true;
+    this.invalidate();
   }
 
   setDuration(ms: number) {
@@ -88,7 +148,7 @@ export class Waveform {
     this.durationMs = ms || 0;
     if (first && ms) this.msPerPx = Math.max(1, ms / Math.max(200, this.width));
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   get width() { return this.canvas.clientWidth || 800; }
@@ -100,7 +160,7 @@ export class Waveform {
     this.canvas.width = Math.round(this.width * dpr);
     this.canvas.height = Math.round(this.height * dpr);
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   xOf(ms: number) { return (ms - this.viewStart) / this.msPerPx; }
@@ -124,7 +184,7 @@ export class Waveform {
     this.viewStart = frac * this.durationMs;
     this.follow = false;
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   zoom(factor: number, anchorMs = this.viewStart + this.spanMs / 2) {
@@ -133,14 +193,14 @@ export class Waveform {
     this.clampView();
     this.viewStart = anchorMs - ax * this.msPerPx;
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   zoomAll() {
     this.msPerPx = this.durationMs / Math.max(100, this.width);
     this.viewStart = 0;
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   /** Show [a, b] with some padding. */
@@ -149,7 +209,7 @@ export class Waveform {
     if (span * 1.3 > this.spanMs) this.msPerPx = (span * 1.6) / this.width;
     if (a < this.viewStart || b > this.viewStart + this.spanMs) this.viewStart = a - this.spanMs * 0.2;
     this.clampView();
-    this.dirty = true;
+    this.invalidate();
   }
 
   private listen<K extends keyof WindowEventMap>(target: Window, ev: K, fn: (e: WindowEventMap[K]) => void) {
@@ -168,7 +228,7 @@ export class Waveform {
         this.viewStart += d;
         this.follow = false;
         this.clampView();
-        this.dirty = true;
+        this.invalidate();
       } else {
         this.zoom(e.deltaY > 0 ? 1.2 : 1 / 1.2, ms);
       }
@@ -197,7 +257,7 @@ export class Waveform {
     c.addEventListener('mousedown', onDown);
     this.disposers.push(() => c.removeEventListener('mousedown', onDown));
 
-    const onLeave = () => { this.hoverX = null; this.dirty = true; };
+    const onLeave = () => { this.hoverX = null; this.invalidate(); };
     c.addEventListener('mouseleave', onLeave);
     this.disposers.push(() => c.removeEventListener('mouseleave', onLeave));
 
@@ -207,9 +267,11 @@ export class Waveform {
       const inside = x >= 0 && x <= rect.width && e.clientY >= rect.top && e.clientY <= rect.bottom;
       const d = this.drag;
       if (!d) {
-        this.hoverX = inside ? x : null;
-        c.style.cursor = inside && this.hitHandle(x) ? 'ew-resize' : 'crosshair';
-        this.dirty = true;
+        const hx = inside ? x : null;
+        if (hx === this.hoverX) return;
+        this.hoverX = hx;
+        if (inside) c.style.cursor = this.hitHandle(x) ? 'ew-resize' : 'crosshair';
+        this.invalidate();
         return;
       }
       const ms = Math.max(0, Math.min(this.durationMs, this.msAt(x)));
@@ -217,7 +279,7 @@ export class Waveform {
       else if (d.kind === 'end') d.end = Math.max(ms, d.start + 1);
       else if (d.kind === 'pending' && Math.abs(x - d.x0) > 4) (d as any).kind = 'loop';
       if (d.kind === 'loop') d.ms1 = ms;
-      this.dirty = true;
+      this.invalidate();
     });
 
     this.listen(window, 'mouseup', (e) => {
@@ -241,7 +303,7 @@ export class Waveform {
         }
         this.cb.onSeek(Math.max(0, Math.min(this.durationMs, ms)));
       }
-      this.dirty = true;
+      this.invalidate();
     });
   }
 
@@ -259,24 +321,22 @@ export class Waveform {
   }
 
   draw() {
+    this.frames += 1;
+    const playhead = this.cb.getPlayhead();
+    this.lastPlayhead = playhead.ms;
     const ctx = this.canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      this.dirty = false;
+      return;
+    }
     const dpr = window.devicePixelRatio || 1;
     const W = this.width;
     const H = this.height;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const css = getComputedStyle(document.documentElement);
-    const v = (n: string, d: string) => css.getPropertyValue(n).trim() || d;
-    const bg = v('--wave-bg', '#101322');
-    const fg = v('--wave-fg', '#7c83ff');
-    const fg2 = v('--wave-fg-2', '#a5b4fc');
-    const text = v('--wave-text', '#c7cbe0');
-    const grid = v('--wave-grid', 'rgba(255,255,255,0.06)');
-    const played = v('--wave-played', 'rgba(124,131,255,0.18)');
+    const { bg, fg, fg2, text, grid, played } = this.themeColors();
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    const playhead = this.cb.getPlayhead();
     if (this.follow && playhead.playing && (playhead.ms > this.viewStart + this.spanMs * 0.92 || playhead.ms < this.viewStart)) {
       this.viewStart = playhead.ms - this.spanMs * 0.08;
       this.clampView();

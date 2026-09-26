@@ -67,9 +67,13 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
         </div>
         <div className="flex shrink-0 gap-2">
           <Button size="sm" variant="soft" icon={<Play className="size-3.5 fill-current" />} onClick={playLine} disabled={!range}>循环试听整行</Button>
-          <Tip content="只重新对齐本行（及选中的行），生成一个局部结果供对比；不会覆盖当前结果与人工锁定">
-            <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={onRerun} loading={rerunBusy}>局部重跑</Button>
-          </Tip>
+          {result.stale ? (
+            <Button size="sm" icon={<RefreshCw className="size-3.5" />} disabled disabledReason="该结果已过期：请先在“对齐”中重新对齐">局部重跑</Button>
+          ) : (
+            <Tip content="只重新对齐本行（及选中的行），生成一个局部结果供对比；不会覆盖当前结果与人工锁定">
+              <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={onRerun} loading={rerunBusy}>局部重跑</Button>
+            </Tip>
+          )}
         </div>
       </div>
 

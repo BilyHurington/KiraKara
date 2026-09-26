@@ -8,11 +8,12 @@ import * as RTabs from '@radix-ui/react-tabs';
 import * as RTooltip from '@radix-ui/react-tooltip';
 import { AlertTriangle, CheckCircle2, Info, Loader2, UploadCloud, X, XCircle } from 'lucide-react';
 import {
-  forwardRef, useRef, useState,
+  forwardRef, useEffect, useId, useRef, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
 import { cn } from '@/lib/format';
+import { isEnter, isEscape } from '@/lib/keys';
 
 // ------------------------------------------------------------------ Button
 
@@ -39,15 +40,32 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: Size;
   loading?: boolean;
   icon?: ReactNode;
+  /**
+   * Shown as a tooltip while the button is disabled (why it cannot be used
+   * now).  When given, the button always sits in a wrapper (a disabled button
+   * gets no pointer events), so it keeps its identity and focus when it flips.
+   */
+  disabledReason?: ReactNode;
+  /** class of that wrapper (e.g. flex-1 when the button should grow) */
+  wrapperClassName?: string;
+}
+
+/** Button look for other elements (e.g. a download link), without nesting a <button> in an <a>. */
+export function buttonClass(variant: Variant = 'secondary', size: Size = 'md', className?: string) {
+  return cn(
+    'focus-ring inline-flex shrink-0 select-none items-center justify-center whitespace-nowrap font-medium transition active:translate-y-px',
+    VARIANTS[variant], SIZES[size], className,
+  );
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = 'secondary', size = 'md', loading, icon, className, children, disabled, ...rest }, ref,
+  { variant = 'secondary', size = 'md', loading, icon, className, children, disabled, disabledReason, wrapperClassName, ...rest }, ref,
 ) {
-  return (
+  const btn = (
     <button
       ref={ref}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
         'focus-ring inline-flex shrink-0 select-none items-center justify-center whitespace-nowrap font-medium transition',
         'disabled:pointer-events-none disabled:opacity-45 active:translate-y-px',
@@ -59,15 +77,51 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       {children}
     </button>
   );
+  if (disabledReason !== undefined || wrapperClassName) {
+    const why = disabled && !loading ? disabledReason : null;
+    return (
+      <Tip keep content={why}>
+        <span className={cn('inline-flex', why && 'cursor-not-allowed', wrapperClassName)}>{btn}</span>
+      </Tip>
+    );
+  }
+  return btn;
 });
 
-export function IconButton({ label, className, size = 'sm', ...rest }: ButtonProps & { label: string }) {
+export function IconButton({ label, className, size = 'sm', disabledReason, ...rest }: ButtonProps & { label: string }) {
   const dims = { xs: 'size-7', sm: 'size-8', md: 'size-9', lg: 'size-11' }[size];
+  const btn = <Button aria-label={label} variant="ghost" size={size} className={cn(dims, '!px-0', className)} {...rest} />;
+  // always on a wrapper: a disabled button gets no pointer events, and the tooltip must still show
   return (
-    <Tip content={label}>
-      <Button aria-label={label} variant="ghost" size={size} className={cn(dims, '!px-0', className)} {...rest} />
+    <Tip content={rest.disabled && disabledReason ? <>{label}：{disabledReason}</> : label}>
+      <span className="inline-flex">{btn}</span>
     </Tip>
   );
+}
+
+/**
+ * A button whose action needs a second click to confirm (cancelling a running
+ * operation, removing something).  The question falls back after a few seconds.
+ */
+export function ConfirmButton({ question, confirmLabel = '确认', keepLabel = '不了', onConfirm, children, ...rest }: Omit<ButtonProps, 'onClick'> & {
+  question: ReactNode; confirmLabel?: string; keepLabel?: string; onConfirm: () => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const t = setTimeout(() => setAsking(false), 6000);
+    return () => clearTimeout(t);
+  }, [asking]);
+  if (asking) {
+    return (
+      <span role="group" aria-label="确认" className="inline-flex flex-wrap items-center gap-1.5 text-xs text-fg">
+        <span>{question}</span>
+        <Button size="xs" variant="danger" autoFocus onClick={() => { setAsking(false); onConfirm(); }}>{confirmLabel}</Button>
+        <Button size="xs" variant="ghost" onClick={() => setAsking(false)}>{keepLabel}</Button>
+      </span>
+    );
+  }
+  return <Button {...rest} onClick={() => setAsking(true)}>{children}</Button>;
 }
 
 // ------------------------------------------------------------------ Card
@@ -183,7 +237,26 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   );
 }
 
-export function Field({ label, hint, children, className }: { label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * A labelled form row.  Around one input / select it is a <label> (clicking
+ * the text focuses the input).  With `group` — for segmented buttons, several
+ * buttons or anything that is not a single input — it is a labelled group
+ * instead: a <label> would forward a click on its text to the first button
+ * and silently change the choice.
+ */
+export function Field({ label, hint, children, className, group }: {
+  label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string; group?: boolean;
+}) {
+  const id = useId();
+  if (group) {
+    return (
+      <div role="group" aria-labelledby={`${id}-l`} aria-describedby={hint ? `${id}-h` : undefined} className={cn('flex flex-col gap-1.5', className)}>
+        <span id={`${id}-l`} className="text-[13px] font-medium text-fg">{label}</span>
+        {children}
+        {hint && <span id={`${id}-h`} className="text-xs text-muted">{hint}</span>}
+      </div>
+    );
+  }
   return (
     <label className={cn('flex flex-col gap-1.5', className)}>
       <span className="text-[13px] font-medium text-fg">{label}</span>
@@ -191,6 +264,22 @@ export function Field({ label, hint, children, className }: { label: ReactNode; 
       {hint && <span className="text-xs text-muted">{hint}</span>}
     </label>
   );
+}
+
+/** Arrow keys (and Home / End) move between the radios / tabs inside `e.currentTarget` and select. */
+export function arrowNav(e: React.KeyboardEvent<HTMLElement>, role: 'radio' | 'tab' = 'radio') {
+  const next = ['ArrowRight', 'ArrowDown'];
+  const prev = ['ArrowLeft', 'ArrowUp'];
+  if (![...next, ...prev, 'Home', 'End'].includes(e.key)) return;
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>(`[role="${role}"]`)]
+    .filter((el) => !(el as HTMLButtonElement).disabled && el.getAttribute('aria-disabled') !== 'true');
+  if (!items.length) return;
+  const cur = items.indexOf(document.activeElement as HTMLElement);
+  const i = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1
+    : next.includes(e.key) ? (cur + 1) % items.length : (cur - 1 + items.length) % items.length;
+  e.preventDefault();
+  items[i].focus();
+  items[i].click();
 }
 
 /** Integer input that commits on blur / Enter (never on every keystroke). */
@@ -225,8 +314,8 @@ export function NumberInput({ value, onCommit, suffix, className, step = 1, min,
         onChange={(e) => setDraft(e.target.value)}
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.currentTarget.blur(); }
-          if (e.key === 'Escape') { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
+          if (isEnter(e)) { e.currentTarget.blur(); }
+          if (isEscape(e)) { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
         }}
       />
       {suffix && <span className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-xs text-subtle">{suffix}</span>}
@@ -312,8 +401,8 @@ export function SliderField({
           onChange={(e) => setDraft(e.target.value)}
           onBlur={(e) => commitDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
+            if (isEnter(e)) e.currentTarget.blur();
+            if (isEscape(e)) { cancelled.current = true; setDraft(null); e.currentTarget.blur(); }
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
               e.preventDefault();
               const d = (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
@@ -329,11 +418,14 @@ export function SliderField({
   );
 }
 
-export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode; disabled?: boolean }) {
+export function Switch({ checked, onChange, label, disabled, ariaLabel }: {
+  checked: boolean; onChange: (v: boolean) => void; label?: ReactNode; disabled?: boolean;
+  /** accessible name when there is no visible label */ ariaLabel?: string;
+}) {
   return (
     <label className={cn('inline-flex cursor-pointer items-center gap-2 text-[13px]', disabled && 'cursor-not-allowed opacity-50')}>
       <RSwitch.Root
-        checked={checked} onCheckedChange={onChange} disabled={disabled}
+        checked={checked} onCheckedChange={onChange} disabled={disabled} aria-label={ariaLabel}
         className="focus-ring relative h-5 w-9 shrink-0 rounded-full bg-surface-3 transition data-[state=checked]:bg-accent"
       >
         <RSwitch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white shadow transition data-[state=checked]:translate-x-[18px]" />
@@ -344,21 +436,25 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
 }
 
 /** Pill-style segmented control. */
-export function Segmented<T extends string>({ value, onChange, options, size = 'md', className }: {
+export function Segmented<T extends string>({ value, onChange, options, size = 'md', className, label }: {
   value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; disabled?: boolean; title?: string }[];
-  size?: 'sm' | 'md'; className?: string;
+  size?: 'sm' | 'md'; className?: string; /** accessible name of the group */ label?: string;
 }) {
+  // one tab stop: the chosen option (or the first usable one); arrows move between options
+  const tabStop = options.find((o) => o.value === value && !o.disabled)?.value ?? options.find((o) => !o.disabled)?.value;
   return (
-    <div className={cn('inline-flex rounded-lg bg-surface-2 p-0.5 ring-1 ring-line', className)} role="radiogroup">
+    <div className={cn('inline-flex rounded-lg bg-surface-2 p-0.5 ring-1 ring-line', className)} role="radiogroup" aria-label={label}
+      onKeyDown={(e) => arrowNav(e)}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          tabIndex={o.value === tabStop ? 0 : -1}
           disabled={o.disabled}
           title={o.title}
-          onClick={() => onChange(o.value)}
+          onClick={() => { if (o.value !== value) onChange(o.value); }}
           className={cn(
             'focus-ring rounded-md font-medium whitespace-nowrap transition disabled:opacity-40',
             size === 'sm' ? 'h-6 px-2 text-xs' : 'h-8 px-3 text-[13px]',
@@ -401,10 +497,14 @@ export function Tabs({ value, onChange, tabs, className }: {
 
 // ------------------------------------------------------------------ Tooltip
 
-export function Tip({ content, children, side = 'top' }: { content: ReactNode; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right' }) {
-  if (!content) return <>{children}</>;
+export function Tip({ content, children, side = 'top', keep }: {
+  content: ReactNode; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right';
+  /** keep the same element tree when `content` comes and goes (the child is not remounted) */
+  keep?: boolean;
+}) {
+  if (!content && !keep) return <>{children}</>;
   return (
-    <RTooltip.Root delayDuration={250}>
+    <RTooltip.Root delayDuration={250} open={content ? undefined : false}>
       <RTooltip.Trigger asChild>{children}</RTooltip.Trigger>
       <RTooltip.Portal>
         <RTooltip.Content
@@ -461,10 +561,14 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn('size-4 animate-spin text-muted', className)} />;
 }
 
-export function Progress({ value, className, tone = 'accent' }: { value: number; className?: string; tone?: 'accent' | 'ok' | 'danger' }) {
+export function Progress({ value, className, tone = 'accent', label = '进度' }: {
+  value: number; className?: string; tone?: 'accent' | 'ok' | 'danger'; label?: string;
+}) {
   const color = { accent: 'bg-accent', ok: 'bg-ok', danger: 'bg-danger' }[tone];
+  const pct = Math.round(Math.max(0, Math.min(1, value || 0)) * 100);
   return (
-    <div className={cn('h-1.5 w-full overflow-hidden rounded-full bg-surface-3', className)}>
+    <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+      className={cn('h-1.5 w-full overflow-hidden rounded-full bg-surface-3', className)}>
       <div className={cn('h-full rounded-full transition-[width] duration-300', color)} style={{ width: `${Math.max(2, Math.min(100, value * 100))}%` }} />
     </div>
   );
@@ -524,9 +628,14 @@ export function DropZone({ accept, onFile, title, hint, compact, disabled, busy 
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      aria-busy={busy || undefined}
       onClick={() => !disabled && ref.current?.click()}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') ref.current?.click(); }}
+      onKeyDown={(e) => {
+        if (disabled || e.target !== e.currentTarget) return;
+        if (isEnter(e) || e.key === ' ') { e.preventDefault(); ref.current?.click(); }
+      }}
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {

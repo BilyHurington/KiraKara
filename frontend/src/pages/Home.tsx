@@ -1,12 +1,13 @@
 // No project open: create, import or open one.
 
 import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtRelative } from '@/lib/format';
+import { isEnter } from '@/lib/keys';
 import type { Mode, ProjectView } from '@/lib/types';
-import { deleteProject, loadProjects, openProject, run, setPV, setStep, toast, useApp } from '@/store/app';
-import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input } from '@/components/ui';
+import { adoptProject, deleteProject, loadProjects, openProject, run, toast, useApp } from '@/store/app';
+import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Tip } from '@/components/ui';
 import { ModeChoice } from './Mode';
 
 export function HomePage() {
@@ -14,20 +15,25 @@ export function HomePage() {
   const [name, setName] = useState('');
   const [mode, setMode] = useState<Mode>('plain');
   const [busy, setBusy] = useState(false);
+  const creating = useRef(false);
   useEffect(() => { void run(() => loadProjects()); }, []);  // tasks may have added projects meanwhile
 
-  const create = () => run(async () => {
-    setBusy(true);
-    try {
-      const pv = await api.post<ProjectView>('/api/projects', { name: name.trim() || '未命名歌曲', mode });
-      await loadProjects();
-      setPV(pv);
-      setStep('input');
-      toast('ok', '已创建项目', pv.project.name);
-    } finally {
-      setBusy(false);
-    }
-  }, '创建失败');
+  const create = () => {
+    if (creating.current) return;  // Enter and the button (or a double click) create one project only
+    creating.current = true;
+    return run(async () => {
+      setBusy(true);
+      try {
+        const pv = await api.post<ProjectView>('/api/projects', { name: name.trim() || '未命名歌曲', mode });
+        adoptProject(pv, 'input');
+        void loadProjects().catch(() => undefined);
+        toast('ok', '已创建项目', pv.project.name);
+      } finally {
+        creating.current = false;
+        setBusy(false);
+      }
+    }, '创建失败');
+  };
 
   const importFile = (file: File) => run(async () => {
     const fd = new FormData();
@@ -43,7 +49,9 @@ export function HomePage() {
       <section className="relative overflow-hidden rounded-3xl border border-line bg-surface px-8 py-10 shadow-[var(--shadow-card)]">
         <div className="pointer-events-none absolute -top-24 -right-16 size-80 rounded-full bg-gradient-to-br from-indigo-500/25 to-fuchsia-500/20 blur-3xl" />
         <div className="relative max-w-2xl">
-          <Badge tone="accent">本地运行 · 不上传任何数据</Badge>
+          <Tip content="音频、视频和项目文件只保存在这台电脑上。只有你主动使用时才会联网：AI 注音会把歌词发送给所选的 AI 服务，音乐链接会从网易云 / QQ 音乐获取歌词。">
+            <span className="inline-flex"><Badge tone="accent">本地运行 · 音频与项目只存在本机</Badge></span>
+          </Tip>
           <h1 className="mt-4 text-3xl font-semibold tracking-tight">把已知歌词精确对齐到每一个发音</h1>
           <p className="mt-3 text-[15px] leading-7 text-muted">
             输入音频与歌词（可选 LRC），得到可复用的逐发音单元时间 —— 原音频起点起算的整数毫秒。
@@ -62,7 +70,7 @@ export function HomePage() {
           <CardHeader title="新建项目" description="第一步：选择是否使用 LRC 增强（之后仍可切换，输入与人工修改都会保留）" />
           <CardBody className="space-y-5">
             <Input placeholder="歌曲名，例如：夜に駆ける" value={name} onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && create()} className="h-10 text-[15px]" />
+              aria-label="歌曲名" onKeyDown={(e) => { if (isEnter(e)) void create(); }} className="h-10 text-[15px]" />
             <ModeChoice value={mode} onChange={setMode} />
             <div className="flex justify-end">
               <Button variant="primary" size="lg" loading={busy} onClick={create} icon={<ArrowRight className="size-4" />}>创建并开始</Button>
@@ -129,7 +137,7 @@ function ProjectRow({ p }: { p: { id: string; name: string; mode: Mode; updated:
         <ArrowRight className="size-4 text-subtle opacity-0 transition group-hover:opacity-100" />
       </button>
       <button type="button" aria-label={`删除项目 ${p.name}`} title="删除项目" onClick={() => setConfirm(true)}
-        className="focus-ring absolute top-1/2 right-2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-subtle opacity-0 transition group-hover:opacity-100 hover:bg-danger-soft hover:text-danger focus:opacity-100">
+        className="focus-ring absolute top-1/2 right-2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-subtle opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-danger-soft hover:text-danger focus:opacity-100 [@media(hover:none)]:opacity-100">
         <Trash2 className="size-3.5" />
       </button>
     </li>

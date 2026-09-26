@@ -5,9 +5,10 @@ import { ArrowRight, Check, Timer, Type } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
+import { isEnter, isEscape } from '@/lib/keys';
 import type { Mode, ProjectView } from '@/lib/types';
 import { loadProjects, ppath, run, setPV, setStep, toast, useProject, useView } from '@/store/app';
-import { Button, Callout, Card, CardBody, CardHeader, Input, PageHeader } from '@/components/ui';
+import { arrowNav, Button, Callout, Card, CardBody, CardHeader, Input, PageHeader } from '@/components/ui';
 
 const MODES: { value: Mode; title: string; icon: typeof Type; points: string[] }[] = [
   {
@@ -26,7 +27,7 @@ const MODES: { value: Mode; title: string; icon: typeof Type; points: string[] }
 
 export function ModeChoice({ value, onChange }: { value: Mode; onChange: (m: Mode) => void }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2" role="radiogroup">
+    <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="对齐模式" onKeyDown={(e) => arrowNav(e)}>
       {MODES.map((m) => {
         const Icon = m.icon;
         const on = value === m.value;
@@ -36,6 +37,7 @@ export function ModeChoice({ value, onChange }: { value: Mode; onChange: (m: Mod
             type="button"
             role="radio"
             aria-checked={on}
+            tabIndex={on ? 0 : -1}
             onClick={() => onChange(m.value)}
             className={cn(
               'focus-ring relative rounded-2xl border p-4 text-left transition',
@@ -75,7 +77,7 @@ export function ModePage() {
   };
 
   const rename = () => {
-    if (name.trim() && name !== project.name) {
+    if (name.trim() && name.trim() !== project.name) {
       void run(async () => {
         setPV(await api.patch<ProjectView>(ppath(''), { name: name.trim() }));
         await loadProjects();
@@ -109,7 +111,11 @@ export function ModePage() {
         <Card>
           <CardHeader title="项目名称" />
           <CardBody>
-            <Input value={name} onChange={(e) => setName(e.target.value)} onBlur={rename} onKeyDown={(e) => e.key === 'Enter' && rename()} className="max-w-md" />
+            <Input value={name} aria-label="项目名称" onChange={(e) => setName(e.target.value)} onBlur={rename} className="max-w-md"
+              onKeyDown={(e) => {
+                if (isEnter(e)) e.currentTarget.blur();  // saved once, on blur
+                if (isEscape(e)) setName(project.name);
+              }} />
           </CardBody>
         </Card>
       </div>

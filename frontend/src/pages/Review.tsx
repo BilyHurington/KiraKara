@@ -10,8 +10,12 @@ import { revealOnWaveform } from '@/audio/waveformRef';
 import { api } from '@/lib/api';
 import { fmtRelative, ROLE_LABEL } from '@/lib/format';
 import type { Issue, Job } from '@/lib/types';
-import { REVIEW_LIST_WIDTH, ppath, refreshProject, run, selectResult, setLayoutSize, setStep, toast, trackJob, useApp, useJobRunning, useProject, useResult, useView } from '@/store/app';
-import { Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Kbd, PageHeader, ResizeHandle, Select, Stat, Tabs, Tip } from '@/components/ui';
+import {
+  REVIEW_LIST_WIDTH, isOpenProject, ppath, refreshProject, run, selectResult, setLayoutSize, setStep, toast, trackJob, useApp, useJobRunning,
+  useProject, useResult, useView,
+} from '@/store/app';
+import { ignoreShortcut, MOD_KEY, SHIFT_KEY } from '@/lib/keys';
+import { Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Kbd, PageHeader, ResizeHandle, Select, Stat, Tabs } from '@/components/ui';
 import { CandidatesPanel, RerunsPanel } from './review/Alternatives';
 import { lineStats, unitInfoMap } from './review/helpers';
 import { IssuesPanel } from './review/IssuesPanel';
@@ -49,8 +53,9 @@ export function ReviewPage() {
   // ↑/↓ move the unit selection, Enter plays it
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      // Enter / arrows on a focused control (button, radio, slider …) or in a dialog belong to it;
+      // arrows may repeat (holding ↓ walks the units)
+      if (ignoreShortcut(e, { allowRepeat: e.key !== 'Enter' })) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (!result) return;
       const all = stats.flatMap((s) => s.units);
@@ -88,7 +93,8 @@ export function ReviewPage() {
   const manual = result.units.filter((u) => u.manual).length;
   const nIssues = result.issues.filter((i) => i.severity !== 'info').length;
   const rerunIds = checked.size ? [...checked] : selLineId ? [selLineId] : [];
-  const parentSummaries = view.results.filter((r) => !(r.parent_result_id && !r.coverage.full));
+  // local reruns are compared inside their parent; one opened directly (e.g. “查看” on the align page) is listed too
+  const parentSummaries = view.results.filter((r) => !(r.parent_result_id && !r.coverage.full) || r.id === result.id);
 
   const selectLine = (lid: string) => {
     useApp.setState({ selLineId: lid, selUnitId: null, candidateId: null });
@@ -110,8 +116,10 @@ export function ReviewPage() {
       trackJob(job, {
         label: '局部重跑',
         onDone: async (j) => {
+          if (!isOpenProject(j.project_id)) return;  // another project is open now
           await refreshProject();
-          if (j.status === 'succeeded' && j.output?.result_id) {
+          if (j.status === 'succeeded' && j.output?.result_id && isOpenProject(j.project_id)
+            && useApp.getState().pv?.project.results.some((r) => r.id === j.output.result_id)) {
             useApp.setState({ compareWithId: j.output.result_id, candidateId: null });
             setTab('reruns');
           }
@@ -202,12 +210,12 @@ export function ReviewPage() {
               onFilter={setFilter}
             />
             <div className="flex items-center gap-2 border-t border-line px-3 py-2.5">
-              <Tip content="只重新对齐所选行（未勾选时为当前行），生成局部结果供对比；锁定的单元不受影响">
-                <Button size="sm" className="flex-1" icon={<RefreshCw className="size-3.5" />} loading={rerunBusy}
-                  disabled={!rerunIds.length || result.stale} onClick={rerun}>
-                  局部重跑{checked.size ? `所选 ${checked.size} 行` : '当前行'}
-                </Button>
-              </Tip>
+              <Button size="sm" className="w-full" wrapperClassName="flex-1" icon={<RefreshCw className="size-3.5" />} loading={rerunBusy}
+                title="只重新对齐所选行（未勾选时为当前行），生成局部结果供对比；锁定的单元不受影响"
+                disabled={!rerunIds.length || result.stale} onClick={rerun}
+                disabledReason={result.stale ? '该结果已过期：请先重新对齐' : '先在列表中选择要重跑的行'}>
+                局部重跑{checked.size ? `所选 ${checked.size} 行` : '当前行'}
+              </Button>
               {checked.size > 0 && <Button size="sm" variant="ghost" onClick={() => setChecked(new Set())}>清除</Button>}
             </div>
           </Card>
@@ -267,7 +275,7 @@ export function ReviewPage() {
             <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> 切换单元</span>
             <span><Kbd>Enter</Kbd> 循环试听所选单元</span>
             <span><Kbd>L</Kbd> 循环开关</span>
-            <span><Kbd>⌘</Kbd>+<Kbd>Z</Kbd> 撤销 · <Kbd>⌘</Kbd>+<Kbd>⇧</Kbd>+<Kbd>Z</Kbd> 重做</span>
+            <span><Kbd>{MOD_KEY}</Kbd>+<Kbd>Z</Kbd> 撤销 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>{SHIFT_KEY}</Kbd>+<Kbd>Z</Kbd> 重做（只针对时间修改）</span>
             <span>慢速试听时游标仍是原音频时间 <Button size="xs" variant="ghost" onClick={() => player.setRate(player.rate === 1 ? 0.5 : 1)}>切换 0.5×</Button></span>
           </CardBody>
         </Card>

@@ -8,6 +8,7 @@ import type { AlignmentResult, Candidate } from '@/lib/types';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { ppath, refreshProject, run, toast, useApp, useResultById } from '@/store/app';
+import { forgetEdits } from '@/store/edits';
 import { Badge, Button, EmptyState, IconButton, Tip } from '@/components/ui';
 import { unitsRange } from './helpers';
 
@@ -18,11 +19,13 @@ function listen(units: { start_ms: number | null; end_ms: number | null }[]) {
   player.playRange(r[0], r[1], { loop: true, padMs: 250 });
 }
 
-async function adopt(rid: string, body: Record<string, unknown>, what: string) {
+async function adopt(rid: string, body: { line_ids: (string | null)[] } & Record<string, unknown>, what: string) {
   await run(async () => {
     await api.post<AlignmentResult>(ppath(`/results/${rid}/adopt`), body);
+    // the adopted lines got new times: older undo steps for their units would now undo the wrong thing
+    forgetEdits(rid, body.line_ids.filter((x): x is string => !!x));
     await refreshProject();
-    toast('ok', `已采用${what}`, '人工锁定的单元保持不变');
+    toast('ok', `已采用${what}`, '人工锁定的单元保持不变；采用不能用撤销还原，可再次采用或手动修改');
   }, '采用失败');
 }
 

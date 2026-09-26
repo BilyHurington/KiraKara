@@ -6,6 +6,7 @@ import { vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui';
 import type { Info, ProjectView } from '@/lib/types';
 import { setPV, useApp, type Step } from '@/store/app';
+import { clearDrafts } from '@/store/drafts';
 import infoJson from './fixtures/info.json';
 import pvJson from './fixtures/projectView.json';
 
@@ -44,8 +45,9 @@ export function seedStore(step: Step = 'mode', pv = fixturePV()) {
   useApp.setState({
     info: fixtureInfo(), projects: [{ id: pv.project.id, name: pv.project.name, mode: pv.project.mode, updated: pv.project.updated }],
     pid: null, pv: null, resultId: null, step, selLineId: null, selUnitId: null, calibLineId: null,
-    compareWithId: null, candidateId: null, undo: [], redo: [], jobs: {}, toasts: [],
+    compareWithId: null, candidateId: null, undo: [], redo: [], jobs: {}, jobHistory: {}, toasts: [],
   });
+  clearDrafts(pv.project.id);
   setPV(pv);
   useApp.setState({ step });
   return pv;

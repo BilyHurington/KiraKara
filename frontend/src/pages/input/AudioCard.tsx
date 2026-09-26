@@ -1,12 +1,13 @@
 // Audio assets: original upload, stem import (with sync check report).
 
-import { AlertTriangle, FileAudio, Film, Mic, Music2, Music4 } from 'lucide-react';
+import { AlertTriangle, FileAudio, Film, Mic, Music2, Music4, Scissors } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, ROLE_LABEL } from '@/lib/format';
 import type { AudioAsset, ProjectView, Role } from '@/lib/types';
 import { ppath, run, setPV, toast, useProject, useView } from '@/store/app';
-import { Badge, Card, CardBody, CardHeader, DropZone, Tip } from '@/components/ui';
+import { Badge, Button, Card, CardBody, CardHeader, DropZone, Tip } from '@/components/ui';
+import { openEnhance } from '@/pages/enhance/tab';
 
 const AUDIO_ACCEPT = 'audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif';
 // the original may also be a video: its audio track is extracted and used
@@ -62,6 +63,7 @@ export function AudioCard() {
               role={role}
               asset={asset(role)}
               available={!!view.audio[role]?.available}
+              outdated={!!view.audio[role]?.outdated}
               busy={busy === role}
               onFile={(f) => upload(role, f)}
               emptyTitle={`导入已有${ROLE_LABEL[role]}分轨（可选）`}
@@ -75,8 +77,8 @@ export function AudioCard() {
   );
 }
 
-function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint, compact }: {
-  role: Role; asset: AudioAsset | null; available: boolean; busy: boolean; onFile: (f: File) => void;
+function AssetSlot({ role, asset, available, outdated, busy, onFile, emptyTitle, emptyHint, compact }: {
+  role: Role; asset: AudioAsset | null; available: boolean; outdated?: boolean; busy: boolean; onFile: (f: File) => void;
   emptyTitle: string; emptyHint: string; compact?: boolean;
 }) {
   const Icon = ROLE_ICON[role];
@@ -101,7 +103,7 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[13px] font-semibold">{ROLE_LABEL[role]}</span>
             <Badge tone="neutral">{SOURCE_LABEL[src.kind] ?? src.kind}</Badge>
-            {!available && <Badge tone="danger" dot>文件缺失</Badge>}
+            {outdated ? <Badge tone="warn" dot>来自更换前的原曲</Badge> : !available && <Badge tone="danger" dot>文件缺失</Badge>}
           </div>
           <div className="mt-0.5 truncate text-[13px] text-fg" title={src.filename ?? ''}>{src.filename ?? '（未命名）'}</div>
           <div className="tabular mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
@@ -128,7 +130,12 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
           )}
         </div>
       </div>
-      {!available && (
+      {outdated ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-fg">
+          <span className="min-w-0 flex-1">这条分轨来自更换前的原曲，需重新分离：对齐、试听、混音和生成视频都不会再使用它。也可以在下方导入与新原曲同源的分轨。</span>
+          <Button size="xs" variant="secondary" icon={<Scissors className="size-3.5" />} onClick={() => openEnhance('separation')}>去重新分离</Button>
+        </div>
+      ) : !available && (
         <div className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-fg">
           项目中找不到该音频文件（例如从不含音频的项目包导入）。请重新上传同一文件（sha256 {asset.sha256.slice(0, 12)}…）。
         </div>
@@ -140,7 +147,7 @@ function AssetSlot({ role, asset, available, busy, onFile, emptyTitle, emptyHint
           onFile={onFile}
           compact
           busy={busy}
-          title={available ? `替换${ROLE_LABEL[role]}` : `重新上传${ROLE_LABEL[role]}`}
+          title={available || outdated ? `替换${ROLE_LABEL[role]}` : `重新上传${ROLE_LABEL[role]}`}
           hint={role === 'original' ? '可选音频或视频；更换原曲后，基于旧原曲的分轨与结果会被标记' : undefined}
         />
       </div>

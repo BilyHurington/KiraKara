@@ -2,6 +2,8 @@
 
 import { ClipboardPaste, Disc3, FileText, Link2, ListMusic, Search, Upload } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { isEnter } from '@/lib/keys';
+import { useDraft } from '@/store/drafts';
 import { api } from '@/lib/api';
 import { fmtMs, readFileText } from '@/lib/format';
 import type { FetchedSong, LinkResult, LyricsPreview, SongRef } from '@/lib/types';
@@ -21,9 +23,10 @@ const PLATFORM_LABEL: Record<string, string> = { netease: '网易云音乐', qq:
 
 export function LyricsInputCard({ onExtraTracks }: { onExtraTracks: (tracks: Record<string, string>) => void }) {
   const project = useProject()!;
-  const [tab, setTab] = useState('paste');
-  const [text, setText] = useState('');
-  const [pending, setPending] = useState<PendingPreview | null>(null);
+  // kept while the page is left (e.g. to check the readings) and come back to
+  const [tab, setTab] = useDraft('lyrics.tab', 'paste');
+  const [text, setText] = useDraft('lyrics.text', '');
+  const [pending, setPending] = useDraft<PendingPreview | null>('lyrics.pending', null);
   const [busy, setBusy] = useState(false);
   const pasteRef = useRef<HTMLTextAreaElement>(null);
 
@@ -160,9 +163,9 @@ export function LyricsInputCard({ onExtraTracks }: { onExtraTracks: (tracks: Rec
 // ------------------------------------------------------------------ music link
 
 function LinkTab({ busy, onUseSong }: { busy: boolean; onUseSong: (platform: string, songId: string) => void }) {
-  const [link, setLink] = useState('');
+  const [link, setLink] = useDraft('lyrics.link', '');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<LinkResult | null>(null);
+  const [result, setResult] = useDraft<LinkResult | null>('lyrics.linkResult', null);
 
   const resolve = () => run(async () => {
     if (!link.trim()) return;
@@ -189,7 +192,8 @@ function LinkTab({ busy, onUseSong }: { busy: boolean; onUseSong: (platform: str
         <Input
           value={link}
           onChange={(e) => setLink(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && resolve()}
+          onKeyDown={(e) => { if (isEnter(e)) void resolve(); }}
+          aria-label="音乐链接"
           placeholder="网易云 / QQ 音乐单曲链接、分享文案、短链，或 netease:123456 / qq:歌曲MID"
           className="h-10"
         />

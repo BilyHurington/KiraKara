@@ -80,7 +80,7 @@ export function ReadingsCard() {
       />
       <CardBody className="space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Segmented<Filter>
+          <Segmented<Filter> label="筛选读音"
             size="sm"
             value={filter}
             onChange={setFilter}

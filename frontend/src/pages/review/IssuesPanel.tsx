@@ -27,7 +27,7 @@ export function IssuesPanel({ issues, lineIndex, onJump }: {
 
   return (
     <div className="space-y-3">
-      <Segmented<Sev>
+      <Segmented<Sev> label="按严重程度筛选"
         size="sm"
         value={sev}
         onChange={setSev}

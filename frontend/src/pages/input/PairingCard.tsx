@@ -2,7 +2,8 @@
 // These tracks are kept separate and do not take part in alignment.
 
 import { Check, Languages, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDraft } from '@/store/drafts';
 import { api } from '@/lib/api';
 import { readFileText } from '@/lib/format';
 import type { ProjectView, TrackPreview } from '@/lib/types';
@@ -20,14 +21,17 @@ const METHOD: Record<string, { label: string; tone: 'ok' | 'info' | 'warn' | 'ne
 
 export function PairingCard({ extraTracks }: { extraTracks: Record<string, string> }) {
   const project = useProject()!;
-  const [kind, setKind] = useState<Kind>('translation');
-  const [text, setText] = useState('');
-  const [preview, setPreview] = useState<TrackPreview | null>(null);
-  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [kind, setKind] = useDraft<Kind>('pairing.kind', 'translation');
+  const [text, setText] = useDraft('pairing.text', '');
+  const [preview, setPreview] = useDraft<TrackPreview | null>('pairing.preview', null);
+  const [edits, setEdits] = useDraft<Record<string, string>>('pairing.edits', {});
   const [busy, setBusy] = useState(false);
+  const seenTracks = useRef(extraTracks);
 
-  // a fetched song offered extra tracks: prefill
+  // a fetched song offered extra tracks: prefill (a remembered draft is not overwritten on return)
   useEffect(() => {
+    if (seenTracks.current === extraTracks) return;
+    seenTracks.current = extraTracks;
     const k = (['translation', 'romanization'] as Kind[]).find((x) => extraTracks[x]);
     if (k) {
       setKind(k);
@@ -90,7 +94,7 @@ export function PairingCard({ extraTracks }: { extraTracks: Record<string, strin
       />
       <CardBody className="space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Segmented<Kind>
+          <Segmented<Kind> label="轨道类型"
             value={kind}
             onChange={(k) => { setKind(k); setPreview(null); setText(extraTracks[k] ?? ''); }}
             options={[{ value: 'translation', label: '翻译' }, { value: 'romanization', label: '音译' }]}

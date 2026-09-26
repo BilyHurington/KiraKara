@@ -8,11 +8,11 @@ import { api } from '@/lib/api';
 import { cn, fmtMs, fmtRelative, readFileText, ROLE_LABEL } from '@/lib/format';
 import type { AlignConfig, Job, ProjectView } from '@/lib/types';
 import {
-  cancelJob, ppath, refreshProject, run, selectResult, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useView,
+  cancelJob, isOpenProject, ppath, refreshProject, run, selectResult, setPV, setStep, toast, trackJob, useApp, useJob, useProject, useView,
   type Step,
 } from '@/store/app';
 import {
-  Badge, Button, Callout, Card, CardBody, CardHeader, Dialog, DropZone, EmptyState, Field, NumberInput, PageHeader,
+  Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, Dialog, DropZone, EmptyState, Field, NumberInput, PageHeader,
   Progress, Segmented, Select, SliderField, Switch, Textarea,
 } from '@/components/ui';
 
@@ -125,8 +125,10 @@ function RunCard() {
     trackJob(j, {
       label: '对齐',
       onDone: async (done) => {
+        // another project may be open by now: its selection must not change
+        if (!isOpenProject(done.project_id)) return;
         await refreshProject();
-        if (done.status === 'succeeded' && done.output?.result_id) selectResult(done.output.result_id);
+        if (done.status === 'succeeded' && done.output?.result_id && isOpenProject(done.project_id)) selectResult(done.output.result_id);
       },
     });
   }, '无法开始对齐');
@@ -136,7 +138,7 @@ function RunCard() {
       <CardHeader icon={<Settings2 className="size-4" />} title="对齐设置" description="设置随项目保存；运行时使用当前输入的快照。" />
       <CardBody className="space-y-5">
         <div className="grid gap-5 md:grid-cols-2">
-          <Field label="对齐输入音频" hint={hasVocals ? '人声使用未衰减的分离人声；分离不保证更准，异常句可切回原曲比较'
+          <Field group label="对齐输入音频" hint={hasVocals ? '人声使用未衰减的分离人声；分离不保证更准，异常句可切回原曲比较'
             : view.audio.vocals?.outdated ? '现有人声分轨来自更换前的原曲，不能使用：请在“注音与分离”中重新分离' : '没有人声分轨：可在“注音与分离”中分离或导入'}>
             <Segmented
               value={cfg.audio_role}
@@ -214,7 +216,7 @@ function RunCard() {
                   <NumberInput value={cfg.decode.tight_gap_ms} suffix="ms" onCommit={(v) => v !== null && patchDecode({ tight_gap_ms: v })} />
                 </Field>
               </div>
-              <Field label="尾音策略" hint={TAIL_HINT[cfg.tail.strategy]}>
+              <Field group label="尾音策略" hint={TAIL_HINT[cfg.tail.strategy]}>
                 <Segmented
                   value={cfg.tail.strategy}
                   onChange={(v) => patchConfig({ tail: { strategy: v } })}
@@ -269,10 +271,11 @@ function JobCard({ job }: { job: Job }) {
         </Badge>
         <span className="tabular ml-auto text-xs text-muted">{Math.round(job.progress * 100)}%</span>
         {live && (
-          <Button size="xs" variant="ghost" onClick={() => run(() => cancelJob(job.id))} icon={<X className="size-3.5" />}>取消</Button>
+          <ConfirmButton size="xs" variant="ghost" icon={<X className="size-3.5" />} question="取消对齐？" confirmLabel="取消对齐" keepLabel="继续"
+            onConfirm={() => void run(() => cancelJob(job.id))}>取消</ConfirmButton>
         )}
       </div>
-      {live && <Progress value={job.progress} className="mt-2" />}
+      {live && <Progress value={job.progress} className="mt-2" label="对齐进度" />}
       <div className={cn('mt-1.5 text-xs break-words', job.status === 'failed' ? 'text-danger' : 'text-muted')}>
         {job.error ?? job.message}
       </div>

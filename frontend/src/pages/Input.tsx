@@ -1,8 +1,8 @@
 // Step 2: audio and lyrics input.
 
 import { ArrowRight } from 'lucide-react';
-import { useState } from 'react';
 import { setStep, useProject } from '@/store/app';
+import { useDraft } from '@/store/drafts';
 import { Button, PageHeader } from '@/components/ui';
 import { AudioCard } from './input/AudioCard';
 import { LinesTable } from './input/LinesTable';
@@ -11,7 +11,8 @@ import { PairingCard } from './input/PairingCard';
 
 export function InputPage() {
   const project = useProject()!;
-  const [extraTracks, setExtraTracks] = useState<Record<string, string>>({});
+  // kept (like the lyrics drafts below) while the page is left and come back to
+  const [extraTracks, setExtraTracks] = useDraft<Record<string, string>>('input.extraTracks', {});
   const ready = project.lyrics.lines.some((l) => l.kind === 'lyric') && project.audio.some((a) => a.role === 'original');
 
   return (
