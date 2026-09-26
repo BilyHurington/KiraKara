@@ -8,10 +8,12 @@ Providers:
   last message written to a file;
 * ``openai`` – any OpenAI-compatible ``/chat/completions`` endpoint.
 
-The CLIs run in an empty temporary directory, so they never see project files.
-Prompts go through stdin / the request body, never the command line.  Every
-call can be cancelled and has a timeout; failures raise :class:`LlmError` with
-a readable reason.
+The CLIs start in an empty temporary directory.  Claude Code has every tool
+disabled; Codex's read-only sandbox still lets it read files elsewhere on the
+computer (it cannot change them).  Prompts go through stdin / the request body,
+never the command line.  Every call can be cancelled and has a timeout (the CLI
+and anything it started are killed); failures raise :class:`LlmError` with a
+readable reason.
 """
 
 from __future__ import annotations
@@ -106,39 +108,66 @@ def ask(cfg: AiSettings, prompt: str, *, cancel: Optional[CancelToken] = None,
 
 def _run(cmd: list[str], prompt: str, cwd: str, timeout: float, cancel: Optional[CancelToken],
          on_wait: Optional[Callable[[float], None]]) -> tuple[int, str, str]:
-    """Run a CLI with the prompt on stdin; kill it on cancel / timeout."""
+    """Run a CLI with the prompt on stdin.
+
+    The CLI (and anything it started) is killed whenever this does not return normally: a cancel,
+    the timeout, or an exception anywhere — also one raised by ``on_wait`` (a progress callback
+    raises :class:`Cancelled` when the job is cancelled)."""
     try:
+        # its own process group, so the whole tree can be stopped
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                                env={**os.environ, "NO_COLOR": "1"})
+                                env={**os.environ, "NO_COLOR": "1"}, start_new_session=os.name == "posix")
     except OSError as e:
         raise LlmError(f"无法启动 {cmd[0]}：{e}") from e
     out: dict[str, str] = {}
 
     def talk() -> None:
-        o, e = proc.communicate(prompt)
-        out["o"], out["e"] = o, e
+        try:
+            o, e = proc.communicate(prompt)
+            out["o"], out["e"] = o, e
+        except Exception:  # pipes closed because the process was killed
+            pass
 
     t = threading.Thread(target=talk, daemon=True)
     t.start()
     t0 = time.time()
-    while t.is_alive():
-        t.join(0.5)
-        waited = time.time() - t0
-        if on_wait is not None:
-            on_wait(waited)
-        stop = None
-        if cancel is not None and cancel.cancelled:
-            stop = "cancel"
-        elif waited > timeout:
-            stop = "timeout"
-        if stop:
-            proc.kill()
-            t.join(5)
-            if stop == "cancel":
+    done = False
+    try:
+        while t.is_alive():
+            t.join(0.5)
+            waited = time.time() - t0
+            if cancel is not None and cancel.cancelled:
                 raise Cancelled()
-            raise LlmError(f"{Path(cmd[0]).name} 超过 {int(timeout)} 秒没有返回")
+            if waited > timeout:
+                raise LlmError(f"{Path(cmd[0]).name} 超过 {int(timeout)} 秒没有返回")
+            if on_wait is not None and t.is_alive():
+                on_wait(waited)
+        done = True
+    finally:
+        if not done or proc.poll() is None:
+            _kill_tree(proc)
+            t.join(5)
     return proc.returncode, out.get("o", ""), out.get("e", "")
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    import signal
+
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _tail(s: str, n: int = 400) -> str:
@@ -152,7 +181,7 @@ def _claude(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
         raise LlmError("没有找到 claude 命令：请先安装 Claude Code 并登录")
     cmd = [exe, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
     if cfg.model:
-        cmd += ["--model", cfg.model]
+        cmd.append(f"--model={cfg.model}")  # one argument: a name starting with "-" is never read as an option
     with tempfile.TemporaryDirectory(prefix="kara-ai-") as td:
         code, o, e = _run(cmd, prompt, td, cfg.timeout_s, cancel, on_wait)
     try:
@@ -175,7 +204,7 @@ def _codex(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
         cmd = [exe, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "--color", "never",
                "-o", str(last)]
         if cfg.model:
-            cmd += ["-m", cfg.model]
+            cmd.append(f"--model={cfg.model}")
         cmd.append("-")
         code, o, e = _run(cmd, prompt, td, cfg.timeout_s, cancel, on_wait)
         text = last.read_text(encoding="utf-8") if last.exists() else ""
@@ -219,10 +248,14 @@ def _openai(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
     t0 = time.time()
     while t.is_alive():
         t.join(0.5)
-        if on_wait is not None:
-            on_wait(time.time() - t0)
+        waited = time.time() - t0
         if cancel is not None and cancel.cancelled:
             raise Cancelled()  # the request thread finishes on its own; its result is ignored
+        # the socket timeout applies to each read, so a server trickling bytes could last forever
+        if waited > cfg.timeout_s + 5:
+            raise LlmError(f"API 超过 {int(cfg.timeout_s)} 秒没有返回")
+        if on_wait is not None and t.is_alive():
+            on_wait(waited)
     if "err" in out:
         raise LlmError(f"API 请求失败：{out['err']}")
     data = out.get("data") or {}

@@ -64,12 +64,20 @@ PRESETS: list[SeparationPreset] = [
 ]
 
 
-def get_preset(name_or_filename: str) -> SeparationPreset:
+PRESET_NAMES = tuple(p.name for p in PRESETS)
+
+
+def is_known_preset(name: object) -> bool:
+    return isinstance(name, str) and name in PRESET_NAMES
+
+
+def get_preset(name: str) -> SeparationPreset:
+    """Only the presets above: the name reaches the separator's model loader and cache paths, so
+    arbitrary text (a file path, "..") is never accepted."""
     for p in PRESETS:
-        if name_or_filename in (p.name, p.model_filename):
+        if name in (p.name, p.model_filename):
             return p
-    # allow arbitrary compatible model files, with no known padding
-    return SeparationPreset(name_or_filename, name_or_filename, "custom", "custom model file")
+    raise SeparationError(f"未知的分离预设：{name}（可选 {', '.join(PRESET_NAMES)}）")
 
 
 @dataclass
@@ -179,8 +187,8 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     """
     from ..interfaces import Cancelled
 
-    version = ensure_available()
     p = get_preset(preset)
+    version = ensure_available()
     original_path = Path(original_path)
     out_dir = Path(out_dir)
     raw_dir = out_dir / "raw"
@@ -197,8 +205,10 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
             "sample_rate": sr, "device": device}
     if progress:
         progress(0.05, f"加载分离模型 {p.model_filename}")
+    # its own process group: stopping it also stops any worker processes the separator started
     proc = subprocess.Popen([python or sys.executable, "-c", _CHILD_SCRIPT, json.dumps(args)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+                            start_new_session=os.name == "posix")
     # drain both pipes continuously: the separator's progress bar writes to
     # stderr all the time and a full pipe would block the child forever
     out_chunks: list[str] = []
@@ -225,15 +235,15 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     try:
         while proc.poll() is None:
             if cancel is not None and getattr(cancel, "cancelled", False):
-                proc.terminate()
+                _signal(proc, "TERM")
                 try:
                     proc.wait(10)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
+                    pass  # killed in finally
                 raise Cancelled()
             if timeout_s and time.monotonic() - started > timeout_s:
-                proc.kill()
-                raise SeparationError(f"人声分离超时（{timeout_s} 秒）")
+                raise SeparationError(f"人声分离超过 {max(1, int(timeout_s // 60))} 分钟没有完成，已停止"
+                                      "（可以把分离设备改为 CPU 后重试）")
             if progress:
                 if pct["value"] is not None:
                     progress(0.1 + 0.8 * pct["value"] / 100.0, f"人声分离中 {pct['value']}%")
@@ -242,8 +252,12 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
                     progress(0.08, f"人声分离中（已用 {elapsed // 60}:{elapsed % 60:02d}）")
             time.sleep(0.25)
     finally:
+        _signal(proc, "KILL")  # whatever happened (cancel, timeout, an error here): nothing keeps running
         if proc.poll() is None:
-            proc.kill()
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
         for t in readers:
             t.join(timeout=5)
     stdout = "".join(out_chunks)
@@ -284,6 +298,24 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     if progress:
         progress(1.0, "完成")
     return SeparationOutput(outputs["vocals"], outputs["instrumental"], report)
+
+
+def _signal(proc: subprocess.Popen, which: str) -> None:
+    """Stop the child and its process group (TERM or KILL)."""
+    import signal
+
+    sig = signal.SIGTERM if which == "TERM" else getattr(signal, "SIGKILL", signal.SIGTERM)
+    pid = getattr(proc, "pid", None)
+    if os.name == "posix" and isinstance(pid, int) and pid > 0:
+        try:
+            os.killpg(pid, sig)  # the group lives on while any of its processes does
+        except OSError:
+            pass
+    if proc.poll() is None:
+        try:
+            proc.send_signal(sig)
+        except OSError:
+            pass
 
 
 def preset_dicts() -> list[dict]:

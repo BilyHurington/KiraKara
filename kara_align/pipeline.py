@@ -26,6 +26,8 @@ rest (AI readings, separation, alignment, video) runs unattended in order.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import shutil
 import threading
@@ -41,7 +43,14 @@ from . import settings as app_settings
 from .interfaces import CancelToken, Cancelled
 from .models import KaraokeStyle, _Base, new_id, utcnow
 from .project.jobs import run_heavy
-from .project.store import atomic_write_text
+from .project.store import atomic_write_text, timestamped
+
+try:  # an exclusive lock on the queue's folder (POSIX); elsewhere every server runs its queue
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
+log = logging.getLogger(__name__)
 
 TaskStatus = Literal["preparing", "queued", "running", "waiting", "succeeded", "failed", "cancelled", "interrupted"]
 StageStatus = Literal["pending", "running", "waiting", "done", "skipped", "failed"]
@@ -49,6 +58,18 @@ StageStatus = Literal["pending", "running", "waiting", "done", "skipped", "faile
 
 class WaitForUser(Exception):
     """A stage needs a decision from the user; the task waits without failing."""
+
+
+class TaskConflict(S.ServiceError):
+    """The task is not in a state that allows this (e.g. removing a running task)."""
+
+
+class QueueElsewhere(TaskConflict):
+    """Another server process on the same workspace runs the task queue."""
+
+    def __init__(self) -> None:
+        super().__init__("另一个 Kara Align 服务进程正在使用这个工作区的任务队列；请在那个进程打开的页面中操作，"
+                         "或关闭它后重启本服务")
 
 STAGES: list[tuple[str, str, float]] = [  # key, label, share of the progress bar
     ("import", "导入视频", 0.05),
@@ -134,6 +155,13 @@ class PipelineTask(_Base):
         return next(s for s in self.stages if s.key == key)
 
 
+def export_url(project_id: str, filename: str) -> str:
+    """Download URL of an exported file (the name may contain #, ?, %, spaces …)."""
+    from urllib.parse import quote
+
+    return f"/api/projects/{quote(project_id, safe='')}/exports/{quote(filename, safe='')}"
+
+
 def is_music_link(text: str) -> bool:
     """A pasted music link / share text, as opposed to lyrics."""
     from .lyrics.fetch.links import _EXPLICIT, extract_urls
@@ -149,7 +177,14 @@ def is_music_link(text: str) -> bool:
 
 
 class TaskQueue:
-    """Runs tasks one after another in a worker thread; state is saved to disk."""
+    """Runs tasks one after another in a worker thread; state is saved to disk.
+
+    One server process per workspace runs the queue: it holds an exclusive lock on
+    ``<workspace>/.tasks/lock``.  A second process on the same workspace (e.g. a second
+    ``kara-align serve``) starts *passive*: it shows the tasks as saved by the first one and
+    refuses every change (:class:`QueueElsewhere`), so tasks never run twice and tasks.json is
+    never written by two processes.
+    """
 
     def __init__(self, ws: "S.Workspace") -> None:
         self.ws = ws
@@ -159,16 +194,62 @@ class TaskQueue:
         self._save_lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
         self._cancel: dict[str, CancelToken] = {}
+        self._stop = False
+        self.save_error: Optional[str] = None  # the last failure to write tasks.json (disk full …)
+        self._lock_file = self._acquire()
+        self.passive = self._lock_file is None
+        self._loaded_mtime: Optional[float] = None
         self.tasks: list[PipelineTask] = self._load()
         from concurrent.futures import ThreadPoolExecutor
 
         self._prep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="kara-prep")
         self._thread = threading.Thread(target=self._worker, name="kara-tasks", daemon=True)
-        self._stop = False
+        if self.passive:
+            log.warning("another process runs the task queue of %s; this one only shows it", ws.root)
+            return
         self._thread.start()
         for t in self.tasks:
             if t.status == "preparing":
-                self._prep_pool.submit(self._prepare, t)
+                self._submit_prep(t)
+
+    # ---- one queue per workspace
+    def _acquire(self):
+        """The exclusive queue lock, or None when another process holds it."""
+        if fcntl is None:
+            return True  # no locking available: behave as before
+        # held for the life of the process (released by shutdown, or by the OS when the process ends)
+        fd = os.open(self.dir / "lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
+
+    def _release(self) -> None:
+        fd, self._lock_file = self._lock_file, None
+        if isinstance(fd, int) and not isinstance(fd, bool):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _require_owner(self) -> None:
+        if self.passive:
+            raise QueueElsewhere()
+
+    def _refresh(self) -> None:
+        """Passive: pick up what the process running the queue saved since."""
+        if not self.passive:
+            return
+        try:
+            mtime = self._file().stat().st_mtime
+        except OSError:
+            return
+        if mtime != self._loaded_mtime:
+            tasks = self._load()
+            with self._lock:
+                self.tasks = tasks
 
     # ---- persistence
     def _file(self) -> Path:
@@ -176,16 +257,20 @@ class TaskQueue:
 
     def _load(self) -> list[PipelineTask]:
         try:
+            self._loaded_mtime = self._file().stat().st_mtime
             raw = json.loads(self._file().read_text(encoding="utf-8"))
             tasks = [PipelineTask.model_validate(t) for t in raw]
         except FileNotFoundError:
             return []
         except Exception:  # unreadable (e.g. written by another version): keep it for inspection, start empty
-            try:
-                self._file().replace(self._file().with_suffix(".broken.json"))
-            except OSError:
-                pass
+            if not self.passive:
+                try:  # a new name each time: an earlier broken copy is never overwritten
+                    self._file().replace(timestamped(self._file()))
+                except OSError:
+                    pass
             return []
+        if self.passive:  # the other process's tasks, as they are (they may be running there right now)
+            return tasks
         for t in tasks:
             if t.status == "running" and _first_open_stage(t) not in PREP_STAGES:  # stopped while it ran
                 t.status = "interrupted"
@@ -200,18 +285,32 @@ class TaskQueue:
                         s.status = "pending"
         return tasks
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
+        """Write tasks.json; False (and ``save_error`` set) when it cannot be written.
+
+        Never raises for a disk problem: a full disk must not stop the queue thread (the tasks then
+        stayed "queued" forever); the task being run gets a warning instead (see :meth:`_run`)."""
+        if self.passive:
+            return True  # never written by a process that does not run the queue
         # one saver at a time, each writing what is current then: an older snapshot never lands last
-        with self._save_lock:
-            with self._lock:
-                data = [t.model_dump(mode="json") for t in self.tasks]
-            atomic_write_text(self._file(), json.dumps(data, ensure_ascii=False))
+        try:
+            with self._save_lock:
+                with self._lock:
+                    data = [t.model_dump(mode="json") for t in self.tasks]
+                atomic_write_text(self._file(), json.dumps(data, ensure_ascii=False))
+        except OSError as e:
+            self.save_error = f"{e.strerror or e}"
+            log.error("cannot write %s: %s", self._file(), e)
+            return False
+        self.save_error = None
+        return True
 
     def media_path(self, task: PipelineTask) -> Path:
         return self.dir / task.id / task.media_filename
 
     # ---- public API
     def list(self) -> list[dict]:
+        self._refresh()
         with self._lock:
             tasks = list(reversed(self.tasks))
         out = []
@@ -229,6 +328,8 @@ class TaskQueue:
 
     def forget_project(self, pid: str) -> None:
         """The project was deleted: its tasks keep their history but lose links to it."""
+        if self.passive:
+            return
         with self._lock:
             for t in self.tasks:
                 if t.project_id == pid:
@@ -238,6 +339,7 @@ class TaskQueue:
         self._save()
 
     def get(self, task_id: str) -> PipelineTask:
+        self._refresh()
         with self._lock:
             for t in self.tasks:
                 if t.id == task_id:
@@ -247,6 +349,7 @@ class TaskQueue:
     def add(self, *, media: Path, filename: str, lyrics: str, mode: str, name: str = "",
             style: Optional[dict] = None) -> PipelineTask:
         """``style``: the task's subtitle choices (TaskStyleOptions); None = the last ones used."""
+        self._require_owner()
         lyrics = lyrics.strip()
         if not lyrics:
             raise S.ServiceError("请粘贴音乐链接或歌词")
@@ -262,7 +365,9 @@ class TaskQueue:
                           vocal_keep_pct=cfg.simple.vocal_keep_pct if opts.vocal_keep_pct is None else opts.vocal_keep_pct,
                           quality=cfg.simple.quality)
         karaoke.output.vocal_keep_pct = video.vocal_keep_pct
-        safe = Path(filename).name or "media"
+        safe = Path(filename).name
+        if safe in ("", ".", ".."):
+            safe = "media"
         t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
                          stages=[Stage(key=k, label=label) for k, label, _ in STAGES],
@@ -283,21 +388,33 @@ class TaskQueue:
         with self._lock:
             self.tasks.append(t)
         self._save()
-        self._prep_pool.submit(self._prepare, t)
+        self._submit_prep(t)
         return t
 
     def active_for_project(self, pid: str) -> Optional[PipelineTask]:
         """The unfinished task working on a project, if any (the detailed mode must not run heavy
         jobs on it meanwhile)."""
+        self._refresh()
         with self._lock:
             return next((t for t in self.tasks if t.project_id == pid
                          and t.status in ("preparing", "waiting", "queued", "running")), None)
+
+    def _submit_prep(self, task: PipelineTask) -> None:
+        fut = self._prep_pool.submit(self._prepare, task)
+
+        def done(f) -> None:  # an error there would otherwise vanish with the future
+            exc = f.exception() if not f.cancelled() else None
+            if exc is not None:
+                log.error("preparing task %s failed", task.id, exc_info=exc)
+
+        fut.add_done_callback(done)
 
     def _prepare(self, task: PipelineTask) -> None:
         """Quick stages right away; then wait for the user (LRC) or join the queue."""
         token = CancelToken()
         with self._lock:
-            if task.status != "preparing":
+            # (a task removed from the list before it came to this is never run)
+            if task.status != "preparing" or not any(x is task for x in self.tasks) or self._stop:
                 return
             self._cancel[task.id] = token
         self._run(task, token, PREP_STAGES, done_status="queued")
@@ -305,6 +422,7 @@ class TaskQueue:
             self._wake.notify_all()
 
     def cancel(self, task_id: str) -> PipelineTask:
+        self._require_owner()
         t = self.get(task_id)
         with self._lock:
             token = self._cancel.get(task_id)
@@ -320,20 +438,21 @@ class TaskQueue:
         return t
 
     def retry(self, task_id: str) -> PipelineTask:
+        self._require_owner()
         t = self.get(task_id)
         with self._lock:
             if t.status not in ("failed", "cancelled", "interrupted"):
-                raise S.ServiceError("只有失败、取消或中断的任务可以重试")
+                raise TaskConflict("只有失败、取消或中断的任务可以重试")
             if t.project_deleted:
                 raise S.ServiceError("这个任务的项目已被删除，无法重试；请重新添加任务")
-            again = set()
             for s in t.stages:
                 # failed / stopped stages, and optional ones that went wrong, get another chance;
                 # an optional step that is switched off (or AI not set up) stays skipped
                 if s.status in ("failed", "running", "waiting") or (s.status == "skipped" and s.failed_soft):
                     s.status, s.progress, s.message, s.failed_soft = "pending", 0.0, "", False
-                    again.add(s.key)
-            # warnings from the stages that run again are dropped (they are raised again if still true)
+            # every stage that runs again (also one a restart put back to pending) drops its warnings;
+            # they are raised again if still true
+            again = {s.key for s in t.stages if s.status == "pending"}
             t.warnings = [w for w in t.warnings if t.warning_stage.get(w) not in again]
             t.warning_stage = {w: k for w, k in t.warning_stage.items() if w in t.warnings}
             prep = _first_open_stage(t) in PREP_STAGES
@@ -342,11 +461,12 @@ class TaskQueue:
             self._wake.notify_all()
         self._save()
         if prep:
-            self._prep_pool.submit(self._prepare, t)
+            self._submit_prep(t)
         return t
 
     def confirm_calibration(self, task_id: str, *, marked_ms: Optional[int] = None, plain: bool = False) -> PipelineTask:
         """The user confirmed where the first line starts (or chose not to use the LRC times)."""
+        self._require_owner()
         t = self.get(task_id)
         with self._lock:  # a cancel must not slip in between the check and the change
             if t.status != "waiting" or not t.calibration or not t.project_id:
@@ -385,11 +505,18 @@ class TaskQueue:
         return t
 
     def remove(self, task_id: str) -> None:
-        t = self.get(task_id)
-        if t.status == "running" or (t.status == "preparing" and task_id in self._cancel):
-            raise S.ServiceError("任务正在运行，请先取消")
+        self._require_owner()
         with self._lock:
+            # one step under the lock: a task picked up (or being picked up) by a worker is refused;
+            # anything else leaves the list before a worker or the preparation lane can take it
+            t = next((x for x in self.tasks if x.id == task_id), None)
+            if t is None:
+                raise KeyError(task_id)
+            if task_id in self._cancel or t.status == "running":
+                raise TaskConflict("任务正在运行，请先取消")
             self.tasks = [x for x in self.tasks if x.id != task_id]
+            if t.status in ("preparing", "queued", "waiting"):
+                t.status, t.message = "cancelled", "已移除"  # a stale reference never runs it
         shutil.rmtree(self.dir / task_id, ignore_errors=True)  # staged upload only; the project stays
         self._save()
 
@@ -400,6 +527,7 @@ class TaskQueue:
                 c.cancel()
             self._wake.notify_all()
         self._prep_pool.shutdown(wait=False, cancel_futures=True)
+        self._release()
 
     # ---- worker
     def _next(self) -> Optional[PipelineTask]:
@@ -407,17 +535,26 @@ class TaskQueue:
 
     def _worker(self) -> None:
         while True:
-            with self._lock:
-                while not self._stop and self._next() is None:
-                    self._wake.wait(timeout=5)
-                if self._stop:
-                    return
-                task = self._next()
-                assert task is not None
-                token = CancelToken()
-                self._cancel[task.id] = token
-                task.status = "running"  # taken: a cancel from now on goes through the token
-            self._run(task, token, None, done_status="succeeded")
+            try:
+                with self._lock:
+                    while not self._stop and self._next() is None:
+                        self._wake.wait(timeout=5)
+                    if self._stop:
+                        return
+                    task = self._next()
+                    assert task is not None
+                    token = CancelToken()
+                    self._cancel[task.id] = token
+                    task.status = "running"  # taken: a cancel from now on goes through the token
+                self._run(task, token, None, done_status="succeeded")
+            except Exception:  # the queue thread must never die (every later task would wait forever)
+                log.exception("task queue worker error")
+                time.sleep(1.0)
+
+    def _save_during(self, task: PipelineTask) -> None:
+        """Save while a task runs; a failure to write is shown on that task."""
+        if not self._save() and self.save_error:
+            _warn(task, f"任务状态无法写入磁盘（{self.save_error}）；服务重启后这个任务可能需要重新添加")
 
     def _run(self, task: PipelineTask, token: CancelToken, keys: Optional[tuple[str, ...]], *,
              done_status: TaskStatus) -> None:
@@ -425,11 +562,16 @@ class TaskQueue:
             dropped = task.status == "cancelled" or token.cancelled  # cancelled while being picked up
             if dropped:
                 self._cancel.pop(task.id, None)
-                task.status, task.message = "cancelled", "已取消"
-                task.finished = task.finished or utcnow()
+                if self._stop and task.status != "cancelled":
+                    # stopped by the server shutting down before it began: not the user's cancel —
+                    # it simply starts again after the restart
+                    task.status, task.message = ("preparing", "读取视频和歌词") if keys else ("queued", "排队中")
+                else:
+                    task.status, task.message = "cancelled", "已取消"
+                    task.finished = task.finished or utcnow()
             else:
                 task.status, task.message = ("preparing" if keys else "running"), "开始"
-        self._save()  # never while holding self._lock (the save lock is always taken first)
+        self._save_during(task)  # never while holding self._lock (the save lock is always taken first)
         if dropped:
             return
         try:
@@ -472,7 +614,7 @@ class TaskQueue:
             with self._lock:
                 if self._cancel.get(task.id) is token:  # a retry may already have registered a new one
                     self._cancel.pop(task.id, None)
-            self._save()
+            self._save_during(task)
 
     @staticmethod
     def _mark_running_stage(task: PipelineTask, status: StageStatus, message: str = "") -> None:
@@ -503,7 +645,7 @@ def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Option
         now = time.time()
         if force or now - last_save[0] > 1.0:
             last_save[0] = now
-            q._save()
+            q._save_during(task)
 
     def overall() -> None:
         done = sum(_WEIGHT[s.key] * (1.0 if s.status in ("done", "skipped") else s.progress) for s in task.stages)
@@ -595,13 +737,23 @@ def stage_lyrics(q, task, cfg, cancel, progress):
         if got["kind"] != "song":
             raise S.ServiceError("这是专辑或歌单链接，请粘贴单曲链接")
         song = got["song"]
-        pv = S.parse_from_song(h, song["platform"], song["song_id"])
+        from .lyrics.fetch import fetch_song
+
+        try:  # fetched once; both parses below use it
+            fetched = fetch_song(song["platform"], song["song_id"])
+        except Exception as e:
+            raise S.ServiceError(f"无法从链接获取歌词：{e}") from e
+        pv = S.parse_from_song(h, song["platform"], song["song_id"], song=fetched)
         if pv.get("error") and task.mode == "lrc":
-            # the platform only has lyrics without times: continue in plain mode
+            # only lyrics without times fall back to plain mode (they parse as plain lyrics);
+            # anything else (no lyrics at all, …) fails with the platform's own message
+            plain = S.parse_from_song(h, song["platform"], song["song_id"], mode="plain", song=fetched)
+            if plain.get("error") or not plain.get("preview_id"):
+                raise S.ServiceError(pv["error"])
             _warn(task, f"{pv['error']}；已改用普通模式")
             S.update_settings(h, mode="plain")
             task.mode = "plain"
-            pv = S.parse_from_song(h, song["platform"], song["song_id"])
+            pv = plain
         title = song.get("title") or ""
         artists = song.get("artists") or []
         if not task.name and title:
@@ -610,10 +762,14 @@ def stage_lyrics(q, task, cfg, cancel, progress):
     else:
         pv = S.parse_lyrics(h, task.lyrics_input, origin="paste")
         if pv.get("error") and task.mode == "lrc":
+            # only lyrics without time tags fall back to plain mode; other errors keep their own message
+            plain = S.parse_lyrics(h, task.lyrics_input, origin="paste", mode="plain")
+            if plain.get("error") or not plain.get("preview_id"):
+                raise S.ServiceError(pv["error"])
             _warn(task, "粘贴的歌词没有时间标签；已改用普通模式")
             S.update_settings(h, mode="plain")
             task.mode = "plain"
-            pv = S.parse_lyrics(h, task.lyrics_input, origin="paste", mode="plain")
+            pv = plain
     if pv.get("error") or not pv.get("preview_id"):
         raise S.ServiceError(pv.get("error") or "无法解析歌词")
     for w in pv.get("warnings") or []:
@@ -660,7 +816,10 @@ def stage_readings(q, task, cfg, cancel, progress):
     h = _handle(q, task)
     try:
         out = S.ai_auto(h, None, cfg=cfg.ai, cancel=cancel, progress=progress)
-        summary = S.ai_apply(h, out["report_id"], None)
+        try:
+            summary = S.ai_apply(h, out["report_id"], None)
+        finally:
+            h.previews.pop(out["report_id"], None)  # applied (or not applicable): not kept around
     except Cancelled:
         raise
     except Exception as e:  # rule readings are still usable
@@ -867,8 +1026,7 @@ def stage_export(q, task, cfg, cancel, progress):
     for w in out.get("warnings") or []:
         if "停顿" in w:
             _warn(task, w)
-    task.outputs["video"] = {"filename": out["filename"],
-                             "url": f"/api/projects/{h.project.id}/exports/{out['filename']}"}
+    task.outputs["video"] = {"filename": out["filename"], "url": export_url(h.project.id, out["filename"])}
     return "done"
 
 

@@ -7,6 +7,7 @@ succeeds; cancelled or failed jobs never produce a completed result.
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -14,6 +15,8 @@ from typing import Any, Callable, Literal, Optional
 
 from ..interfaces import CancelToken, Cancelled
 from ..models import new_id, utcnow
+
+FINISHED_JOB_TTL_S = 3600.0  # finished jobs are forgotten after this
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
@@ -54,6 +57,7 @@ class Job:
     created: str = field(default_factory=utcnow)
     finished: Optional[str] = None
     cancel_token: CancelToken = field(default_factory=CancelToken, repr=False)
+    finished_at: Optional[float] = field(default=None, repr=False)  # monotonic time, for pruning
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +85,7 @@ class JobManager:
                heavy: bool = True, on_success: Optional[Callable[[Job, Any], Any]] = None) -> Job:
         job = Job(id=new_id("job"), kind=kind, project_id=project_id)
         with self._lock:
+            self._prune()
             self._jobs[job.id] = job
 
         def run() -> None:
@@ -114,14 +119,24 @@ class JobManager:
         job.status = status
         job.message = message
         job.finished = utcnow()
+        job.finished_at = time.monotonic()
         if status == "succeeded":
             job.progress = 1.0
+
+    def _prune(self) -> None:
+        """Finished jobs are kept for a while (the page polls them, and may come back to one), then
+        dropped: a long session no longer keeps every job and its output."""
+        now = time.monotonic()
+        for jid in [j.id for j in self._jobs.values()
+                    if j.finished_at is not None and now - j.finished_at > FINISHED_JOB_TTL_S]:
+            del self._jobs[jid]
 
     def get(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)
 
     def list(self, project_id: Optional[str] = None) -> list[Job]:
-        jobs = list(self._jobs.values())
+        with self._lock:
+            jobs = list(self._jobs.values())
         if project_id:
             jobs = [j for j in jobs if j.project_id == project_id]
         return sorted(jobs, key=lambda j: j.created, reverse=True)
@@ -132,9 +147,7 @@ class JobManager:
             return False
         job.cancel_token.cancel()
         if job.status == "queued":
-            job.status = "cancelled"
-            job.message = "已取消"
-            job.finished = utcnow()
+            self._finish(job, "cancelled", message="已取消")
         return True
 
     def shutdown(self) -> None:

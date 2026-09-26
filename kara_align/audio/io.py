@@ -80,48 +80,117 @@ def _sf_readable(path: PathLike) -> bool:
         return False
 
 
-def _ffprobe_stream(path: PathLike) -> dict:
+# ffprobe answers in seconds; decoding / extracting / muxing a long video can take minutes
+PROBE_TIMEOUT_S = 120.0
+DECODE_TIMEOUT_S = 30 * 60.0
+
+
+def run_tool(cmd: list[str], *, timeout: float, cancel=None, stdout=None, what: str = "ffmpeg") -> tuple[int, bytes, str]:
+    """Run ffmpeg / ffprobe with a time limit, stopped by ``cancel`` (anything with ``cancelled``).
+
+    Output goes to temporary files (never a full pipe, never doubled in memory); ``stdout`` may
+    be an open binary file to receive it instead.  The process is always gone when this returns
+    or raises.  Returns ``(returncode, stdout bytes, stderr text)``.
+    """
+    import tempfile
+    import time
+
+    from ..interfaces import Cancelled
+
+    own_out = stdout is None
+    out_f = tempfile.TemporaryFile() if own_out else stdout
+    with tempfile.TemporaryFile() as err_f:
+        try:
+            try:
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out_f, stderr=err_f)
+            except OSError as e:
+                raise AudioError(f"无法启动 {what}：{e}") from e
+            t0 = time.monotonic()
+            try:
+                while True:
+                    try:
+                        proc.wait(timeout=0.2)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if cancel is not None and getattr(cancel, "cancelled", False):
+                        raise Cancelled()
+                    if time.monotonic() - t0 > timeout:
+                        raise AudioError(f"{what} 超过 {int(timeout)} 秒没有完成，已停止")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(10)
+                    except subprocess.TimeoutExpired:
+                        pass
+            err_f.seek(0)
+            err = err_f.read().decode("utf-8", errors="replace")
+            data = b""
+            if own_out:
+                out_f.seek(0)
+                data = out_f.read()
+            return proc.returncode, data, err
+        finally:
+            if own_out:
+                out_f.close()
+
+
+def _ffprobe_stream(path: PathLike, cancel=None) -> dict:
     probe = ffprobe_path()
     if not probe:
         raise AudioError("找不到 ffprobe")
     import json
 
-    out = subprocess.run(
-        [probe, "-v", "error", "-select_streams", "a:0", "-show_entries",
-         "stream=sample_rate,channels", "-of", "json", str(path)],
-        capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        raise AudioError(f"无法读取音频信息：{out.stderr.strip()[:300]}")
-    streams = json.loads(out.stdout or "{}").get("streams") or []
-    if not streams:
+    code, out, err = run_tool([probe, "-v", "error", "-select_streams", "a:0", "-show_entries",
+                               "stream=sample_rate,channels", "-of", "json", str(path)],
+                              timeout=PROBE_TIMEOUT_S, cancel=cancel, what="ffprobe")
+    if code != 0:
+        raise AudioError(f"无法读取音频信息：{err.strip()[:300]}")
+    try:
+        streams = json.loads(out.decode("utf-8", errors="replace") or "{}").get("streams") or []
+        info = {"sample_rate": int(streams[0]["sample_rate"]), "channels": int(streams[0]["channels"])} \
+            if streams else None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise AudioError("无法读取音频信息：ffprobe 的输出无法识别") from None
+    if not info:
         raise AudioError("文件中没有音频流")
-    return {"sample_rate": int(streams[0]["sample_rate"]), "channels": int(streams[0]["channels"])}
+    if info["channels"] < 1 or info["sample_rate"] < 1:
+        raise AudioError("无法读取音频信息：声道数或采样率无效")
+    return info
 
 
-def _ffmpeg_decode(path: PathLike) -> tuple[np.ndarray, int]:
-    info = _ffprobe_stream(path)
+def _ffmpeg_decode(path: PathLike, cancel=None) -> tuple[np.ndarray, int]:
+    import tempfile
+
+    info = _ffprobe_stream(path, cancel)
     sr, ch = info["sample_rate"], info["channels"]
     cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-i", str(path), "-map", "0:a:0",
            "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(ch), "-ar", str(sr), "pipe:1"]
-    out = subprocess.run(cmd, capture_output=True)
-    if out.returncode != 0:
-        raise AudioError(f"ffmpeg 解码失败：{out.stderr.decode(errors='replace').strip()[:300]}")
-    data = np.frombuffer(out.stdout, dtype="<f4")
+    # the PCM goes to a temporary file and is read once: no pipe buffer + joined copy + array copy
+    with tempfile.TemporaryFile() as pcm:
+        code, _, err = run_tool(cmd, timeout=DECODE_TIMEOUT_S, cancel=cancel, stdout=pcm)
+        if code != 0:
+            raise AudioError(f"ffmpeg 解码失败：{err.strip()[:300]}")
+        pcm.seek(0)
+        data = np.fromfile(pcm, dtype="<f4")
     n = len(data) // ch
-    data = data[: n * ch].reshape(n, ch).T.copy()
+    if ch == 1:
+        return data[:n].astype(np.float32, copy=False).reshape(1, n), sr
+    data = np.ascontiguousarray(data[: n * ch].reshape(n, ch).T)
     return data.astype(np.float32, copy=False), sr
 
 
-def load_audio(path: PathLike, *, target_sr: Optional[int] = None, mono: bool = False) -> tuple[np.ndarray, int]:
+def load_audio(path: PathLike, *, target_sr: Optional[int] = None, mono: bool = False,
+               cancel=None) -> tuple[np.ndarray, int]:
     """Decode ``path`` into float32 ``[channels, n]`` at its original rate.
 
     ``target_sr`` resamples (zero-phase, origin preserving); ``mono`` averages
-    channels (returned shape ``[1, n]``).
+    channels (returned shape ``[1, n]``).  ``cancel`` stops an ffmpeg decode.
     """
     path = Path(path)
     if not path.exists():
-        raise AudioError(f"找不到文件：{path}")
+        raise AudioError(f"找不到文件：{path.name}")
     x = None
     if _sf_readable(path) and path.suffix.lower() != ".mp3":
         try:
@@ -131,7 +200,7 @@ def load_audio(path: PathLike, *, target_sr: Optional[int] = None, mono: bool = 
             # some FLAC files have a valid header but trip libsndfile's decoder
             x = None
     if x is None:
-        x, sr = _ffmpeg_decode(path)
+        x, sr = _ffmpeg_decode(path, cancel)
     if mono:
         x = to_mono(x)[None, :]
     if target_sr and target_sr != sr:
@@ -140,14 +209,14 @@ def load_audio(path: PathLike, *, target_sr: Optional[int] = None, mono: bool = 
     return x.astype(np.float32, copy=False), int(sr)
 
 
-def probe_audio(path: PathLike) -> dict:
+def probe_audio(path: PathLike, cancel=None) -> dict:
     """Duration / rate / channels / samples as actually decoded (priming trimmed)."""
     path = Path(path)
     if _sf_readable(path) and path.suffix.lower() != ".mp3":
         info = sf.info(str(path))
         sr, ch, n = int(info.samplerate), int(info.channels), int(info.frames)
     else:
-        x, sr = _ffmpeg_decode(path)
+        x, sr = _ffmpeg_decode(path, cancel)
         ch, n = x.shape
     return {"duration_ms": int(round(n * 1000.0 / sr)), "sample_rate": sr, "channels": ch, "num_samples": n}
 

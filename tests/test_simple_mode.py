@@ -704,7 +704,7 @@ def test_stems_of_a_replaced_original_are_not_used(tmp_path):
     assert S.stems_current(h.project)  # imported stems (no known source) are usable
     with h.lock:
         for role in ("vocals", "instrumental"):
-            h.project.asset(role).source = AudioSource(kind="separation", parent_sha256="sha_of_an_older_original")
+            h.project.asset(role).source = AudioSource(kind="separation", parent_sha256="0" * 64)  # an older original
         h.save()
     assert not S.stems_current(h.project)
     view = S.project_view(h)["view"]["audio"]
@@ -759,8 +759,8 @@ def test_old_sideways_video_size_is_corrected_and_deleted_projects_stay_deleted(
     (h.dir / "assets").mkdir(parents=True, exist_ok=True)
     (h.dir / "assets" / "v.mp4").write_bytes(b"x")
     with h.lock:
-        h.project.video = VideoAsset(sha256="s", path="assets/v.mp4", container=".mp4", duration_ms=1000, width=1920,
-                                     height=1080, audio_sha256="a")  # imported before rotation was read
+        h.project.video = VideoAsset(sha256="5" * 64, path="assets/v.mp4", container=".mp4", duration_ms=1000, width=1920,
+                                     height=1080, audio_sha256="a" * 64)  # imported before rotation was read
         h.save()
     import kara_align.audio.video as V
 

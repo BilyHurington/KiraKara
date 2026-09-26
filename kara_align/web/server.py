@@ -6,18 +6,25 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from .. import __version__
 from .. import service as S
+from ..models import LineKind, SourceOrigin
 from ..project.jobs import Job, JobManager, progress_setter
 from ..project.store import ProjectError
+
+# the server only answers requests addressed to this computer by name (DNS rebinding: a web page
+# whose domain points at 127.0.0.1 would otherwise reach the API); "testserver" is FastAPI's TestClient
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "testserver"})
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_TEXT_BYTES = 5 * 1024 * 1024
@@ -43,7 +50,7 @@ class PatchProjectBody(BaseModel):
 
 class TextBody(BaseModel):
     text: str
-    origin: str = "paste"
+    origin: SourceOrigin = "paste"
     filename: Optional[str] = None
     kind: Optional[str] = None
 
@@ -69,7 +76,7 @@ class SongBody(BaseModel):
 class LinePatch(BaseModel):
     text: Optional[str] = None
     sing: Optional[bool] = None
-    kind: Optional[str] = None
+    kind: Optional[LineKind] = None
     translation: Optional[str] = None
     voice: Optional[str] = None
 
@@ -104,8 +111,8 @@ class ReportApplyBody(BaseModel):
 
 
 class SeparateBody(BaseModel):
-    preset: str = "melband-roformer"
-    device: str = "auto"
+    preset: str = "melband-roformer"  # one of the known presets (checked in the endpoint)
+    device: Literal["auto", "cpu"] = "auto"
 
 
 class MarkBody(BaseModel):
@@ -146,11 +153,16 @@ class AdoptBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -> FastAPI:
+def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
+               allowed_hosts: Optional[set[str]] = None) -> FastAPI:
+    """``allowed_hosts``: host names accepted besides this computer's own (``serve --allow-host``)."""
     from contextlib import asynccontextmanager
 
-    from ..pipeline import TaskQueue
+    from ..audio.mix import MixError
+    from ..lyrics.fetch.types import FetchError
+    from ..pipeline import TaskConflict, TaskQueue
 
+    hosts = LOCAL_HOSTS | {h.lower().strip("[]") for h in (allowed_hosts or set())}
     ws = S.Workspace(root)
     jm = jobs or JobManager()
     tq = TaskQueue(ws)
@@ -175,6 +187,34 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     async def _project_error(_req: Request, exc: ProjectError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
+    @app.exception_handler(TaskConflict)
+    async def _task_conflict(_req: Request, exc: TaskConflict):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(MixError)
+    async def _mix_error(_req: Request, exc: MixError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(FetchError)
+    async def _fetch_error(_req: Request, exc: FetchError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.middleware("http")
+    async def _local_only(request: Request, call_next):
+        """Only requests to this computer by name, and changes only from the app's own pages."""
+        host = request.headers.get("host", "")
+        name = (urlsplit(f"//{host}").hostname or "") if host else ""
+        if name.lower() not in hosts:
+            return JSONResponse(status_code=403, content={"detail": f"不接受发往 {host or '（无 Host）'} 的请求："
+                                                                     "请用 http://127.0.0.1 或 http://localhost 打开"})
+        origin = request.headers.get("origin")
+        if origin is not None and request.method not in ("GET", "HEAD", "OPTIONS"):
+            o = urlsplit(origin)
+            # a page of another site (CSRF) may send requests here but must not change anything
+            if o.scheme not in ("http", "https") or o.netloc.lower() != host.lower():
+                return JSONResponse(status_code=403, content={"detail": "拒绝来自其他网页的请求"})
+        return await call_next(request)
+
     def handle(pid: str) -> S.ProjectHandle:
         try:
             return ws.get(pid)
@@ -186,9 +226,15 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         v.update(extra)
         return v
 
+    # detailed-mode jobs that change the project (readings, stems, results); burns, exports and the
+    # offset suggestion only read it
+    CHANGING_JOBS = ("align", "separate", "ai")
+
     def no_jobs(pid: str, doing: str) -> None:
-        """A task must not start work the detailed mode is doing on the same project right now."""
-        busy = [j for j in jm.list(pid) if j.status in ("queued", "running")]
+        """A task must not continue (retry / confirm) while the detailed mode changes the same project:
+        the task would work on inputs that change underneath it.  Jobs that only read the project do
+        not hold it up."""
+        busy = [j for j in jm.list(pid) if j.status in ("queued", "running") and j.kind in CHANGING_JOBS]
         if busy:
             kind = {"align": "对齐", "separate": "人声分离", "burn": "字幕烧录", "ai": "AI 注音",
                     "calibrate": "自动匹配偏移"}.get(busy[0].kind, busy[0].kind)
@@ -200,6 +246,15 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         if t is not None:
             raise HTTPException(409, f"极简模式任务「{t.name or t.media_filename}」正在处理这个项目；"
                                      "请等它完成，或在极简模式的任务队列里取消后再操作")
+
+    def result_or_404(h: S.ProjectHandle, rid: str) -> None:
+        if h.project.result(rid) is None:
+            raise HTTPException(404, f"没有对齐结果 {rid}")
+
+    def download_url(pid: str, filename: str) -> str:
+        from ..pipeline import export_url
+
+        return export_url(pid, filename)
 
     def guard(fn, *args, **kw):
         """Map module-level validation errors to 400 with a readable message."""
@@ -230,6 +285,8 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             "backends": list_backends(),
             "separation_presets": preset_dicts(),
             "separation_available": sep_ok,
+            # another server process on this workspace runs the simple-mode queue: tasks are shown, not run
+            "tasks_elsewhere": tq.passive,
             "export_formats": {k: {"filename": v[0], "description": v[2]} for k, v in EXPORT_FORMATS.items()},
         }
 
@@ -264,7 +321,16 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
         saved = app_settings.load().ai
         patch = {k: v for k, v in (body or {}).items() if k != "api_key" or v}
-        cfg = app_settings.AiSettings.model_validate({**saved.model_dump(), **patch, "timeout_s": 120})
+        # the saved key (or the key variable) only ever goes to the saved address: testing another
+        # address needs its key in the same request
+        try:
+            cfg = app_settings.AiSettings.model_validate({**saved.model_dump(), **patch, "timeout_s": 120})
+        except ValueError as e:
+            raise HTTPException(400, f"设置无效：{e}") from e
+        if cfg.base_url.rstrip("/") != saved.base_url.rstrip("/"):
+            if not patch.get("api_key"):
+                return {"ok": False, "error": "测试其他 API 地址时请同时填写该地址的 API Key（已保存的 Key 只发往已保存的地址）"}
+            cfg = cfg.model_copy(update={"api_key_env": "NO_SAVED_KEY"})  # never the key variable either
         try:
             r = ask(cfg, "只回复两个字母：OK")
         except LlmError as e:
@@ -288,9 +354,12 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     async def add_task(file: UploadFile = File(...), lyrics: str = Form(...), mode: str = Form("lrc"),
                        name: str = Form(""), style: str = Form("")):
         from ..audio.io import AudioError, validate_upload
+        from ..pipeline import QueueElsewhere
 
+        if tq.passive:
+            raise QueueElsewhere()
         _check_text(lyrics)
-        fname = Path(file.filename or "media").name
+        fname = _upload_name(file.filename, "media")
         td = tempfile.mkdtemp(prefix="kara-task-")
         try:
             tmp = Path(td) / fname
@@ -299,7 +368,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                 with open(tmp, "rb") as f:
                     validate_upload(fname, f.read(64), size, MAX_AUDIO_BYTES)
             except AudioError as e:
-                raise HTTPException(400, str(e)) from e
+                raise HTTPException(400, _clean(str(e), td, fname)) from e
             try:
                 opts = json.loads(style) if style.strip() else None
             except ValueError as e:
@@ -328,7 +397,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     def confirm_task_calibration(task_id: str, body: dict):
         task_or_404(task_id)
         t = tq.get(task_id)
-        if t.project_id:
+        if t.project_id and not t.project_deleted:
             no_jobs(t.project_id, "确认")
         marked = (body or {}).get("marked_ms")
         if marked is not None and (not isinstance(marked, (int, float)) or marked < 0):
@@ -355,8 +424,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):
+        job = job_or_404(job_id)
         jm.cancel(job_id)
-        return job_or_404(job_id).to_dict()
+        return job.to_dict()
 
     @app.get("/api/projects/{pid}/jobs")
     def project_jobs(pid: str):
@@ -398,11 +468,15 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.post("/api/projects/import")
     async def import_project(file: UploadFile = File(...)):
-        name = file.filename or "project.json"
+        from ..project.store import MAX_PROJECT_JSON_BYTES
+
+        name = _upload_name(file.filename, "project.json")
+        is_zip = name.endswith(".zip")
         with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td) / ("upload.zip" if name.endswith(".zip") else "project.json")
-            await _save_upload(file, tmp, 4 * 1024**3)
-            h = await run_in_threadpool(ws.import_file, tmp, name)
+            tmp = Path(td) / ("upload.zip" if is_zip else "project.json")
+            # a project.json is never larger than a project file may be; a package may carry audio
+            await _save_upload(file, tmp, 4 * 1024**3 if is_zip else MAX_PROJECT_JSON_BYTES)
+            h = await run_in_threadpool(ws.import_file, tmp, "upload.zip" if is_zip else "project.json")
         return view(h)
 
     @app.get("/api/projects/{pid}/package")
@@ -410,9 +484,18 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from ..project.store import export_package
 
         h = handle(pid)
-        out = h.dir / "exports" / f"{h.project.id}.kara.zip"
-        export_package(h.project, h.dir, out, include_audio=bool(include_audio))
-        return FileResponse(out, filename=out.name, media_type="application/zip")
+        # built in a temporary folder and removed once sent: packages never pile up in the project
+        td = tempfile.mkdtemp(prefix="kara-package-")
+        out = Path(td) / f"{h.project.id}.kara.zip"
+        try:
+            with h.lock:
+                snapshot = h.project.model_copy(deep=True)
+            export_package(snapshot, h.dir, out, include_audio=bool(include_audio))
+        except BaseException:
+            shutil.rmtree(td, ignore_errors=True)
+            raise
+        return FileResponse(out, filename=out.name, media_type="application/zip",
+                            background=BackgroundTask(shutil.rmtree, td, ignore_errors=True))
 
     # ------------------------------------------------------------------ lyrics
 
@@ -531,7 +614,12 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/ai/apply")
     def ai_apply(pid: str, body: ReportApplyBody):
         h = handle(pid)
-        summary = S.ai_apply(h, body.report_id, body.line_ids)
+        try:
+            summary = S.ai_apply(h, body.report_id, body.line_ids)
+        except KeyError:  # a line of the report no longer exists (merged / split since)
+            h.previews.pop(body.report_id, None)
+            raise HTTPException(409, "报告已过期：歌词在校验后改动过，请重新粘贴或重新获取 AI 结果") from None
+        h.previews.pop(body.report_id, None)  # applied: the report is not kept around
         return view(h, summary=summary)
 
     # ------------------------------------------------------------------ audio
@@ -542,7 +630,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
         h = handle(pid)
         not_busy(pid)  # a task working on the project must not have its audio replaced underneath
-        name = Path(file.filename or "audio").name
+        name = _upload_name(file.filename, "audio")
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / name
             size = await _save_upload(file, tmp, MAX_AUDIO_BYTES)
@@ -551,8 +639,8 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                     validate_upload(name, f.read(64), size, MAX_AUDIO_BYTES)
                 await run_in_threadpool(S.add_media, h, tmp, role, filename=name,
                                         source_kind="upload" if role == "original" else "import")
-            except AudioError as e:
-                raise HTTPException(400, str(e)) from e
+            except AudioError as e:  # (ffmpeg's messages name the temporary copy: shown as the file name)
+                raise HTTPException(400, _clean(str(e), td, name)) from e
         return view(h)
 
     @app.get("/api/projects/{pid}/audio/{asset_id}/playback.wav")
@@ -569,7 +657,11 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.post("/api/projects/{pid}/separate")
     def separate(pid: str, body: SeparateBody):
+        from ..audio.separation import PRESET_NAMES, is_known_preset
+
         h = handle(pid)
+        if not is_known_preset(body.preset):
+            raise HTTPException(400, f"未知的分离预设（可选 {', '.join(PRESET_NAMES)}）")
         not_busy(pid)
         if h.project.asset("original") is None:
             raise HTTPException(400, "请先上传原曲")
@@ -589,10 +681,12 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         h = handle(pid)
         S.require_stems(h, "导出混音")
 
+        settings = body or {}
+        S.mix_settings(h.project.mix, settings)  # bad values: 400 now, not a failed job
+
         def run(job: Job):
-            out = S.export_mix(h, body or {})
-            return {"filename": out["filename"], "report": out["report"],
-                    "url": f"/api/projects/{pid}/exports/{out['filename']}"}
+            out = S.export_mix(h, settings, cancel=job.cancel_token)
+            return {"filename": out["filename"], "report": out["report"], "url": download_url(pid, out["filename"])}
 
         return jm.submit("mix", run, project_id=pid, heavy=False).to_dict()
 
@@ -688,8 +782,8 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from ..karaoke.render import RenderError
 
         try:
-            png = S.karaoke_preview(handle(pid), int(body.get("t_ms", 0)), body.get("style"),
-                                    background=body.get("background", "auto"))
+            png = S.karaoke_preview(handle(pid), (body or {}).get("t_ms", 0), (body or {}).get("style"),
+                                    background=(body or {}).get("background", "auto"))
         except RenderError as e:
             raise HTTPException(400, str(e)) from e
         return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
@@ -712,8 +806,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                                  quality=body.get("quality", "standard"), vocal_keep_pct=pct,
                                  cancel=job.cancel_token,
                                  progress=progress_setter(job))
-            return {"filename": out["filename"], "warnings": out["warnings"],
-                    "url": f"/api/projects/{pid}/exports/{out['filename']}"}
+            return {"filename": out["filename"], "warnings": out["warnings"], "url": download_url(pid, out["filename"])}
 
         return jm.submit("burn", run, project_id=pid).to_dict()
 
@@ -723,20 +816,22 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         if h.project.video is None:
             raise HTTPException(400, "项目中没有视频：请在“音频与歌词”中上传视频作为原曲")
         S.require_stems(h, "降低人声")
+        settings = body or {}
+        S.mix_settings(h.project.mix, settings)
 
         def run(job: Job):
             job.message = "混音并合成视频"
-            out = S.export_video(h, body or {})
-            return {"filename": out["filename"], "report": out["report"],
-                    "url": f"/api/projects/{pid}/exports/{out['filename']}"}
+            out = S.export_video(h, settings, cancel=job.cancel_token)
+            return {"filename": out["filename"], "report": out["report"], "url": download_url(pid, out["filename"])}
 
         return jm.submit("video", run, project_id=pid, heavy=False).to_dict()
 
     @app.get("/api/projects/{pid}/exports/{filename}")
     def exported_file(pid: str, filename: str):
         h = handle(pid)
-        path = (h.dir / "exports" / Path(filename).name)
-        if not path.exists():
+        name = Path(filename).name
+        path = h.dir / "exports" / name
+        if name in ("", ".", "..") or name != filename or not path.is_file():
             raise HTTPException(404, "文件不存在")
         return FileResponse(path, filename=path.name)
 
@@ -752,6 +847,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             raise HTTPException(400, "只有 LRC 增强模式需要校准")
         if h.project.asset("original") is None:
             raise HTTPException(400, "请先上传原曲")
+        not_busy(pid)  # a trial alignment: heavy, like the other jobs a running task holds off
 
         def run(job: Job):
             return suggest_calibration(h, cancel=job.cancel_token, progress=progress_setter(job))
@@ -804,7 +900,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.get("/api/projects/{pid}/results/{rid}")
     def get_result(pid: str, rid: str):
-        return S.get_result(handle(pid), rid).model_dump(mode="json")
+        h = handle(pid)
+        result_or_404(h, rid)
+        return S.get_result(h, rid).model_dump(mode="json")
 
     @app.post("/api/projects/{pid}/results/import")
     def import_result(pid: str, body: TextBody):
@@ -816,6 +914,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/results/{rid}/activate")
     def activate(pid: str, rid: str):
         h = handle(pid)
+        result_or_404(h, rid)
         S.activate_result(h, rid)
         return view(h)
 
@@ -823,6 +922,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from ..project.edits import EditError
 
         h = handle(pid)
+        result_or_404(h, rid)
         with h.lock:
             r = S.get_result(h, rid)
             try:
@@ -861,7 +961,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.post("/api/projects/{pid}/results/{rid}/adopt")
     def adopt(pid: str, rid: str, body: AdoptBody):
-        r = S.adopt_lines(handle(pid), rid, body.line_ids, from_result_id=body.from_result_id,
+        h = handle(pid)
+        result_or_404(h, rid)
+        r = S.adopt_lines(h, rid, body.line_ids, from_result_id=body.from_result_id,
                           candidate_id=body.candidate_id)
         return r.model_dump(mode="json")
 
@@ -869,9 +971,14 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.get("/api/projects/{pid}/export/{fmt}")
     def export(pid: str, fmt: str, result_id: Optional[str] = None, download: int = 0):
-        out = S.export(handle(pid), fmt, result_id)
+        h = handle(pid)
+        if result_id:
+            result_or_404(h, result_id)
+        out = S.export(h, fmt, result_id)
         if download:
-            headers = {"Content-Disposition": f'attachment; filename="{out.filename}"'}
+            ascii_name = out.filename.encode("ascii", "replace").decode().replace('"', "_")
+            headers = {"Content-Disposition": f'attachment; filename="{ascii_name}"; '
+                                              f"filename*=UTF-8''{quote(out.filename, safe='')}"}
             if out.warnings:
                 headers["X-Export-Warnings"] = str(len(out.warnings))
             return Response(out.content.encode("utf-8"), media_type=f"{out.media_type}; charset=utf-8",
@@ -893,6 +1000,19 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
     return app
+
+
+def _upload_name(filename: Optional[str], default: str) -> str:
+    """The plain file name of an upload ("/", ".." and empty names become ``default``)."""
+    name = Path((filename or "").replace("\\", "/")).name
+    return default if name in ("", ".", "..") else name
+
+
+def _clean(message: str, tmp_dir: str, name: str) -> str:
+    """An error message without the server's temporary paths (ffmpeg quotes the file it read)."""
+    for d in {str(tmp_dir), str(Path(tmp_dir).resolve())}:
+        message = message.replace(str(Path(d) / name), name).replace(d, "")
+    return message
 
 
 def _check_text(text: str) -> None:

@@ -7,15 +7,23 @@ never sent back to the browser and never written into a project or package.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import threading
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
+from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, ValidationError, field_validator
 
 from .karaoke.styles import warm_style as simple_default_style
 from .models import KaraokeStyle, _Base
-from .project.store import atomic_write_text, home_dir
+from .project.store import atomic_write_text, home_dir, timestamped
+
+log = logging.getLogger(__name__)
+
+# an environment variable holding a key: never an arbitrary one (PATH, HOME, other secrets …)
+API_KEY_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*(KEY|TOKEN)$"
 
 AiProvider = Literal["none", "claude", "codex", "openai"]
 
@@ -27,6 +35,23 @@ class AiSettings(_Base):
     api_key: str = ""  # stored locally only; GET returns has_api_key instead
     api_key_env: str = "OPENAI_API_KEY"  # used when no key is stored
     timeout_s: int = Field(default=600, ge=30, le=3600)
+
+    @field_validator("base_url")
+    @classmethod
+    def _http_url(cls, v: str) -> str:
+        parts = urlsplit(v.strip())
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("API 地址必须是 http:// 或 https:// 开头的网址")
+        if parts.username or parts.password:
+            raise ValueError("API 地址里不能包含账号密码")
+        return v.strip()
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name(cls, v: str) -> str:
+        if not re.fullmatch(API_KEY_ENV_PATTERN, v):
+            raise ValueError("环境变量名只能是大写字母、数字和下划线，并以 KEY 或 TOKEN 结尾（如 OPENAI_API_KEY）")
+        return v
 
 
 class TaskStyleOptions(_Base):
@@ -54,6 +79,16 @@ class SimpleSettings(_Base):
     separate: bool = True
     separation_preset: str = "melband-roformer"
     separation_device: Literal["auto", "cpu"] = "auto"
+
+    @field_validator("separation_preset")
+    @classmethod
+    def _known_preset(cls, v: str) -> str:
+        from .audio.separation import PRESET_NAMES
+
+        if v not in PRESET_NAMES:
+            raise ValueError(f"未知的分离预设 {v}（可选 {', '.join(PRESET_NAMES)}）")
+        return v
+
     # the complete subtitle style of new tasks (layout, colours, ruby, timing);
     # output.vocal_keep_pct is taken from vocal_keep_pct below
     karaoke: KaraokeStyle = Field(default_factory=simple_default_style)
@@ -81,15 +116,61 @@ def settings_path():
 def load() -> AppSettings:
     p = settings_path()
     try:
-        return AppSettings.model_validate(json.loads(p.read_text(encoding="utf-8")))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return AppSettings()
-    except Exception:  # a broken file must never stop the app; keep it for inspection
-        try:
-            p.replace(p.with_suffix(".broken.json"))
-        except OSError:
-            pass
+    except (OSError, ValueError):  # unreadable: the app still starts; the file is kept for inspection
+        _set_aside(p)
         return AppSettings()
+    if not isinstance(data, dict):
+        _set_aside(p)
+        return AppSettings()
+    return _validate_leniently(data)
+
+
+def _set_aside(p) -> None:
+    try:  # a new name each time: an earlier broken copy is never overwritten
+        p.replace(timestamped(p))
+    except OSError:
+        pass
+
+
+def _validate_leniently(data: dict) -> AppSettings:
+    """A value that is no longer valid (an option renamed, a range narrowed) goes back to its default;
+    everything else — the API key above all — is kept."""
+    for _ in range(100):
+        try:
+            return AppSettings.model_validate(data)
+        except ValidationError as e:
+            dropped = False
+            for err in e.errors():
+                dropped = _drop(data, err.get("loc") or ()) or dropped
+            if not dropped:
+                break
+    log.warning("settings.json could not be read, using the defaults")
+    ai = data.get("ai") if isinstance(data.get("ai"), dict) else {}
+    key = ai.get("api_key") if isinstance(ai.get("api_key"), str) else ""
+    return AppSettings(ai=AiSettings(api_key=key))
+
+
+def _drop(data: Any, loc: tuple) -> bool:
+    """Remove the value at ``loc`` (the innermost field of a dict; a whole list when the error is
+    inside one).  Returns whether something was removed."""
+    cur = data
+    parent, key = None, None
+    for part in loc:
+        if isinstance(cur, dict) and isinstance(part, str) and part in cur:
+            parent, key = cur, part
+            cur = cur[part]
+        elif isinstance(cur, list) and isinstance(part, int):
+            break  # inside a list: the list itself goes back to its default
+        else:
+            break
+    if parent is not None and key is not None:
+        log.warning("settings.json: invalid value for %s, using the default", ".".join(map(str, loc)))
+        del parent[key]
+        return True
+    return False
 
 
 def save(s: AppSettings) -> None:

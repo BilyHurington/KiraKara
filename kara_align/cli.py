@@ -31,6 +31,12 @@ def _progress(frac: float, msg: str = "") -> None:
     print(f"\r[{frac * 100:5.1f}%] {msg[:60]:<60}", end="", file=sys.stderr, flush=True)
 
 
+def _preset_names() -> list[str]:
+    from .audio.separation import PRESET_NAMES
+
+    return list(PRESET_NAMES)
+
+
 def _parse_set(items: list[str]) -> dict:
     """``--set decode.soft_sigma_ms=300`` → nested dict (values parsed as JSON when possible)."""
     out: dict = {}
@@ -332,7 +338,8 @@ def cmd_video(a) -> None:
 
 def cmd_burn(a) -> None:
     h = S.open_dir(Path(a.project))
-    out = S.karaoke_burn(h, background=a.background, audio=a.audio, quality=a.quality, progress=_progress)
+    out = S.karaoke_burn(h, background=a.background, audio=a.audio, quality=a.quality, vocal_keep_pct=a.vocal,
+                         progress=_progress)
     print(file=sys.stderr)
     _print({"file": str(h.dir / "exports" / out["filename"]), "warnings": out["warnings"]})
 
@@ -392,7 +399,10 @@ def cmd_serve(a) -> None:
 
     from .web.server import create_app
 
-    app = create_app(Path(a.root) if a.root else None)
+    extra = set(a.allow_host or [])
+    if a.host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+        extra.add(a.host)  # listening on a named address: requests to it are accepted
+    app = create_app(Path(a.root) if a.root else None, allowed_hosts=extra)
     print(f"Kara Align WebUI: http://{a.host}:{a.port}", file=sys.stderr)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
@@ -439,7 +449,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--readings", action="store_true")
 
     p = add("readings", cmd_readings, "规则注音（不覆盖人工/AI/已确认读音）")
-    p.add_argument("--overwrite-rule", action="store_true", default=True)
+    p.add_argument("--overwrite-rule", action=argparse.BooleanOptionalAction, default=True,
+                   help="重新生成规则读音（默认）；--no-overwrite-rule 保留现有的规则读音")
 
     p = add("reading-set", cmd_reading_set, "手工设置片段读音")
     p.add_argument("line")
@@ -462,7 +473,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role", choices=["original", "vocals", "instrumental"], default="original")
 
     p = add("separate", cmd_separate, "人声分离（需要 kara-align[separation]）")
-    p.add_argument("--preset", default="melband-roformer")
+    p.add_argument("--preset", default="melband-roformer", choices=_preset_names(),
+                   help="分离预设（kara-align backends 列出说明）")
     p.add_argument("--device", choices=["auto", "cpu"], default="auto",
                    help="auto 使用 GPU/MPS（若可用）；cpu 更慢但可避开部分环境下的 MPS 卡死")
 
@@ -533,7 +545,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("burn", cmd_burn, "把卡拉OK字幕烧录进视频（字幕样式见 WebUI“卡拉OK字幕”页；ASS 用 export karaoke-ass）")
     p.add_argument("--background", choices=["auto", "black"], default="auto", help="auto：有视频时用原视频，否则纯黑")
-    p.add_argument("--audio", choices=["original", "mix", "none"], default="original", help="mix：按混音设置降低人声")
+    p.add_argument("--audio", choices=["original", "mix", "none"], default="original",
+                   help="mix：降低人声（需要分轨），保留比例见 --vocal，默认用字幕样式中的设置；none：无声")
+    p.add_argument("--vocal", type=float, help="--audio mix 时的人声保留 p%%（0–100）")
     p.add_argument("--quality", choices=["standard", "high"], default="standard")
 
     p = add("package", cmd_package, "导出便携项目包")
@@ -565,6 +579,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--root", help="项目根目录（默认 ~/.kara_align/projects）")
+    p.add_argument("--allow-host", action="append", default=[],
+                   help="除 127.0.0.1 / localhost 外还接受的主机名（例如在局域网中访问时本机的地址）")
     p.set_defaults(fn=cmd_serve)
     return ap
 

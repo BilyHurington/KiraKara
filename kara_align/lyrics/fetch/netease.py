@@ -55,6 +55,8 @@ def _detail(client: SafeClient, ids: list[str]) -> list[dict]:
 
 
 def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
+    if not str(song_id).isdigit():
+        raise FetchError("网易云歌曲 ID 必须是数字")
     own = client is None
     client = client or SafeClient()
     try:
