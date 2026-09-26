@@ -8,9 +8,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
 import { loadSavedStyles, useLibrary } from '@/store/styles';
-import { Segmented, Select, Switch } from '@/components/ui';
+import { Segmented, Select, SliderField, Switch } from '@/components/ui';
 import { ColorRow } from '@/components/karaoke/ThemeColors';
 
+type RubyChoice = Exclude<TaskStyleOptions['ruby'], 'style'>;
 const TEMPLATE_HINT = {
   plain: '朴素：只有扫光变色和描边，干净清楚',
   glow: '荧光：带荧光边缘、翻译发光和字幕后面的小星光',
@@ -43,6 +44,10 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const base: KaraokeStyle | null = o.source === 'template' ? theme : o.source === 'saved' ? chosen : settings.karaoke;
   const translation = o.translation ?? base?.translation.enabled ?? false;
   const songInfo = o.song_info ?? base?.info.enabled ?? false;
+  const ruby: RubyChoice = o.ruby === 'style' ? (base && !base.ruby.enabled ? 'off' : base?.ruby.script ?? 'hiragana') : o.ruby;
+  const rubyTarget = o.ruby_target ?? base?.ruby.target ?? 'all';
+  const audio = o.video_audio ?? settings.video_audio;
+  const vocal = o.vocal_keep_pct ?? settings.vocal_keep_pct;
   const shown = useMemo(() => base && {
     ...base,
     translation: { ...base.translation, enabled: translation },
@@ -91,29 +96,36 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
             <p className="text-[13px] text-muted">使用「设置 → 卡拉OK字幕样式」里的完整样式。</p>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-line pt-3">
-            <Switch checked={translation} onChange={(v) => set({ translation: v })} label="显示翻译" />
-            <Switch checked={songInfo} onChange={(v) => set({ song_info: v })} label="开头显示歌曲信息" />
-            <label className="flex items-center gap-2 text-[13px]">
-              <span className="text-muted">注音</span>
-              <Select aria-label="注音" className="h-8 w-28 text-[13px]" value={o.ruby}
-                onChange={(e) => set({ ruby: e.target.value as TaskStyleOptions['ruby'] })}>
-                <option value="style">按样式</option>
-                <option value="hiragana">平假名</option>
-                <option value="katakana">片假名</option>
-                <option value="romaji">罗马音</option>
-                <option value="off">不显示</option>
-              </Select>
-            </label>
+          <div className="space-y-3 border-t border-line pt-3">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <Switch checked={translation} onChange={(v) => set({ translation: v })} label="显示翻译" />
+              <Switch checked={songInfo} onChange={(v) => set({ song_info: v })} label="开头显示歌曲信息" />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
+              <span className="w-14 shrink-0 text-muted">注音</span>
+              <Segmented<RubyChoice> size="sm" value={ruby} onChange={(v) => set({ ruby: v })} options={[
+                { value: 'off', label: '无' }, { value: 'hiragana', label: '平假名' },
+                { value: 'katakana', label: '片假名' }, { value: 'romaji', label: '罗马音' },
+              ]} />
+              {ruby !== 'off' && (
+                <Switch checked={rubyTarget === 'kanji'} onChange={(v) => set({ ruby_target: v ? 'kanji' : 'all' })} label="仅汉字" />
+              )}
+            </div>
             {settings.auto_export && (
-              <div className="flex items-center gap-2 text-[13px]">
-                <span className="text-muted">视频声音</span>
-                <Segmented<'original' | 'mix' | 'none'> size="sm" value={o.video_audio ?? settings.video_audio}
-                  onChange={(v) => set({ video_audio: v })} options={[
-                    { value: 'original', label: '原声' },
-                    { value: 'mix', label: `降低人声 ${Math.round(settings.vocal_keep_pct)}%` },
-                    { value: 'none', label: '无声' },
+              <div className="space-y-2 text-[13px]">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <span className="w-14 shrink-0 text-muted">视频声音</span>
+                  <Segmented<'original' | 'mix' | 'none'> size="sm" value={audio} onChange={(v) => set({ video_audio: v })} options={[
+                    { value: 'original', label: '原声' }, { value: 'mix', label: '降低人声' }, { value: 'none', label: '无声' },
                   ]} />
+                </div>
+                {audio === 'mix' && (
+                  <div className="max-w-md pl-[4.5rem]">
+                    <SliderField name="人声保留" label={<span className="text-muted">人声保留</span>} value={vocal}
+                      onChange={(v) => set({ vocal_keep_pct: v })} min={0} max={100} step={1} unit="%" trackClassName="min-w-32" />
+                    <p className="mt-1 text-xs text-subtle">0% 为纯伴奏；需要人声分离（设置里开启）。</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

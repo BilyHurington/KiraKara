@@ -42,7 +42,9 @@ class TaskStyleOptions(_Base):
     translation: Optional[bool] = None  # shown when the lyrics have one; None = as the style says
     song_info: Optional[bool] = None  # title card at the start; None = as the style says
     ruby: Literal["style", "hiragana", "katakana", "romaji", "off"] = "style"
+    ruby_target: Optional[Literal["kanji", "all"]] = None  # None = as the style says
     video_audio: Optional[Literal["original", "mix", "none"]] = None  # None = the settings' choice
+    vocal_keep_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)  # "mix": None = the settings' level
 
 
 class SimpleSettings(_Base):

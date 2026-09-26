@@ -370,8 +370,12 @@ export interface TaskStyleOptions {
   translation: boolean | null;
   song_info: boolean | null;
   ruby: 'style' | 'hiragana' | 'katakana' | 'romaji' | 'off';
+  /** null: as the chosen style says */
+  ruby_target?: 'kanji' | 'all' | null;
   /** null: the settings' choice */
   video_audio: 'original' | 'mix' | 'none' | null;
+  /** vocals kept with "mix"; null: the settings' level */
+  vocal_keep_pct?: number | null;
 }
 
 /** POST /api/karaoke/theme */

@@ -85,11 +85,24 @@ describe('simple mode home', () => {
     await userEvent.click(screen.getByRole('button', { name: /加一个辅色/ }));
     await userEvent.click(screen.getByRole('button', { name: '辅色 #ED35B3' }));
     await userEvent.click(screen.getByRole('switch', { name: '开头显示歌曲信息' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: '注音' }), 'romaji');
-    await userEvent.click(screen.getByRole('radio', { name: '无声' }));
+    // ruby: one of none / hiragana / katakana / romaji, then whether only kanji get it
+    await userEvent.click(screen.getByRole('radio', { name: '罗马音' }));
+    await userEvent.click(screen.getByRole('switch', { name: '仅汉字' }));
+    await userEvent.click(screen.getByRole('radio', { name: '无' }));
+    expect(screen.queryByRole('switch', { name: '仅汉字' })).toBeNull();
+    await userEvent.click(screen.getByRole('radio', { name: '罗马音' }));
+    // video sound: "reduce vocals" shows its own level
+    expect(screen.queryByRole('textbox', { name: '人声保留（输入数值）' })).toBeNull();
+    await userEvent.click(screen.getByRole('radio', { name: '降低人声' }));
+    const level = screen.getByRole('textbox', { name: '人声保留（输入数值）' });
+    expect(level).toHaveValue('20');
+    await userEvent.click(level);
+    await new Promise((r) => setTimeout(r, 30)); // the field selects its text on the next frame
+    await userEvent.keyboard('35{Enter}');
     await waitFor(() => expect(api.find('POST', '/api/karaoke/theme').at(-1)?.body).toEqual({ template: 'glow', color: '#2F80ED', secondary: '#ED35B3' }));
     expect(screen.getByRole('img', { name: '字幕示意' })).toBeInTheDocument();
-    const want = { source: 'template', template: 'glow', color: '#2F80ED', secondary: '#ED35B3', saved_id: '', translation: null, song_info: true, ruby: 'romaji', video_audio: 'none' };
+    const want = { source: 'template', template: 'glow', color: '#2F80ED', secondary: '#ED35B3', saved_id: '', translation: null, song_info: true,
+      ruby: 'romaji', ruby_target: 'kanji', video_audio: 'mix', vocal_keep_pct: 35 };
     // remembered right away (the next song starts from the same choices)
     await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body).toEqual({ simple: { task_style: want } }), { timeout: 2000 });
     await userEvent.click(start);

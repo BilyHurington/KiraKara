@@ -385,7 +385,8 @@ def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch)
     lyr = "きみと\nあるいた\nそら\n"
     a = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=lyr, mode="plain", name="A",
               style={"source": "template", "template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D",
-                     "translation": False, "song_info": True, "ruby": "romaji", "video_audio": "none"})
+                     "translation": False, "song_info": True, "ruby": "romaji", "ruby_target": "kanji",
+                     "video_audio": "mix", "vocal_keep_pct": 35})
     # the choices are remembered for the next task
     assert AS.load().simple.task_style.secondary == "#FFC53D"
     b = q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics=lyr, mode="plain", name="B",
@@ -395,11 +396,13 @@ def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch)
     a, b = _wait(q, a.id), _wait(q, b.id)
     assert a.status == b.status == "succeeded", (a.error, b.error)
     assert (a.style_label, a.style_colors) == ("荧光", ["#FF8A1E", "#FFC53D"]) and b.style_label == "朴素"
-    assert a.video.video_audio == "none" and b.video.video_audio == "original" and not a.video.auto_export
+    assert (a.video.video_audio, a.video.vocal_keep_pct) == ("mix", 35) and not a.video.auto_export
+    assert (b.video.video_audio, b.video.vocal_keep_pct) == ("original", 20)  # the settings' level when not chosen
     assert a.stage("export").status == b.stage("export").status == "skipped"  # auto export was off when added
     ka, kb = q.ws.get(a.project_id).project.karaoke, q.ws.get(b.project_id).project.karaoke
     assert ka.glow.enabled and ka.glow.color_unsung == "#FFC53D" and ka.effects.kind == "sparkle"
-    assert (ka.translation.enabled, ka.info.enabled, ka.ruby.script) == (False, True, "romaji")
+    assert (ka.translation.enabled, ka.info.enabled, ka.ruby.script, ka.ruby.target) == (False, True, "romaji", "kanji")
+    assert ka.output.vocal_keep_pct == 35
     assert not kb.glow.enabled and kb.text.color_sung == "#2F80ED" and kb.text.size == 88
     # a saved style, and a preset that no longer exists
     from kara_align.karaoke.styles import save_style

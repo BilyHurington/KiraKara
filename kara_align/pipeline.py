@@ -210,7 +210,8 @@ class TaskQueue:
             raise S.ServiceError(f"字幕样式选项无效：{e}") from e
         karaoke, label, colors = resolve_task_style(cfg.simple, opts)
         video = TaskVideo(auto_export=cfg.simple.auto_export, video_audio=opts.video_audio or cfg.simple.video_audio,
-                          vocal_keep_pct=cfg.simple.vocal_keep_pct, quality=cfg.simple.quality)
+                          vocal_keep_pct=cfg.simple.vocal_keep_pct if opts.vocal_keep_pct is None else opts.vocal_keep_pct,
+                          quality=cfg.simple.quality)
         karaoke.output.vocal_keep_pct = video.vocal_keep_pct
         safe = Path(filename).name or "media"
         t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
@@ -660,6 +661,8 @@ def resolve_task_style(simple: "app_settings.SimpleSettings",
         style.ruby.enabled = False
     elif opts.ruby != "style":
         style.ruby.enabled, style.ruby.script = True, opts.ruby
+    if opts.ruby_target and style.ruby.enabled:
+        style.ruby.target = opts.ruby_target
     return style, label, colors
 
 
