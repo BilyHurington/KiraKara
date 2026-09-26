@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -29,6 +29,22 @@ class AiSettings(_Base):
     timeout_s: int = Field(default=600, ge=30, le=3600)
 
 
+class TaskStyleOptions(_Base):
+    """The subtitle choices of one simple-mode task (step 4); the last ones used are kept in the
+    settings, so the next task starts from them."""
+
+    # "default": the style edited in the settings page (what tasks used before this form existed)
+    source: Literal["template", "saved", "default"] = "default"
+    template: Literal["plain", "glow"] = "glow"
+    color: str = "#FF8A1E"  # main theme colour
+    secondary: str = ""  # second theme colour; "" = one colour
+    saved_id: str = ""  # a saved style (source == "saved")
+    translation: Optional[bool] = None  # shown when the lyrics have one; None = as the style says
+    song_info: Optional[bool] = None  # title card at the start; None = as the style says
+    ruby: Literal["style", "hiragana", "katakana", "romaji", "off"] = "style"
+    video_audio: Optional[Literal["original", "mix", "none"]] = None  # None = the settings' choice
+
+
 class SimpleSettings(_Base):
     default_mode: Literal["plain", "lrc"] = "lrc"
     ai_readings: bool = True  # use the AI provider (when one is set) to check readings
@@ -42,6 +58,8 @@ class SimpleSettings(_Base):
     video_audio: Literal["original", "mix", "none"] = "original"
     vocal_keep_pct: float = Field(default=20.0, ge=0.0, le=100.0)
     quality: Literal["standard", "high"] = "standard"
+    # last choices of the new-task form (saved as they change)
+    task_style: TaskStyleOptions = Field(default_factory=TaskStyleOptions)
 
 
 class AppSettings(_Base):

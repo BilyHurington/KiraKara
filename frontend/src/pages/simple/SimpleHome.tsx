@@ -1,4 +1,6 @@
-// 极简模式首页：选模式 → 拖入视频 → 粘贴链接或歌词 → 开始；下方是任务队列。
+// 极简模式首页：选模式 → 拖入视频 → 粘贴链接或歌词 → 字幕样式 → 开始；下方是任务队列。
+// 字幕样式和视频设置在添加任务时绑定到任务上（排队中的任务不受之后修改影响），
+// 并自动记住，下一首从同样的选择开始。
 
 import {
   AlertTriangle, ArrowRight, Check, CircleDashed, Crosshair, Download, Film, Hand, Link2, ListMusic, Loader2, Play,
@@ -6,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
-import type { Mode, PipelineStage, PipelineTask } from '@/lib/types';
+import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import {
   addTask, hasActiveTasks, loadTasks, openInDetail, saveSettings, setSimplePage, taskAction, useSimple,
@@ -14,6 +16,7 @@ import {
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Progress, Segmented, Textarea } from '@/components/ui';
 import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
 import { CalibrateDialog } from './CalibrateDialog';
+import { TaskStyleStep } from './TaskStyleStep';
 
 const PROVIDER_LABEL = { none: '', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
 
@@ -40,6 +43,8 @@ export function SimpleHome() {
   const [lyrics, setLyrics] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [styleOpts, setStyleOpts] = useState<TaskStyleOptions | null>(settings?.simple.task_style ?? null);
+  const styleDirty = useRef(false);
   const [calibrating, setCalibrating] = useState<string | null>(null);
   // tasks added from this page: their offset dialog opens by itself when they are ready
   const mine = useRef(new Set<string>());
@@ -49,6 +54,17 @@ export function SimpleHome() {
   useEffect(() => {
     if (settings) setMode(settings.simple.default_mode);
   }, [settings?.simple.default_mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // the subtitle choices start from the last ones used, and are saved as they change
+  useEffect(() => {
+    if (settings && !styleOpts) setStyleOpts(settings.simple.task_style);
+  }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!styleOpts || !styleDirty.current) return;
+    const t = setTimeout(() => { void saveSettings({ simple: { task_style: styleOpts } }).catch(() => undefined); }, 500);
+    return () => clearTimeout(t);
+  }, [styleOpts]);
+  const changeStyle = (next: TaskStyleOptions) => { styleDirty.current = true; setStyleOpts(next); };
 
   // poll the queue: fast while something runs
   useEffect(() => {
@@ -82,7 +98,7 @@ export function SimpleHome() {
     if (!file) return;
     setBusy(true);
     try {
-      const t = await addTask(file, lyrics, mode, name);
+      const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined);
       mine.current.add(t.id);
       toast('ok', '已开始', mode === 'lrc' ? '读取视频和歌词后请确认开头位置，之后全部自动完成' : active ? '前面的任务完成后自动继续' : '马上开始');
       setFile(null);
@@ -98,9 +114,7 @@ export function SimpleHome() {
   const summary = s ? [
     ai ? `AI 注音：${ai}` : 'AI 注音：关',
     `人声分离：${s.separate ? '开' : '关'}`,
-    s.auto_export
-      ? `完成后生成视频（${{ original: '原声', mix: `降低人声 ${Math.round(s.vocal_keep_pct)}%`, none: '无声' }[s.video_audio]}）`
-      : '不自动生成视频',
+    s.auto_export ? '完成后生成视频' : '不自动生成视频',
   ] : [];
 
   return (
@@ -152,6 +166,12 @@ export function SimpleHome() {
             </div>
           </StepBlock>
 
+          {s && styleOpts && (
+            <StepBlock n={4} title="字幕样式">
+              <TaskStyleStep value={styleOpts} onChange={changeStyle} settings={s} />
+            </StepBlock>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
               {summary.map((x) => <span key={x}>{x}</span>)}
@@ -160,7 +180,7 @@ export function SimpleHome() {
               </button>
             </div>
             <Button variant="primary" size="lg" icon={<Play className="size-4" />} loading={busy}
-              disabled={!file || detected.kind === 'empty'} onClick={start}>
+              disabled={!file || detected.kind === 'empty' || (styleOpts?.source === 'saved' && !styleOpts.saved_id)} onClick={start}>
               开始制作
             </Button>
           </div>
@@ -227,6 +247,12 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
             ) : <span className="truncate text-[14px] font-semibold">{t.name || t.media_filename}</span>}
             <Badge tone={st.tone} dot>{st.label}</Badge>
             <Badge tone={t.mode === 'lrc' ? 'accent' : 'neutral'}>{t.mode === 'lrc' ? 'LRC' : '普通'}</Badge>
+            {t.style_label && (
+              <span className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] text-muted" title="这个任务的字幕样式">
+                {(t.style_colors ?? []).map((c) => <span key={c} className="size-2.5 rounded-full ring-1 ring-line-strong" style={{ background: c }} />)}
+                {t.style_label}
+              </span>
+            )}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted">
             {t.media_filename} · {t.lyrics_kind === 'link' ? '音乐链接' : '粘贴的歌词'} · {fmtRelative(t.created)}

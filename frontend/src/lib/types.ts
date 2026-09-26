@@ -351,8 +351,29 @@ export interface AppSettings {
     default_mode: Mode; ai_readings: boolean; separate: boolean; separation_preset: string;
     separation_device: 'auto' | 'cpu'; karaoke: KaraokeStyle; auto_export: boolean;
     video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high';
+    /** last choices of the new-task form (step 4) */
+    task_style: TaskStyleOptions;
   };
 }
+
+/** A simple-mode task's subtitle choices (bound to the task when it is added). */
+export interface TaskStyleOptions {
+  source: 'template' | 'saved' | 'default';
+  template: 'plain' | 'glow';
+  color: string;
+  /** second theme colour; '' = one colour */
+  secondary: string;
+  saved_id: string;
+  /** null: as the chosen style says */
+  translation: boolean | null;
+  song_info: boolean | null;
+  ruby: 'style' | 'hiragana' | 'katakana' | 'romaji' | 'off';
+  /** null: the settings' choice */
+  video_audio: 'original' | 'mix' | 'none' | null;
+}
+
+/** POST /api/karaoke/theme */
+export interface ThemePreview { palette: Record<string, string>; style: KaraokeStyle }
 
 /** Partial update for PUT /api/settings (api_key / clear_api_key are write-only). */
 export interface SettingsPatch {
@@ -379,4 +400,7 @@ export interface PipelineTask {
   stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
   warnings: string[]; outputs: { video?: { filename: string; url: string } };
   calibration?: CalibrationRequest | null; calibration_confirmed?: boolean;
+  /** the subtitle style and video settings bound to this task */
+  style_label?: string; style_colors?: string[];
+  video?: { auto_export: boolean; video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high' } | null;
 }

@@ -376,3 +376,56 @@ def test_platform_translation_is_paired_and_invisible_characters_dropped(tmp_pat
     assert P.pair_translation(h, "[by:someone]\n[00:01.50]和你\n[00:03.50]一起走过\n") == 2
     assert [ln.translation for ln in h.project.lyrics.sung_lines()] == ["和你", "一起走过"]
     assert P.pair_translation(h, None) == 0
+
+
+def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    lyr = "きみと\nあるいた\nそら\n"
+    a = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=lyr, mode="plain", name="A",
+              style={"source": "template", "template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D",
+                     "translation": False, "song_info": True, "ruby": "romaji", "video_audio": "none"})
+    # the choices are remembered for the next task
+    assert AS.load().simple.task_style.secondary == "#FFC53D"
+    b = q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics=lyr, mode="plain", name="B",
+              style={"source": "template", "template": "plain", "color": "#2F80ED"})
+    # settings changed while both wait in the queue: neither task picks it up
+    AS.update({"simple": {"auto_export": True, "video_audio": "mix", "karaoke": {"text": {"size": 60}}}})
+    a, b = _wait(q, a.id), _wait(q, b.id)
+    assert a.status == b.status == "succeeded", (a.error, b.error)
+    assert (a.style_label, a.style_colors) == ("荧光", ["#FF8A1E", "#FFC53D"]) and b.style_label == "朴素"
+    assert a.video.video_audio == "none" and b.video.video_audio == "original" and not a.video.auto_export
+    assert a.stage("export").status == b.stage("export").status == "skipped"  # auto export was off when added
+    ka, kb = q.ws.get(a.project_id).project.karaoke, q.ws.get(b.project_id).project.karaoke
+    assert ka.glow.enabled and ka.glow.color_unsung == "#FFC53D" and ka.effects.kind == "sparkle"
+    assert (ka.translation.enabled, ka.info.enabled, ka.ruby.script) == (False, True, "romaji")
+    assert not kb.glow.enabled and kb.text.color_sung == "#2F80ED" and kb.text.size == 88
+    # a saved style, and a preset that no longer exists
+    from kara_align.karaoke.styles import save_style
+
+    mine = save_style("我的", kb.model_dump(mode="json"))
+    c = q.add(media=_wav(tmp_path / "c.wav"), filename="c.wav", lyrics=lyr, mode="plain",
+              style={"source": "saved", "saved_id": mine["id"], "ruby": "off"})
+    assert c.style_label == "我的" and not c.karaoke.ruby.enabled
+    with pytest.raises(S.ServiceError):
+        q.add(media=_wav(tmp_path / "d.wav"), filename="d.wav", lyrics=lyr, mode="plain",
+              style={"source": "saved", "saved_id": "st_gone"})
+    with pytest.raises(S.ServiceError):
+        q.add(media=_wav(tmp_path / "e.wav"), filename="e.wav", lyrics=lyr, mode="plain",
+              style={"source": "template", "color": "not-a-colour"})
+    _wait(q, c.id)
+    q.shutdown()
+
+
+def test_theme_api(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    client = TestClient(create_app(tmp_path / "projects"))
+    t = client.get("/api/karaoke/themes").json()
+    assert [x["id"] for x in t["templates"]] == ["plain", "glow"] and "#FF8A1E" in t["swatches"]
+    r = client.post("/api/karaoke/theme", json={"template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D"}).json()
+    assert r["palette"]["glow_unsung"] == "#FFC53D" and r["style"]["glow"]["enabled"]
+    assert client.post("/api/karaoke/theme", json={"template": "glow", "color": "zz"}).status_code == 400

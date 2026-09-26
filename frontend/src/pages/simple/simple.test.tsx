@@ -22,6 +22,7 @@ const SETTINGS: AppSettings = {
     default_mode: 'lrc', ai_readings: true, separate: true, separation_preset: 'melband-roformer', separation_device: 'auto',
     karaoke: STYLE, auto_export: true, video_audio: 'original',
     vocal_keep_pct: 20, quality: 'standard',
+    task_style: { source: 'default', template: 'glow', color: '#FF8A1E', secondary: '', saved_id: '', translation: null, song_info: null, ruby: 'style', video_audio: null },
   },
 };
 
@@ -58,9 +59,15 @@ describe('simple mode home', () => {
     seed();
     const api = mockApi({
       'GET /api/tasks': () => [],
+      'GET /api/karaoke/styles': () => [builtinSaved()],
+      'POST /api/karaoke/theme': (c) => ({ palette: {}, style: { ...STYLE, text: { ...STYLE.text, color_sung: c.body.color }, glow: { ...STYLE.glow, enabled: c.body.template === 'glow' } } }),
       'POST /api/tasks': () => task({ status: 'queued' }),
-      'PUT /api/settings': (c) => ({ ...SETTINGS, simple: { ...SETTINGS.simple, ...c.body.simple } }),
+      'PUT /api/settings': (c) => {  // like the server: every update merges into what is stored
+        stored = { ...stored, simple: { ...stored.simple, ...c.body.simple } };
+        return stored;
+      },
     });
+    let stored = structuredClone(SETTINGS);
     const { container } = renderUI(<SimpleHome />);
     const start = screen.getByRole('button', { name: /开始制作/ });
     expect(start).toBeDisabled();
@@ -71,14 +78,33 @@ describe('simple mode home', () => {
     expect(screen.getByText(/网易云音乐链接/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('radio', { name: /普通/ }));
     await waitFor(() => expect(api.find('PUT', '/api/settings')[0]?.body).toEqual({ simple: { default_mode: 'plain' } }));
+    // step 4: this song's subtitle look — the glow template, blue with a pink second colour
+    await userEvent.click(screen.getByRole('radio', { name: '模版配色' }));
+    await userEvent.click(screen.getByRole('radio', { name: '荧光' }));
+    await userEvent.click(screen.getByRole('button', { name: '主色 #2F80ED' }));
+    await userEvent.click(screen.getByRole('button', { name: /加一个辅色/ }));
+    await userEvent.click(screen.getByRole('button', { name: '辅色 #ED35B3' }));
+    await userEvent.click(screen.getByRole('switch', { name: '开头显示歌曲信息' }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '注音' }), 'romaji');
+    await userEvent.click(screen.getByRole('radio', { name: '无声' }));
+    await waitFor(() => expect(api.find('POST', '/api/karaoke/theme').at(-1)?.body).toEqual({ template: 'glow', color: '#2F80ED', secondary: '#ED35B3' }));
+    expect(screen.getByRole('img', { name: '字幕示意' })).toBeInTheDocument();
+    const want = { source: 'template', template: 'glow', color: '#2F80ED', secondary: '#ED35B3', saved_id: '', translation: null, song_info: true, ruby: 'romaji', video_audio: 'none' };
+    // remembered right away (the next song starts from the same choices)
+    await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body).toEqual({ simple: { task_style: want } }), { timeout: 2000 });
     await userEvent.click(start);
     await waitFor(() => expect(api.find('POST', '/api/tasks')).toHaveLength(1));
     const fd = api.find('POST', '/api/tasks')[0].body as FormData;
     expect(fd.get('lyrics')).toBe('https://music.163.com/song?id=1');
     expect(fd.get('mode')).toBe('plain');
     expect((fd.get('file') as File).name).toBe('初恋.mp4');
-    // the form is ready for the next song
+    expect(JSON.parse(fd.get('style') as string)).toEqual(want);  // bound to this task
+    // the form is ready for the next song, keeping the subtitle choices
     expect(screen.getByRole('button', { name: /开始制作/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '荧光' })).toBeChecked();
+    // a saved style must be picked before starting
+    await userEvent.click(screen.getByRole('radio', { name: '保存的预设' }));
+    expect(await screen.findByRole('option', { name: '默认（内置）' })).toBeInTheDocument();
   });
 
   it('shows the queue with progress and opens a finished task in the detailed mode', async () => {

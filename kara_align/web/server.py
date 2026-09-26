@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -259,7 +260,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
 
     @app.post("/api/tasks")
     async def add_task(file: UploadFile = File(...), lyrics: str = Form(...), mode: str = Form("lrc"),
-                       name: str = Form("")):
+                       name: str = Form(""), style: str = Form("")):
         from ..audio.io import AudioError, validate_upload
 
         _check_text(lyrics)
@@ -273,7 +274,11 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                     validate_upload(fname, f.read(64), size, MAX_AUDIO_BYTES)
             except AudioError as e:
                 raise HTTPException(400, str(e)) from e
-            t = tq.add(media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name)
+            try:
+                opts = json.loads(style) if style.strip() else None
+            except ValueError as e:
+                raise HTTPException(400, "style 必须是 JSON") from e
+            t = tq.add(media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name, style=opts)
         finally:
             shutil.rmtree(td, ignore_errors=True)
         return t.model_dump(mode="json")
@@ -551,6 +556,28 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         return {"default": default_family(), "families": families()}
 
     # ---- saved subtitle styles (预设), shared by all projects and the simple mode
+
+    @app.get("/api/karaoke/themes")
+    def list_themes():
+        from ..karaoke.themes import SWATCHES, TEMPLATES
+
+        return {"templates": [{"id": k, "label": v} for k, v in TEMPLATES.items()], "swatches": SWATCHES}
+
+    @app.post("/api/karaoke/theme")
+    def theme_preview(body: dict):
+        """The palette (and the whole style, on top of the simple mode's default) for a template + colours."""
+        from .. import settings as app_settings
+        from ..karaoke.themes import palette, theme_style
+
+        b = body or {}
+        try:
+            secondary = b.get("secondary") or None
+            pal = palette(b.get("color") or "", secondary)
+            st = theme_style(b.get("template") or "plain", b.get("color") or "", app_settings.load().simple.karaoke,
+                             secondary)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"palette": pal, "style": st.model_dump(mode="json")}
 
     @app.get("/api/karaoke/styles")
     def list_styles():

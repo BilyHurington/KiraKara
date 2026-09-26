@@ -39,7 +39,7 @@ from pydantic import Field
 from . import service as S
 from . import settings as app_settings
 from .interfaces import CancelToken, Cancelled
-from .models import _Base, new_id, utcnow
+from .models import KaraokeStyle, _Base, new_id, utcnow
 from .project.jobs import run_heavy
 from .project.store import atomic_write_text
 
@@ -72,6 +72,15 @@ class Stage(_Base):
     message: str = ""
 
 
+class TaskVideo(_Base):
+    """The video settings of one task, fixed when it is added."""
+
+    auto_export: bool = True
+    video_audio: Literal["original", "mix", "none"] = "original"
+    vocal_keep_pct: float = 20.0
+    quality: Literal["standard", "high"] = "standard"
+
+
 class PipelineTask(_Base):
     id: str = Field(default_factory=lambda: new_id("t"))
     created: str = Field(default_factory=utcnow)
@@ -93,6 +102,13 @@ class PipelineTask(_Base):
     # LRC offset to confirm: the suggestion shown to the user (see stage_calibrate)
     calibration: Optional[dict[str, Any]] = None
     calibration_confirmed: bool = False
+    # subtitle style and video settings, fixed when the task is added (queued tasks never pick up
+    # later changes to the settings); None on tasks from before this existed
+    karaoke: Optional[KaraokeStyle] = None
+    video: Optional[TaskVideo] = None
+    style_label: str = ""
+    style_colors: list[str] = Field(default_factory=list)
+    style_applied: bool = False
 
     def stage(self, key: str) -> Stage:
         return next(s for s in self.stages if s.key == key)
@@ -179,16 +195,30 @@ class TaskQueue:
                     return t
         raise KeyError(task_id)
 
-    def add(self, *, media: Path, filename: str, lyrics: str, mode: str, name: str = "") -> PipelineTask:
+    def add(self, *, media: Path, filename: str, lyrics: str, mode: str, name: str = "",
+            style: Optional[dict] = None) -> PipelineTask:
+        """``style``: the task's subtitle choices (TaskStyleOptions); None = the last ones used."""
         lyrics = lyrics.strip()
         if not lyrics:
             raise S.ServiceError("请粘贴音乐链接或歌词")
         if mode not in ("plain", "lrc"):
             raise S.ServiceError("模式只能是 plain 或 lrc")
+        cfg = app_settings.load()
+        try:
+            opts = app_settings.TaskStyleOptions.model_validate(style) if style is not None else cfg.simple.task_style
+        except Exception as e:
+            raise S.ServiceError(f"字幕样式选项无效：{e}") from e
+        karaoke, label, colors = resolve_task_style(cfg.simple, opts)
+        video = TaskVideo(auto_export=cfg.simple.auto_export, video_audio=opts.video_audio or cfg.simple.video_audio,
+                          vocal_keep_pct=cfg.simple.vocal_keep_pct, quality=cfg.simple.quality)
+        karaoke.output.vocal_keep_pct = video.vocal_keep_pct
         safe = Path(filename).name or "media"
         t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
-                         stages=[Stage(key=k, label=label) for k, label, _ in STAGES])
+                         stages=[Stage(key=k, label=label) for k, label, _ in STAGES],
+                         karaoke=karaoke, video=video, style_label=label, style_colors=colors)
+        if style is not None:  # the next task starts from these choices
+            app_settings.update({"simple": {"task_style": opts.model_dump(mode="json")}})
         if not t.name and t.lyrics_kind == "text":
             t.name = Path(safe).stem
         dest = self.dir / t.id
@@ -428,6 +458,7 @@ def stage_import(q, task, cfg, cancel, progress):
     with h.lock:
         h.project.mode = task.mode
         h.save()
+    apply_task_style(h, task)
     return "done"
 
 
@@ -597,6 +628,48 @@ def stage_align(q, task, cfg, cancel, progress):
     return f"{len(r.units)} 个发音单元"
 
 
+def resolve_task_style(simple: "app_settings.SimpleSettings",
+                       opts: "app_settings.TaskStyleOptions") -> tuple[KaraokeStyle, str, list[str]]:
+    """The complete subtitle style for a task's choices: (style, short label, colours for the list)."""
+    from .karaoke.styles import StyleError, get_style
+    from .karaoke.themes import TEMPLATES, hex_to_rgb, theme_style
+
+    base = simple.karaoke
+    if opts.source == "template":
+        for c in filter(None, (opts.color, opts.secondary)):
+            try:
+                hex_to_rgb(c)
+            except ValueError as e:
+                raise S.ServiceError(str(e)) from e
+        style = theme_style(opts.template, opts.color, base, opts.secondary or None)
+        label, colors = TEMPLATES[opts.template], [opts.color] + ([opts.secondary] if opts.secondary else [])
+    elif opts.source == "saved":
+        try:
+            style = get_style(opts.saved_id)
+        except StyleError as e:
+            raise S.ServiceError("选择的预设已不存在，请重新选择字幕样式") from e
+        label, colors = style.preset or "预设", [style.text.color_sung]
+    else:
+        style = base.model_copy(deep=True)
+        label, colors = "默认样式", [style.text.color_sung]
+    if opts.translation is not None:
+        style.translation.enabled = opts.translation
+    if opts.song_info is not None:
+        style.info.enabled = opts.song_info
+    if opts.ruby == "off":
+        style.ruby.enabled = False
+    elif opts.ruby != "style":
+        style.ruby.enabled, style.ruby.script = True, opts.ruby
+    return style, label, colors
+
+
+def apply_task_style(h: "S.ProjectHandle", task: PipelineTask) -> None:
+    """Give the project the task's own subtitle style, once (later edits in the detailed mode stay)."""
+    if task.karaoke is not None and not task.style_applied:
+        S.set_karaoke_style(h, task.karaoke.model_dump(mode="json"))
+        task.style_applied = True
+
+
 def apply_karaoke_settings(h: "S.ProjectHandle", simple: "app_settings.SimpleSettings") -> None:
     """The project gets the simple mode's complete subtitle style."""
     style = simple.karaoke.model_copy(deep=True)
@@ -606,15 +679,21 @@ def apply_karaoke_settings(h: "S.ProjectHandle", simple: "app_settings.SimpleSet
 
 def stage_export(q, task, cfg, cancel, progress):
     h = _handle(q, task)
-    apply_karaoke_settings(h, cfg.simple)
-    if not cfg.simple.auto_export:
+    if task.karaoke is not None:  # the task's own style (and any edits made to the project since)
+        apply_task_style(h, task)
+        video = task.video or TaskVideo()
+    else:  # a task from before styles were bound to tasks
+        apply_karaoke_settings(h, cfg.simple)
+        video = TaskVideo(auto_export=cfg.simple.auto_export, video_audio=cfg.simple.video_audio,
+                          vocal_keep_pct=cfg.simple.vocal_keep_pct, quality=cfg.simple.quality)
+    if not video.auto_export:
         return "skipped"
-    audio = cfg.simple.video_audio
+    audio = video.video_audio
     if audio == "mix" and (h.project.asset("vocals") is None or h.project.asset("instrumental") is None):
         _warn(task, "没有人声分轨，视频使用原声")
         audio = "original"
-    out = run_heavy(lambda: S.karaoke_burn(h, background="auto", audio=audio, quality=cfg.simple.quality,
-                                           vocal_keep_pct=cfg.simple.vocal_keep_pct,
+    out = run_heavy(lambda: S.karaoke_burn(h, background="auto", audio=audio, quality=video.quality,
+                                           vocal_keep_pct=video.vocal_keep_pct,
                                            cancel=cancel, progress=progress),
                     lambda m: progress(0.0, m), cancel)
     for w in out.get("warnings") or []:

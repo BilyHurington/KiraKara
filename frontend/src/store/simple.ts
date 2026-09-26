@@ -3,7 +3,7 @@
 
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-import type { AiProviderInfo, AppSettings, PipelineTask, SettingsPatch } from '@/lib/types';
+import type { AiProviderInfo, AppSettings, PipelineTask, SettingsPatch, TaskStyleOptions } from '@/lib/types';
 import { loadProjects, openProject, run, setStep, toast, type Step } from './app';
 
 export type Ui = 'simple' | 'pro';
@@ -90,12 +90,13 @@ export function hasActiveTasks(tasks: PipelineTask[]) {
   return tasks.some((t) => ACTIVE.has(t.status));
 }
 
-export async function addTask(file: File, lyrics: string, mode: string, name: string) {
+export async function addTask(file: File, lyrics: string, mode: string, name: string, style?: TaskStyleOptions) {
   const fd = new FormData();
   fd.append('file', file, file.name);
   fd.append('lyrics', lyrics);
   fd.append('mode', mode);
   fd.append('name', name);
+  if (style) fd.append('style', JSON.stringify(style));
   const t = await api.post<PipelineTask>('/api/tasks', fd);
   set({ tasks: [t, ...get().tasks.filter((x) => x.id !== t.id)] });
   return t;
