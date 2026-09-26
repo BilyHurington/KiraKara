@@ -69,7 +69,6 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 - **[使用教程](docs/tutorial.md)**：极简模式、详细模式、设置和常见问题，附截图。
 - **[HTTP API](docs/api.md)**：所有接口、参数和返回值，以及用脚本提交任务的例子。
 - [技术说明](docs/technical.md)：时间与数据约定、对齐算法、命令行、开发。
-- 设计文档：[极简模式与任务队列](docs/simple-mode.md)、[卡拉OK字幕](docs/karaoke.md)。
 
 ## 许可与说明
 

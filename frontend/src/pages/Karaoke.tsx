@@ -1,5 +1,5 @@
 // Step 7: karaoke subtitles — presets, settings, a live libass preview at any
-// moment, ASS download and one-click burn-in (see docs/karaoke.md).
+// moment, ASS download and one-click burn-in.
 
 import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Image as ImageIcon, Loader2, Sparkles, Subtitles, Trash2, Upload } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

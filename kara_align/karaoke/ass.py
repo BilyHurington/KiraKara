@@ -1,4 +1,4 @@
-"""Karaoke subtitles as ASS, laid out chunk by chunk (see docs/karaoke.md).
+"""Karaoke subtitles as ASS, laid out chunk by chunk.
 
 Every lyric line becomes a row of *chunks*.  A chunk is a piece of the line
 that carries one ruby group (a kanji word and its reading) or plain text; kana

@@ -276,7 +276,7 @@ Warnings say when the result is stale or partial and how many lines were skipped
 Styles are validated strictly when saved (`PUT …/karaoke`, `POST /api/karaoke/styles`: 400 for a colour that is not
 `#RRGGBB` / `#RGB` or a number out of range); styles read from projects, `styles.json` or `settings.json`, the style of
 `PUT /api/settings` and the `style` of a preview are clamped / fixed up instead (`#RGB` → `#RRGGBB`, numbers into their range,
-unknown values → default). See `docs/karaoke.md`.
+unknown values → default).
 
 ## App settings and AI
 
@@ -329,7 +329,6 @@ One server process per workspace runs the queue: it holds an exclusive lock on `
 on the same workspace only shows the tasks (`/api/info.tasks_elsewhere: true`) and answers 409 to every change.
 Stopping the server: tasks that had not started yet go back to `queued` / `preparing` (continued after the restart), running
 ones become `interrupted` (retry continues them). An unreadable `tasks.json` is kept as `tasks.broken-<time>.json`.
-See `docs/simple-mode.md`.
 
 ## Conflicts (409)
 
