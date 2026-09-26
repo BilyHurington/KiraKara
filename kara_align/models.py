@@ -747,9 +747,11 @@ class KaraokeTiming(_KaraokeBase):
     early_show: bool = True
     early_max_ms: int = Field(default=4000, ge=1000, le=10000)
     highlight: Literal["sweep", "instant"] = "sweep"  # \kf or \k
-    # show (and highlight) the lyrics this much before they are sung; 0 = off.
+    # show (and highlight) the lyrics this much before they are sung; 0 = off.  On by default: a
+    # syllable's sweep runs over its whole length, so it only looks "sung" about half-way through
+    # (≈ 100 ms for a typical mora); starting a little early makes the sweep feel on time.
     # Applies to every subtitle / LRC export, never to the alignment data itself.
-    advance_ms: int = Field(default=0, ge=0, le=2000)
+    advance_ms: int = Field(default=150, ge=0, le=2000)
     fade_in_ms: int = Field(default=200, ge=0, le=2000)  # lines ease in / out
     fade_out_ms: int = Field(default=200, ge=0, le=2000)
 
@@ -785,7 +787,7 @@ SongInfoField = Literal["title", "artist", "album", "lyricist", "composer", "arr
 
 
 class KaraokeSongInfo(_KaraokeBase):
-    """Song title card shown in a top corner at the start (see karaoke.info).
+    """Song title card shown in a top corner at the start, and again at the end (see karaoke.info).
 
     Which lines it shows is part of the style; a project can replace the text
     with its own (``Project.song_info_text``)."""
@@ -795,6 +797,9 @@ class KaraokeSongInfo(_KaraokeBase):
     fields: list[SongInfoField] = Field(default_factory=lambda: ["title", "artist"])
     start_ms: int = Field(default=500, ge=0, le=60000)  # audio time
     duration_ms: int = Field(default=7000, ge=1000, le=60000)
+    # the same card again at the end of the song (on whenever the card is), until the song ends
+    outro: bool = True
+    outro_duration_ms: int = Field(default=7000, ge=1000, le=60000)
     size: int = Field(default=56, ge=20, le=160)  # title size at 1920 wide; other lines are smaller
     margin: int = Field(default=56, ge=0, le=400)  # from the top and side edges
     color: str = _color("", follow=True)  # "" = the lyrics' unsung colour

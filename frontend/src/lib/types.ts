@@ -220,6 +220,8 @@ export interface KaraokeStyle {
   info: {
     enabled: boolean; position: 'top-left' | 'top-right'; fields: SongInfoField[];
     start_ms: number; duration_ms: number; size: number; margin: number; color: string; accent: string;
+    /** the same card again at the end of the song (on whenever the card is) */
+    outro?: boolean; outro_duration_ms?: number;
   };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };

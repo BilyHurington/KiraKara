@@ -339,6 +339,7 @@ def test_line_is_hidden_during_a_long_pause_inside_it():
 
 def test_ass_hides_line_across_interlude(tmp_path):
     h = _project(tmp_path)
+    h.project.karaoke.timing.advance_ms = 0  # exact times below
     r = h.project.result()
     last = [u for u in r.units if u.line_id == h.project.lyrics.lines[0].id][-1]
     last.start_ms, last.end_ms = 40000, 40300
@@ -388,6 +389,8 @@ def _ms(t):
 
 def test_advance_shows_everything_earlier_and_lrc_exports_follow(tmp_path):
     h = _project(tmp_path)
+    assert h.project.karaoke.timing.advance_ms == 150  # on by default
+    h.project.karaoke.timing.advance_ms = 0
     plain, _ = S.karaoke_ass(h)
     lrc0 = S.export(h, "lrc-unit").content
     st = h.project.karaoke.model_copy(deep=True)

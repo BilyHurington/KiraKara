@@ -267,7 +267,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
         </Section>
 
         <Section {...sec('info')} icon={<Music className="size-4" />} title="歌曲信息"
-          summary={I.enabled ? `${I.position === 'top-left' ? '左上角' : '右上角'} · ${songInfo?.data?.text != null ? '自定义文字' : I.fields.map((f) => FIELD_LABEL[f]).join(' / ')} · ${I.duration_ms / 1000}s` : '关闭'}>
+          summary={I.enabled ? `${I.position === 'top-left' ? '左上角' : '右上角'} · ${songInfo?.data?.text != null ? '自定义文字' : I.fields.map((f) => FIELD_LABEL[f]).join(' / ')} · ${I.duration_ms / 1000}s${(I.outro ?? true) ? ` · 结尾 ${(I.outro_duration_ms ?? 7000) / 1000}s` : ''}` : '关闭'}>
           <InfoEditor style={style} patch={patch} songInfo={songInfo} />
         </Section>
 
@@ -526,7 +526,7 @@ function InfoEditor({ style, patch, songInfo }: { style: KaraokeStyle; patch: Pa
   });
   return (
     <>
-      <Switch checked={I.enabled} onChange={(v) => patch((s) => { s.info.enabled = v; })} label="在开头显示歌曲信息" />
+      <Switch checked={I.enabled} onChange={(v) => patch((s) => { s.info.enabled = v; })} label="显示歌曲信息（开头，以及结尾）" />
       <div className={cn('space-y-4', !I.enabled && 'pointer-events-none opacity-45')}>
         <Row label="位置">
           <Segmented value={I.position} onChange={(v) => patch((s) => { s.info.position = v; })}
@@ -555,6 +555,13 @@ function InfoEditor({ style, patch, songInfo }: { style: KaraokeStyle; patch: Pa
         <Row label="显示多久" hint="顶部要出现歌词或翻译时会提前淡出（至少显示 2 秒）">
           <Num name="信息显示时长" unit="ms" value={I.duration_ms} min={1000} max={20000} step={500} onChange={(v) => patch((s) => { s.info.duration_ms = v; })} />
         </Row>
+        <Switch checked={I.outro ?? true} onChange={(v) => patch((s) => { s.info.outro = v; })} label="结尾也显示（同样的内容和样式，一直显示到歌曲结束）" />
+        {(I.outro ?? true) && (
+          <Row label="结尾显示多久" hint="从歌曲结束往前算；顶部最后一句歌词或翻译消失后才出现（至少显示 2 秒）">
+            <Num name="结尾信息显示时长" unit="ms" value={I.outro_duration_ms ?? 7000} min={1000} max={20000} step={500}
+              onChange={(v) => patch((s) => { s.info.outro_duration_ms = v; })} />
+          </Row>
+        )}
       </div>
     </>
   );

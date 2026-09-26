@@ -84,7 +84,7 @@ describe('simple mode home', () => {
     await userEvent.click(screen.getByRole('button', { name: '主色 #2F80ED' }));
     await userEvent.click(screen.getByRole('button', { name: /加一个辅色/ }));
     await userEvent.click(screen.getByRole('button', { name: '辅色 #ED35B3' }));
-    await userEvent.click(screen.getByRole('switch', { name: '开头显示歌曲信息' }));
+    await userEvent.click(screen.getByRole('switch', { name: '开头和结尾显示歌曲信息' }));
     expect(screen.queryByRole('textbox', { name: '歌词字号（输入数值）' })).toBeNull();  // size lives in the style, not here
     // ruby: one of none / hiragana / katakana / romaji, then whether only kanji get it
     await userEvent.click(screen.getByRole('radio', { name: '罗马音' }));
@@ -235,7 +235,7 @@ describe('subtitle style panel in the simple-mode settings', () => {
     await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle).ruby.sweep).toBe('base'), { timeout: 2000 });
     // song info card: a switch and the lines to show (no free text without a song)
     await userEvent.click(screen.getByRole('button', { name: /歌曲信息/ }));
-    await userEvent.click(screen.getByRole('switch', { name: '在开头显示歌曲信息' }));
+    await userEvent.click(screen.getByRole('switch', { name: '显示歌曲信息（开头，以及结尾）' }));
     await userEvent.click(screen.getByRole('checkbox', { name: '显示作词' }));
     await userEvent.click(screen.getByRole('radio', { name: '右上角' }));
     expect(screen.queryByRole('textbox', { name: '歌曲信息文字' })).toBeNull();

@@ -110,7 +110,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
           <div className="space-y-3 border-t border-line pt-3">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <Switch checked={translation} onChange={(v) => set({ translation: v })} label="显示翻译" />
-              <Switch checked={songInfo} onChange={(v) => set({ song_info: v })} label="开头显示歌曲信息" />
+              <Switch checked={songInfo} onChange={(v) => set({ song_info: v })} label="开头和结尾显示歌曲信息" />
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
               <span className="w-14 shrink-0 text-muted">注音</span>

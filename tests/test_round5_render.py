@@ -102,6 +102,7 @@ def _base_style():
     st.layout.lines = 1
     st.ruby.sweep = "base"
     st.timing.fade_in_ms = st.timing.fade_out_ms = 0
+    st.timing.advance_ms = 0  # frames are taken at exact syllable times
     return st
 
 
@@ -547,6 +548,7 @@ def test_back_to_back_lines_never_fade_while_sung():
     p, r = _project([_line([_seg("窓", "まど"), _seg("に", "に")]), _line([_seg("君", "きみ")])], gap=100)
     st = KaraokeStyle()
     st.layout.lines = 1
+    st.timing.advance_ms = 0
     st.timing.fade_in_ms = st.timing.fade_out_ms = 800
     text, _ = A.build_ass(p, r, st)
     sung = {}
@@ -576,3 +578,39 @@ def test_font_names_are_literal_in_fontconfig_patterns():
     resolve.cache_clear()
     path, index = resolve("M+ 1p-Bold:italic", True)  # no crash; a real file
     assert path and index >= 0
+
+
+def test_title_card_comes_again_at_the_end_of_the_song():
+    from kara_align.models import AudioAsset
+
+    st = KaraokeStyle()
+    st.info.enabled, st.info.start_ms = True, 0
+    st.info.duration_ms, st.info.outro_duration_ms = 3000, 5000
+    p, r = _card_project(None)
+    p.audio = [AudioAsset.model_construct(role="original", duration_ms=30000, id="a", sha256="s")]
+
+    def cards(style):
+        text, warnings = A.build_ass(p, r, style)
+        spans = sorted({(_ms(l.split(",")[1]), _ms(l.split(",")[2])) for l in _events(text, "KInfo") if "\\p1" in l})
+        return spans, warnings
+
+    spans, _ = cards(st)
+    assert spans == [(0, 3000), (25000, 30000)]  # the opening card, and the same card until the song ends
+    st.info.outro = False
+    assert cards(st)[0] == [(0, 3000)]
+    # lyrics along the top at the end, where the card is: it comes in after they have gone (2 s at least)
+    st = KaraokeStyle()
+    st.info.enabled, st.info.start_ms, st.info.outro_duration_ms = True, 0, 6000
+    st.layout.position, st.layout.margin_v, st.layout.alternate_indent = "top", 40, 0
+    st.timing.advance_ms = 0
+    p.audio = [AudioAsset.model_construct(role="original", duration_ms=9000, id="a", sha256="s")]
+    text, _ = A.build_ass(p, r, st)
+    lyrics_gone = max(_ms(l.split(",")[2]) for l in _events(text, "KMain"))
+    spans, _ = cards(st)
+    assert spans[-1][1] == 9000 and spans[-1][0] >= lyrics_gone + 200 > 9000 - 6000
+    # an ending card that would run into the opening one is left out
+    p.audio = [AudioAsset.model_construct(role="original", duration_ms=5000, id="a", sha256="s")]
+    assert all(e < 5000 for _, e in cards(st)[0])
+    # the card is off: no ending card either
+    st.info.enabled = False
+    assert cards(st)[0] == []

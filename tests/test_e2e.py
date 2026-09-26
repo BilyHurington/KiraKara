@@ -149,7 +149,8 @@ def test_exports(tmp_path):
         assert out.content
     data = json.loads(S.export(h, "alignment").content)
     assert data["format"] == "kara-align/alignment" and data["units"][0]["start_ms"] is not None
-    assert "[00:01.00]" in S.export(h, "lrc-line").content
+    # LRC exports follow the karaoke lead time (150 ms by default); alignment.json keeps the real times
+    assert "[00:00.85]" in S.export(h, "lrc-line").content
 
 
 # ---------------------------------------------------------------------------

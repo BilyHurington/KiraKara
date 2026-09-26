@@ -726,10 +726,12 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
 
     events: list[str] = []
     first_shown: dict[str, float] = {}  # style -> first time an event of it shows
+    last_shown: dict[str, float] = {}  # style -> last time an event of it is on screen
     boxes: list[Box] = []  # where the lyrics and translations are, and when (for the title card)
 
     def emit(layer: int, t_from: float, t_to: float, name: str, tags: str, body: str, fad: str) -> None:
         first_shown[name] = min(first_shown.get(name, float("inf")), t_from + time_offset_ms)
+        last_shown[name] = max(last_shown.get(name, float("-inf")), t_to + time_offset_ms)
         events.append(f"Dialogue: {layer},{ass_time(t_from + time_offset_ms)},{ass_time(t_to + time_offset_ms)},"
                       f"{name},,0,0,0,,{{{tags}{fad}}}{body}")
 
@@ -888,8 +890,16 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     if tr.enabled and tr.position == "opposite":
         top_busy.append(first_shown.get("KTrans"))
     busy = [t for t in top_busy if t is not None]
+    # the ending card: until the song ends, after the last lyric / translation along the top edge
+    top_last = [last_shown.get("KMain")] if lay.position == "top" else []
+    if tr.enabled and tr.position == "opposite":
+        top_last.append(last_shown.get("KTrans"))
+    busy_end = [t for t in top_last if t is not None]
+    orig = project.asset("original")
+    song_end = (orig.duration_ms + audio_offset_ms) if orig is not None and orig.duration_ms else None
     events += info_events(project, style, W, H, k, family, audio_offset_ms, min(busy) if busy else None,
-                          boxes=boxes, warnings=warnings)
+                          boxes=boxes, warnings=warnings, end_ms=song_end,
+                          busy_until_ms=max(busy_end) if busy_end else None)
 
     shadow_back = ass_color(txt.shadow_color, 100 - txt.shadow_opacity)
 

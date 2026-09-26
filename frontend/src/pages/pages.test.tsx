@@ -441,7 +441,7 @@ describe('karaoke subtitles page', () => {
     const { KaraokePage } = await import('./Karaoke');
     renderUI(<KaraokePage />);
     await userEvent.click(await screen.findByRole('button', { name: /歌曲信息.*关闭/ }));
-    await userEvent.click(screen.getByRole('switch', { name: '在开头显示歌曲信息' }));
+    await userEvent.click(screen.getByRole('switch', { name: '显示歌曲信息（开头，以及结尾）' }));
     // the song data shows next to each line; the text follows the ticks
     expect(screen.getByText('STARLIGHT MASTER 13')).toBeInTheDocument();
     const box = screen.getByRole('textbox', { name: '歌曲信息文字' });
