@@ -270,6 +270,7 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     assert (k.timing.lead_in_ms, k.timing.hold_ms, k.layout.margin_v) == (4000, 2000, 40)
     video = h.dir / "exports" / t.outputs["video"]["filename"]
     assert video.exists() and video.stat().st_size > 1000
+    assert video.name.endswith(f"-{t.id[-6:]}.mp4")  # its own name: later burns never overwrite it
     # the queue survives a restart; finished tasks stay listed
     q2 = P.TaskQueue(S.Workspace(tmp_path / "projects"))
     assert q2.get(t.id).status == "succeeded"
@@ -397,13 +398,17 @@ def test_each_task_keeps_its_own_style_and_video_settings(tmp_path, monkeypatch)
     b = q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics=lyr, mode="plain", name="B",
               style={"source": "template", "template": "plain", "color": "#2F80ED"})
     # settings changed while both wait in the queue: neither task picks it up
-    AS.update({"simple": {"auto_export": True, "video_audio": "mix", "karaoke": {"text": {"size": 60}}}})
+    AS.update({"simple": {"auto_export": True, "video_audio": "mix", "separate": True, "ai_readings": False,
+                          "karaoke": {"text": {"size": 60}}}})
     a, b = _wait(q, a.id), _wait(q, b.id)
     assert a.status == b.status == "succeeded", (a.error, b.error)
     assert (a.style_label, a.style_colors) == ("荧光", ["#FF8A1E", "#FFC53D"]) and b.style_label == "朴素"
     assert (a.video.video_audio, a.video.vocal_keep_pct) == ("mix", 35) and not a.video.auto_export
     assert (b.video.video_audio, b.video.vocal_keep_pct) == ("original", 20)  # the settings' level when not chosen
     assert a.stage("export").status == b.stage("export").status == "skipped"  # auto export was off when added
+    # so was separation: not picked up from the settings changed afterwards
+    assert a.processing.separate is False and a.stage("separate").status == "skipped"
+    assert not (q.dir / a.id).exists()  # the staged upload is gone once the project has the media
     ka, kb = q.ws.get(a.project_id).project.karaoke, q.ws.get(b.project_id).project.karaoke
     assert ka.glow.enabled and ka.glow.color_unsung == "#FFC53D" and ka.effects.kind == "sparkle"
     assert (ka.translation.enabled, ka.info.enabled, ka.ruby.script, ka.ruby.target) == (False, True, "romaji", "kanji")
@@ -520,3 +525,76 @@ def test_settings_from_before_still_load(tmp_path):
     assert s.simple.quality == "high" and s.simple.task_style.source == "saved" and s.simple.task_style.ruby == "romaji"
     assert "font_size" not in s.simple.task_style.model_dump()
     assert not AS.settings_path().with_suffix(".broken.json").exists()
+
+
+def test_retry_keeps_work_already_done_and_confirm_survives_edited_lyrics(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n",
+                       mode="plain", name="A").id)
+    assert t.status == "succeeded", t.error
+    h = q.ws.get(t.project_id)
+    first = h.project.result().id
+    audio_role = h.project.config.audio_role
+    # say the task failed at alignment, and the user then aligned in the detailed mode: a retry keeps that
+    t.stage("align").status, t.stage("export").status, t.status = "failed", "pending", "failed"
+    q.retry(t.id)
+    t = _wait(q, t.id)
+    assert t.status == "succeeded" and t.stage("align").message.startswith("已有对齐结果")
+    assert h.project.result().id == first and h.project.config.audio_role == audio_role
+    # a task cancelled while it was being picked up never runs
+    c = P.PipelineTask(name="C", status="cancelled", stages=[P.Stage(key=k, label=k) for k, _, _ in P.STAGES])
+    q.tasks.append(c)
+    q._run(c, CancelToken(), None, done_status="succeeded")
+    assert c.status == "cancelled" and all(st.status == "pending" for st in c.stages)
+    # confirming the offset after the lyrics changed: a new first line is proposed instead of a crash
+    with h.lock:  # an LRC project (line times) whose line asked about is gone
+        h.project.mode = "lrc"
+        for i, ln in enumerate(h.project.lyrics.sung_lines()):
+            ln.imported_start_ms = 1000 + 2000 * i
+        h.save()
+    w = P.PipelineTask(name="W", status="waiting", project_id=t.project_id, calibration={"line_id": "L_gone"},
+                       stages=[P.Stage(key=k, label=k) for k, _, _ in P.STAGES])
+    q.tasks.append(w)
+    with pytest.raises(S.ServiceError, match="重新标记"):
+        q.confirm_calibration(w.id, marked_ms=1000)
+    assert w.status == "waiting" and w.calibration["line_id"] == h.project.lyrics.sung_lines()[0].id
+    q.shutdown()
+
+
+def test_heavy_lock_says_what_it_waits_for():
+    from kara_align.project.jobs import run_heavy
+
+    started, release, seen = threading.Event(), threading.Event(), []
+    th = threading.Thread(target=lambda: run_heavy(lambda: (started.set(), release.wait(5)), holder="极简模式任务「A」的对齐"))
+    th.start()
+    started.wait(5)
+    cancel = CancelToken()
+
+    def waiting(msg):
+        seen.append(msg)
+        release.set()
+
+    run_heavy(lambda: None, waiting, cancel)
+    th.join()
+    assert seen and seen[0] == "等待极简模式任务「A」的对齐完成…"
+
+
+def test_delete_project(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    client = TestClient(create_app(tmp_path / "projects"))
+    pid = client.post("/api/projects", json={"name": "x", "mode": "plain"}).json()["project"]["id"]
+    q = client.app.state.tasks
+    q.tasks.append(P.PipelineTask(name="T", project_id=pid, status="queued"))
+    r = client.delete(f"/api/projects/{pid}")
+    assert r.status_code == 409 and "极简模式任务「T」" in r.json()["detail"]
+    q.tasks.clear()
+    assert client.delete(f"/api/projects/{pid}").json() == {"ok": True}
+    assert not (tmp_path / "projects" / pid).exists()
+    assert client.get(f"/api/projects/{pid}").status_code in (400, 404)
+    assert pid not in [p["id"] for p in client.get("/api/projects").json()]
+    q.shutdown()

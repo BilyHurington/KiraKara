@@ -81,6 +81,15 @@ class TaskVideo(_Base):
     quality: Literal["standard", "high"] = "standard"
 
 
+class TaskProcessing(_Base):
+    """How the task is processed, fixed when it is added (AI readings, vocal separation)."""
+
+    ai_readings: bool = True
+    separate: bool = True
+    separation_preset: str = "melband-roformer"
+    separation_device: Literal["auto", "cpu"] = "auto"
+
+
 class PipelineTask(_Base):
     id: str = Field(default_factory=lambda: new_id("t"))
     created: str = Field(default_factory=utcnow)
@@ -106,6 +115,7 @@ class PipelineTask(_Base):
     # later changes to the settings); None on tasks from before this existed
     karaoke: Optional[KaraokeStyle] = None
     video: Optional[TaskVideo] = None
+    processing: Optional[TaskProcessing] = None
     style_label: str = ""
     style_colors: list[str] = Field(default_factory=list)
     style_applied: bool = False
@@ -136,6 +146,7 @@ class TaskQueue:
         self.dir = Path(ws.root) / ".tasks"
         self.dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._save_lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
         self._cancel: dict[str, CancelToken] = {}
         self.tasks: list[PipelineTask] = self._load()
@@ -176,9 +187,11 @@ class TaskQueue:
         return tasks
 
     def _save(self) -> None:
-        with self._lock:
-            data = [t.model_dump(mode="json") for t in self.tasks]
-        atomic_write_text(self._file(), json.dumps(data, ensure_ascii=False))
+        # one saver at a time, each writing what is current then: an older snapshot never lands last
+        with self._save_lock:
+            with self._lock:
+                data = [t.model_dump(mode="json") for t in self.tasks]
+            atomic_write_text(self._file(), json.dumps(data, ensure_ascii=False))
 
     def media_path(self, task: PipelineTask) -> Path:
         return self.dir / task.id / task.media_filename
@@ -217,7 +230,10 @@ class TaskQueue:
         t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
                          stages=[Stage(key=k, label=label) for k, label, _ in STAGES],
-                         karaoke=karaoke, video=video, style_label=label, style_colors=colors)
+                         karaoke=karaoke, video=video, style_label=label, style_colors=colors,
+                         processing=TaskProcessing(ai_readings=cfg.simple.ai_readings, separate=cfg.simple.separate,
+                                                   separation_preset=cfg.simple.separation_preset,
+                                                   separation_device=cfg.simple.separation_device))
         if style is not None:  # the next task starts from these choices
             app_settings.update({"simple": {"task_style": opts.model_dump(mode="json")}})
         if not t.name and t.lyrics_kind == "text":
@@ -253,14 +269,15 @@ class TaskQueue:
     def cancel(self, task_id: str) -> PipelineTask:
         t = self.get(task_id)
         with self._lock:
-            if t.status in ("queued", "waiting") or (t.status == "preparing" and t.id not in self._cancel):
+            token = self._cancel.get(task_id)
+            if token is not None:  # picked up by a worker (even if it has not marked it running yet)
+                token.cancel()
+                t.message = "正在取消…"
+            if t.status in ("queued", "waiting") or (t.status == "preparing" and token is None):
                 t.status, t.message, t.finished = "cancelled", "已取消", utcnow()
                 for s in t.stages:
                     if s.status == "waiting":
                         s.status = "pending"
-            elif t.status in ("running", "preparing") and task_id in self._cancel:
-                self._cancel[task_id].cancel()
-                t.message = "正在取消…"
         self._save()
         return t
 
@@ -283,30 +300,41 @@ class TaskQueue:
 
     def confirm_calibration(self, task_id: str, *, marked_ms: Optional[int] = None, plain: bool = False) -> PipelineTask:
         """The user confirmed where the first line starts (or chose not to use the LRC times)."""
-        from .align import calibration as C
-
         t = self.get(task_id)
-        if t.status != "waiting" or not t.calibration or not t.project_id:
-            raise S.ServiceError("这个任务现在不需要确认偏移")
-        h = self.ws.get(t.project_id)
-        st = t.stage("calibrate")
-        if plain:
-            S.update_settings(h, mode="plain")
-            t.mode = "plain"
-            st.message = "改用普通模式"
-        else:
-            if marked_ms is None:
-                raise S.ServiceError("请标记第一句开始唱的位置")
-            S.calibration_op(h, "mark", line_id=t.calibration["line_id"], marked_ms=int(marked_ms))
-            shift = h.project.calibration.user_shift_ms
-            st.message = f"偏移 {shift:+d} ms（已确认）"
-            t.calibration["confirmed_ms"] = int(marked_ms)
-        with self._lock:
-            st.status, st.progress = "done", 1.0
-            t.calibration_confirmed = True
-            t.status, t.message = "queued", "等待继续"
-            self._wake.notify_all()
+        with self._lock:  # a cancel must not slip in between the check and the change
+            if t.status != "waiting" or not t.calibration or not t.project_id:
+                raise S.ServiceError("这个任务现在不需要确认偏移")
+            h = self.ws.get(t.project_id)
+            st = t.stage("calibrate")
+            if plain:
+                S.update_settings(h, mode="plain")
+                t.mode = "plain"
+                st.message = "改用普通模式"
+            else:
+                if marked_ms is None:
+                    raise S.ServiceError("请标记第一句开始唱的位置")
+                line_id = t.calibration["line_id"]
+                if not any(ln.id == line_id for ln in h.project.lyrics.lines):
+                    # the lyrics were edited in the detailed mode meanwhile: ask about the new first line
+                    t.calibration = calibration_request(h)
+                    stale = True
+                else:
+                    stale = False
+                    try:
+                        S.calibration_op(h, "mark", line_id=line_id, marked_ms=int(marked_ms))
+                    except ValueError as e:
+                        raise S.ServiceError(str(e)) from e
+                    shift = h.project.calibration.user_shift_ms
+                    st.message = f"偏移 {shift:+d} ms（已确认）"
+                    t.calibration["confirmed_ms"] = int(marked_ms)
+            if plain or not stale:
+                st.status, st.progress = "done", 1.0
+                t.calibration_confirmed = True
+                t.status, t.message = "queued", "等待继续"
+                self._wake.notify_all()
         self._save()
+        if not plain and stale:
+            raise S.ServiceError("歌词在详细模式中改过：已重新选出要确认的第一句，请重新标记后确认")
         return t
 
     def remove(self, task_id: str) -> None:
@@ -341,13 +369,22 @@ class TaskQueue:
                 assert task is not None
                 token = CancelToken()
                 self._cancel[task.id] = token
+                task.status = "running"  # taken: a cancel from now on goes through the token
             self._run(task, token, None, done_status="succeeded")
 
     def _run(self, task: PipelineTask, token: CancelToken, keys: Optional[tuple[str, ...]], *,
              done_status: TaskStatus) -> None:
         with self._lock:
-            task.status, task.message = ("preparing" if keys else "running"), "开始"
-        self._save()
+            dropped = task.status == "cancelled" or token.cancelled  # cancelled while being picked up
+            if dropped:
+                self._cancel.pop(task.id, None)
+                task.status, task.message = "cancelled", "已取消"
+                task.finished = task.finished or utcnow()
+            else:
+                task.status, task.message = ("preparing" if keys else "running"), "开始"
+        self._save()  # never while holding self._lock (the save lock is always taken first)
+        if dropped:
+            return
         try:
             run_task(self, task, token, keys)
             task.status = done_status
@@ -393,6 +430,8 @@ def _first_open_stage(t: PipelineTask) -> Optional[str]:
 
 def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Optional[tuple[str, ...]] = None) -> None:
     cfg = app_settings.load()
+    if task.processing is not None:  # the choices made when the task was added, not today's settings
+        cfg.simple = cfg.simple.model_copy(update=task.processing.model_dump())
     last_save = [0.0]
 
     def save(force: bool = False) -> None:
@@ -439,6 +478,10 @@ def _handle(q: TaskQueue, task: PipelineTask) -> "S.ProjectHandle":
     return q.ws.get(task.project_id)
 
 
+def _holder(task: PipelineTask, what: str) -> str:
+    return f"极简模式任务「{task.name or task.media_filename}」的{what}"
+
+
 def _warn(task: PipelineTask, text: str) -> None:
     if text not in task.warnings:
         task.warnings.append(text)
@@ -467,6 +510,8 @@ def stage_import(q, task, cfg, cancel, progress):
         h.project.mode = task.mode
         h.save()
     apply_task_style(h, task)
+    # the project keeps its own copy: drop the staged upload (a retry reads the project's assets)
+    shutil.rmtree(q.dir / task.id, ignore_errors=True)
     return "done"
 
 
@@ -510,6 +555,9 @@ def stage_lyrics(q, task, cfg, cancel, progress):
         raise S.ServiceError("歌词里没有可以演唱的行")
     n = len(h.project.lyrics.sung_lines())
     paired = pair_translation(h, (pv.get("extra_tracks") or {}).get("translation"))
+    if task.karaoke is not None and task.karaoke.translation.enabled and not any(
+            (ln.translation or "").strip() for ln in h.project.lyrics.sung_lines()):
+        _warn(task, "歌词没有翻译，视频里不会显示翻译（音乐平台链接才会自动带翻译）")
     return f"{n} 行" + (f" · 翻译 {paired} 行" if paired else "")
 
 
@@ -552,6 +600,8 @@ def stage_separate(q, task, cfg, cancel, progress):
     h = _handle(q, task)
     if not cfg.simple.separate:
         return "skipped"
+    if h.project.asset("vocals") is not None and h.project.asset("instrumental") is not None:
+        return "已有分轨"  # kept (a retry, or separated in the detailed mode)
     try:
         from .audio.separation import ensure_available
 
@@ -562,7 +612,7 @@ def stage_separate(q, task, cfg, cancel, progress):
     try:
         run_heavy(lambda: S.run_separation(h, cfg.simple.separation_preset, cancel=cancel, progress=progress,
                                            device=cfg.simple.separation_device),
-                  lambda m: progress(0.0, m), cancel)
+                  lambda m: progress(0.0, m), cancel, holder=_holder(task, "人声分离"))
     except Cancelled:
         raise
     except Exception as e:
@@ -614,8 +664,7 @@ def calibration_request(h: "S.ProjectHandle") -> dict:
 
 
 def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: CancelToken, progress):
-    role = _audio_role(h)
-    S.update_settings(h, config={"audio_role": role})
+    role = _audio_role(h)  # passed to this alignment only; the project's own setting is left alone
 
     def align():
         try:
@@ -629,7 +678,7 @@ def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: Cance
             task.mode = "plain"
             return S.run_align(h, audio_role=role, cancel=cancel, progress=progress)
 
-    r = run_heavy(align, lambda m: progress(0.0, m), cancel)
+    r = run_heavy(align, lambda m: progress(0.0, m), cancel, holder=_holder(task, "对齐"))
     warns = [i for i in r.issues if i.severity in ("warning", "error") and i.code in ("unit_in_rest", "line_gap")]
     if warns:
         _warn(task, f"有 {len(warns)} 处可能需要人工检查（点开任务在“人工检查”中查看）")
@@ -637,7 +686,12 @@ def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: Cance
 
 
 def stage_align(q, task, cfg, cancel, progress):
-    r = _align(q, task, _handle(q, task), cancel, progress)
+    h = _handle(q, task)
+    r = h.project.result()
+    if r is not None and S.staleness(h.project, r) is None:
+        # a current alignment exists (a retry, or aligned in the detailed mode): keep it and its edits
+        return f"已有对齐结果 · {len(r.units)} 个发音单元"
+    r = _align(q, task, h, cancel, progress)
     return f"{len(r.units)} 个发音单元"
 
 
@@ -697,8 +751,10 @@ def stage_export(q, task, cfg, cancel, progress):
     if task.karaoke is not None:  # the task's own style (and any edits made to the project since)
         apply_task_style(h, task)
         video = task.video or TaskVideo()
-    else:  # a task from before styles were bound to tasks
-        apply_karaoke_settings(h, cfg.simple)
+    else:  # a task from before styles were bound to tasks: the settings' style, once
+        if not task.style_applied:
+            apply_karaoke_settings(h, cfg.simple)
+            task.style_applied = True
         video = TaskVideo(auto_export=cfg.simple.auto_export, video_audio=cfg.simple.video_audio,
                           vocal_keep_pct=cfg.simple.vocal_keep_pct, quality=cfg.simple.quality)
     if not video.auto_export:
@@ -715,9 +771,9 @@ def stage_export(q, task, cfg, cancel, progress):
         _warn(task, "没有人声分轨，视频使用原声")
         audio = "original"
     out = run_heavy(lambda: S.karaoke_burn(h, background="auto", audio=audio, quality=video.quality,
-                                           vocal_keep_pct=video.vocal_keep_pct,
+                                           vocal_keep_pct=video.vocal_keep_pct, tag=task.id[-6:],
                                            cancel=cancel, progress=progress),
-                    lambda m: progress(0.0, m), cancel)
+                    lambda m: progress(0.0, m), cancel, holder=_holder(task, "生成视频"))
     for w in out.get("warnings") or []:
         if "停顿" in w:
             _warn(task, w)

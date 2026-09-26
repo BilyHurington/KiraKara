@@ -27,6 +27,9 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const set = (patch: Partial<TaskStyleOptions>) => onChange({ ...o, ...patch });
 
   useEffect(() => { if (!saved) void loadSavedStyles().catch(() => undefined); }, [saved]);
+  useEffect(() => {
+    if (saved && o.saved_id && !saved.some((x) => x.id === o.saved_id)) set({ saved_id: '' });
+  }, [saved, o.saved_id]); // eslint-disable-line react-hooks/exhaustive-deps
   // the template's colours come from the server's palette algorithm
   useEffect(() => {
     if (o.source !== 'template') return;
@@ -117,10 +120,15 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                   <span className="w-14 shrink-0 text-muted">视频声音</span>
                   <Segmented<'original' | 'mix' | 'none'> size="sm" value={audio} onChange={(v) => set({ video_audio: v })} options={[
-                    { value: 'original', label: '原声' }, { value: 'mix', label: '降低人声' }, { value: 'none', label: '无声' },
+                    { value: 'original', label: '原声' },
+                    { value: 'mix', label: '降低人声', disabled: !settings.separate, title: settings.separate ? undefined : '需要在设置里开启人声分离' },
+                    { value: 'none', label: '无声' },
                   ]} />
                 </div>
-                {audio === 'mix' && (
+                {audio === 'mix' && !settings.separate && (
+                  <p className="pl-[4.5rem] text-xs text-warn">人声分离已在设置里关闭，视频会使用原声。</p>
+                )}
+                {audio === 'mix' && settings.separate && (
                   <div className="max-w-md pl-[4.5rem]">
                     <SliderField name="人声保留" label={<span className="text-muted">人声保留</span>} value={vocal}
                       onChange={(v) => set({ vocal_keep_pct: v })} min={0} max={100} step={1} unit="%" trackClassName="min-w-32" />

@@ -190,6 +190,13 @@ export function closeProject() {
   try { localStorage.removeItem('kara.pid'); } catch { /* ignore */ }
 }
 
+/** Delete a project with its audio, stems and exports (the server refuses while it is in use). */
+export async function deleteProject(pid: string) {
+  await api.del(`/api/projects/${pid}`);
+  if (get().pid === pid) closeProject();
+  await loadProjects();
+}
+
 export async function refreshProject() {
   const pid = get().pid;
   if (pid) setPV(await api.get<ProjectView>(`/api/projects/${pid}`));

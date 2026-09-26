@@ -92,7 +92,8 @@ describe('simple mode home', () => {
     await userEvent.click(screen.getByRole('radio', { name: '无' }));
     expect(screen.queryByRole('switch', { name: '仅汉字' })).toBeNull();
     await userEvent.click(screen.getByRole('radio', { name: '罗马音' }));
-    // video sound: "reduce vocals" shows its own level
+    // video sound: "reduce vocals" needs separation (on in these settings) and shows its own level
+    expect(screen.getByRole('radio', { name: '降低人声' })).toBeEnabled();
     expect(screen.queryByRole('textbox', { name: '人声保留（输入数值）' })).toBeNull();
     await userEvent.click(screen.getByRole('radio', { name: '降低人声' }));
     const level = screen.getByRole('textbox', { name: '人声保留（输入数值）' });
@@ -178,11 +179,9 @@ describe('simple mode settings', () => {
     await waitFor(() => expect(api.find('PUT', '/api/settings').some((c) => c.body.ai?.api_key === 'sk-test')).toBe(true));
     expect(key).toHaveValue('');
     expect(await screen.findByPlaceholderText('••••••••（已保存）')).toBeInTheDocument();
-    // reduced vocals needs separation; its level shows only when chosen
-    expect(screen.queryByRole('textbox', { name: '人声保留（输入数值）' })).toBeNull();
-    await userEvent.click(screen.getByRole('radio', { name: '降低人声（伴唱）' }));
-    await waitFor(() => expect(useSimple.getState().settings!.simple.video_audio).toBe('mix'));
-    expect(screen.getByRole('textbox', { name: '人声保留（输入数值）' })).toHaveValue('20');
+    // the video's sound is chosen per song on the task form (one place), not here
+    expect(screen.queryByRole('radio', { name: /降低人声/ })).toBeNull();
+    expect(screen.getByText(/每首歌在“制作”页第 4 步选择/)).toBeInTheDocument();
   });
 });
 

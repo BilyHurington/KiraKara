@@ -1,11 +1,11 @@
 // No project open: create, import or open one.
 
-import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer } from 'lucide-react';
+import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, ProjectView } from '@/lib/types';
-import { loadProjects, openProject, run, setPV, setStep, toast, useApp } from '@/store/app';
+import { deleteProject, loadProjects, openProject, run, setPV, setStep, toast, useApp } from '@/store/app';
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input } from '@/components/ui';
 import { ModeChoice } from './Mode';
 
@@ -86,24 +86,7 @@ export function HomePage() {
                 <EmptyState className="m-2 py-8" title="还没有项目" description="新建一个项目开始对齐" />
               ) : (
                 <ul className="max-h-80 overflow-y-auto">
-                  {projects.map((p) => (
-                    <li key={p.id}>
-                      <button
-                        onClick={() => run(() => openProject(p.id), '打开项目失败')}
-                        className={cn('focus-ring group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-surface-2')}
-                      >
-                        <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted group-hover:bg-accent-soft group-hover:text-accent">
-                          <FileMusic className="size-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[13px] font-medium">{p.name}</div>
-                          <div className="text-xs text-muted">{fmtRelative(p.updated)}</div>
-                        </div>
-                        <Badge tone={p.mode === 'lrc' ? 'accent' : 'neutral'}>{p.mode === 'lrc' ? 'LRC 增强' : '普通'}</Badge>
-                        <ArrowRight className="size-4 text-subtle opacity-0 transition group-hover:opacity-100" />
-                      </button>
-                    </li>
-                  ))}
+                  {projects.map((p) => <ProjectRow key={p.id} p={p} />)}
                 </ul>
               )}
             </div>
@@ -111,5 +94,44 @@ export function HomePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function ProjectRow({ p }: { p: { id: string; name: string; mode: Mode; updated: string } }) {
+  const [confirm, setConfirm] = useState(false);
+  if (confirm) {
+    return (
+      <li className="rounded-lg bg-danger-soft/60 px-3 py-2.5 text-[13px]">
+        <div className="font-medium">删除「{p.name}」？</div>
+        <div className="mt-0.5 text-xs text-muted">音频、分轨、对齐结果和导出的视频都会一起删除，无法恢复。</div>
+        <div className="mt-2 flex gap-2">
+          <Button size="xs" variant="danger" icon={<Trash2 className="size-3.5" />}
+            onClick={() => run(async () => { await deleteProject(p.id); toast('ok', `已删除「${p.name}」`); }, '删除失败')}>删除</Button>
+          <Button size="xs" variant="ghost" onClick={() => setConfirm(false)}>取消</Button>
+        </div>
+      </li>
+    );
+  }
+  return (
+    <li className="group relative">
+      <button
+        onClick={() => run(() => openProject(p.id), '打开项目失败')}
+        className={cn('focus-ring flex w-full items-center gap-3 rounded-lg px-3 py-2.5 pr-11 text-left transition hover:bg-surface-2')}
+      >
+        <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted group-hover:bg-accent-soft group-hover:text-accent">
+          <FileMusic className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{p.name}</div>
+          <div className="text-xs text-muted">{fmtRelative(p.updated)}</div>
+        </div>
+        <Badge tone={p.mode === 'lrc' ? 'accent' : 'neutral'}>{p.mode === 'lrc' ? 'LRC 增强' : '普通'}</Badge>
+        <ArrowRight className="size-4 text-subtle opacity-0 transition group-hover:opacity-100" />
+      </button>
+      <button type="button" aria-label={`删除项目 ${p.name}`} title="删除项目" onClick={() => setConfirm(true)}
+        className="focus-ring absolute top-1/2 right-2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-subtle opacity-0 transition group-hover:opacity-100 hover:bg-danger-soft hover:text-danger focus:opacity-100">
+        <Trash2 className="size-3.5" />
+      </button>
+    </li>
   );
 }

@@ -96,6 +96,14 @@ class Workspace:
                 self._handles[pid] = h
             return h
 
+    def delete(self, pid: str) -> None:
+        """Remove a project with everything in it (audio, stems, exports)."""
+        h = self.get(pid)  # validates the id
+        with self._lock:
+            self._handles.pop(pid, None)
+        with h.lock:
+            shutil.rmtree(h.dir)
+
     def import_file(self, path: Path, filename: str) -> ProjectHandle:
         tmp_id = new_id("p")
         dest = self.root / tmp_id
@@ -871,7 +879,7 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
-                 vocal_keep_pct: Optional[float] = None,
+                 vocal_keep_pct: Optional[float] = None, tag: str = "",
                  cancel: Optional[CancelToken] = None, progress: Optional[Callable[[float, str], None]] = None) -> dict:
     """Burn the karaoke subtitles into a video (the source video or black).
 
@@ -897,7 +905,8 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     if not 0.0 <= pct <= 100.0:
         raise ServiceError("人声保留比例必须在 0–100% 之间")
     suffix = {"original": "", "mix": f"-vocal{int(round(pct))}", "none": "-noaudio"}[audio]
-    out = h.dir / "exports" / f"{stem}-karaoke{suffix}.mp4"
+    # ``tag`` gives a video its own name (a simple-mode task's video is never overwritten by later burns)
+    out = h.dir / "exports" / f"{stem}-karaoke{suffix}{'-' + tag if tag else ''}.mp4"
     with tempfile.TemporaryDirectory() as td:
         audio_file: Optional[Path] = None
         use_video_audio = False

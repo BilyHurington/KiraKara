@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -146,12 +147,22 @@ class AdoptBody(BaseModel):
 
 
 def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -> FastAPI:
-    app = FastAPI(title="Kara Align", version=__version__)
-    ws = S.Workspace(root)
-    jm = jobs or JobManager()
+    from contextlib import asynccontextmanager
+
     from ..pipeline import TaskQueue
 
+    ws = S.Workspace(root)
+    jm = jobs or JobManager()
     tq = TaskQueue(ws)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # stopping the server: cancel running work (separation / AI / ffmpeg subprocesses stop with it)
+        tq.shutdown()
+        jm.shutdown()
+
+    app = FastAPI(title="Kara Align", version=__version__, lifespan=lifespan)
     app.state.workspace = ws
     app.state.jobs = jm
     app.state.tasks = tq
@@ -285,7 +296,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
                 opts = json.loads(style) if style.strip() else None
             except ValueError as e:
                 raise HTTPException(400, "style 必须是 JSON") from e
-            t = tq.add(media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name, style=opts)
+            # moving the upload and resolving the style run in a thread: the server keeps answering
+            t = await run_in_threadpool(tq.add, media=tmp, filename=fname, lyrics=lyrics, mode=mode, name=name,
+                                        style=opts)
         finally:
             shutil.rmtree(td, ignore_errors=True)
         return t.model_dump(mode="json")
@@ -351,6 +364,17 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     def get_project(pid: str):
         return view(handle(pid))
 
+    @app.delete("/api/projects/{pid}")
+    def delete_project(pid: str):
+        handle(pid)
+        t = tq.active_for_project(pid)
+        if t is not None:
+            raise HTTPException(409, f"极简模式任务「{t.name or t.media_filename}」正在处理这个项目，请先取消该任务")
+        if any(j.status in ("queued", "running") for j in jm.list(pid)):
+            raise HTTPException(409, "这个项目还有正在进行的操作，请等它完成或取消后再删除")
+        ws.delete(pid)
+        return {"ok": True}
+
     @app.patch("/api/projects/{pid}")
     def patch_project(pid: str, body: PatchProjectBody):
         h = handle(pid)
@@ -363,7 +387,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / ("upload.zip" if name.endswith(".zip") else "project.json")
             await _save_upload(file, tmp, 4 * 1024**3)
-            h = ws.import_file(tmp, name)
+            h = await run_in_threadpool(ws.import_file, tmp, name)
         return view(h)
 
     @app.get("/api/projects/{pid}/package")
@@ -509,7 +533,8 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
             try:
                 with open(tmp, "rb") as f:
                     validate_upload(name, f.read(64), size, MAX_AUDIO_BYTES)
-                S.add_media(h, tmp, role, filename=name, source_kind="upload" if role == "original" else "import")
+                await run_in_threadpool(S.add_media, h, tmp, role, filename=name,
+                                        source_kind="upload" if role == "original" else "import")
             except AudioError as e:
                 raise HTTPException(400, str(e)) from e
         return view(h)

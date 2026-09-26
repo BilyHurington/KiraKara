@@ -8,7 +8,7 @@ import { loadProjects, run, toast, useApp } from '@/store/app';
 import { saveSettings, useSimple } from '@/store/simple';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
 import { StylePanel } from '@/components/karaoke/StylePanel';
-import { Callout, Card, CardBody, CardHeader, Field, Segmented, Select, SliderField, Switch } from '@/components/ui';
+import { Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Switch } from '@/components/ui';
 
 type Simple = AppSettings['simple'];
 
@@ -23,7 +23,7 @@ export function SimpleSettings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
-        <p className="mt-1 text-sm text-muted">“开始制作”会按这里的选项自动完成每一步。修改立即保存，只对之后开始的任务生效。</p>
+        <p className="mt-1 text-sm text-muted">“开始制作”会按这里的选项自动完成每一步。修改立即保存，只对之后添加的任务生效（已在队列里的任务按添加时的选项完成）。</p>
       </div>
 
       <Card>
@@ -67,18 +67,7 @@ export function SimpleSettings() {
           <Switch checked={s.auto_export} onChange={(v) => save({ auto_export: v })} label="完成后自动生成视频" />
           {s.auto_export && (
             <>
-              <Group label="视频里的声音">
-                <Segmented<Simple['video_audio']> value={s.video_audio} onChange={(v) => save({ video_audio: v })} options={[
-                  { value: 'original', label: '原声' },
-                  { value: 'mix', label: '降低人声（伴唱）', disabled: !s.separate, title: s.separate ? undefined : '需要开启人声分离' },
-                  { value: 'none', label: '无声' },
-                ]} />
-              </Group>
-              {s.video_audio === 'mix' && s.separate && (
-                <Field label="人声保留" hint="0% 为纯伴奏；伴奏保持 100%">
-                  <VocalLevel value={s.vocal_keep_pct} onCommit={(v) => save({ vocal_keep_pct: v })} />
-                </Field>
-              )}
+              <p className="text-xs text-muted">视频里的声音（原声 / 降低人声 / 无声）每首歌在“制作”页第 4 步选择，并会记住上次的选择。</p>
               <Group label="画质">
                 <Segmented<Simple['quality']> value={s.quality} onChange={(v) => save({ quality: v })}
                   options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
@@ -89,13 +78,6 @@ export function SimpleSettings() {
       </Card>
     </div>
   );
-}
-
-function VocalLevel({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
-  // follows the thumb while dragging; saved on release or when a typed value is confirmed
-  return <SliderField name="人声保留" value={v} onChange={setV} onCommit={onCommit} min={0} max={100} step={1} unit="%" />;
 }
 
 /** The complete default subtitle style of new tasks, with the few knobs people change most. */

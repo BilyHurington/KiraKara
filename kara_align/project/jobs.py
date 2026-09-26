@@ -20,19 +20,23 @@ JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 # model inference, separation and encoding: one at a time across the whole app
 # (heavy jobs here and the simple-mode task queue both take it)
 HEAVY_LOCK = threading.Lock()
+_holder = ""  # what holds HEAVY_LOCK now, for the waiting message
 
 
 def run_heavy(fn: Callable[[], Any], wait_message: Optional[Callable[[str], None]] = None,
-              cancel: Optional[CancelToken] = None) -> Any:
-    """Run ``fn`` holding :data:`HEAVY_LOCK`, reporting while waiting for it."""
+              cancel: Optional[CancelToken] = None, holder: str = "") -> Any:
+    """Run ``fn`` holding :data:`HEAVY_LOCK`, reporting what it waits for meanwhile."""
+    global _holder
     while not HEAVY_LOCK.acquire(timeout=0.5):
         if wait_message is not None:
-            wait_message("等待其他任务完成…")
+            wait_message(f"等待{_holder}完成…" if _holder else "等待其他任务完成…")
         if cancel is not None:
             cancel.check()
+    _holder = holder
     try:
         return fn()
     finally:
+        _holder = ""
         HEAVY_LOCK.release()
 
 
@@ -60,6 +64,9 @@ class Job:
         }
 
 
+_KIND = {"align": "对齐", "separate": "人声分离", "burn": "字幕烧录", "ai": "AI 注音", "video": "视频导出"}
+
+
 class JobManager:
     """Two pools: ``heavy`` (model inference / separation, serialized) and ``light``."""
 
@@ -84,7 +91,7 @@ class JobManager:
                 if heavy:
                     def wait(msg: str) -> None:
                         job.message = msg
-                    out = run_heavy(lambda: fn(job), wait, job.cancel_token)
+                    out = run_heavy(lambda: fn(job), wait, job.cancel_token, holder=f"详细模式的{_KIND.get(kind, kind)}")
                 else:
                     out = fn(job)
                 job.cancel_token.check()

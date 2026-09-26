@@ -219,6 +219,7 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
   const live = t.status === 'running' || t.status === 'queued' || t.status === 'preparing' || t.status === 'waiting';
   const canOpen = !!t.project_id && t.status !== 'running' && t.status !== 'preparing' && t.status !== 'waiting';
   const act = (a: 'cancel' | 'retry' | 'delete') => run(() => taskAction(t.id, a), '操作失败');
+  const [confirmDel, setConfirmDel] = useState(false);
   const open = () => t.project_id && openInDetail(t.project_id, t.outputs.video ? 'karaoke' : 'review');
   return (
     <li className="px-5 py-4">
@@ -251,11 +252,18 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
             </a>
           )}
           {(t.status === 'failed' || t.status === 'cancelled' || t.status === 'interrupted') && (
-            <Button size="sm" variant="secondary" icon={<RotateCcw className="size-4" />} onClick={() => act('retry')}>重试</Button>
+            <Button size="sm" variant="secondary" icon={<RotateCcw className="size-4" />} onClick={() => act('retry')}
+              title="从没完成的步骤继续：已经完成的步骤、已有的分轨和对齐结果（包括在详细模式里做的）都会保留">重试</Button>
           )}
           {canOpen && <Button size="sm" variant="ghost" icon={<ArrowRight className="size-4" />} onClick={open}>详细模式</Button>}
           {live && <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={() => act('cancel')}>取消</Button>}
-          {!live && <Button size="sm" variant="ghost" icon={<Trash2 className="size-4" />} aria-label="移除任务" onClick={() => act('delete')} />}
+          {!live && (confirmDel ? (
+            <span className="flex items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1 text-xs text-muted">
+              从列表移除？{t.project_id ? '项目和视频仍保留在详细模式' : ''}
+              <Button size="xs" variant="danger" onClick={() => act('delete')}>移除</Button>
+              <Button size="xs" variant="ghost" onClick={() => setConfirmDel(false)}>取消</Button>
+            </span>
+          ) : <Button size="sm" variant="ghost" icon={<Trash2 className="size-4" />} aria-label="移除任务" onClick={() => setConfirmDel(true)} />)}
         </div>
       </div>
 

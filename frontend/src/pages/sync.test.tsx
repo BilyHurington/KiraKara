@@ -100,3 +100,44 @@ describe('detailed mode ↔ simple-mode tasks', () => {
     expect(api.find('PUT', `/api/projects/${PID}/karaoke`)[1].body.text.bold).toBe(style.text.bold);
   });
 });
+
+describe('cleaning up', () => {
+  it('deletes a project only after confirming, and says what goes with it', async () => {
+    seedStore('mode');
+    useApp.setState({ pid: null, pv: null, projects: [{ id: 'p9', name: '旧歌', mode: 'plain', updated: '2026-09-01T00:00:00+00:00' }] });
+    let list = [{ id: 'p9', name: '旧歌', mode: 'plain', updated: '2026-09-01T00:00:00+00:00' }];
+    const api = mockApi({ 'DELETE /api/projects/p9': () => { list = []; return { ok: true }; }, 'GET /api/projects': () => list });
+    const { HomePage } = await import('./Home');
+    renderUI(<HomePage />);
+    await userEvent.click(screen.getByRole('button', { name: '删除项目 旧歌' }));
+    expect(screen.getByText(/导出的视频都会一起删除，无法恢复/)).toBeInTheDocument();
+    expect(api.find('DELETE', '/api/projects/p9')).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: '删除' }));
+    await waitFor(() => expect(api.find('DELETE', '/api/projects/p9')).toHaveLength(1));
+    await waitFor(() => expect(useApp.getState().projects).toEqual([]));
+  });
+
+  it('removing a finished task asks first and says the project stays', async () => {
+    const done = task({ id: 't5', status: 'succeeded', stages: stages(7), progress: 1, message: '' });
+    useSimple.setState({ ui: 'simple', page: 'home', tasks: [done], settings: null });
+    const api = mockApi({ 'GET /api/tasks': () => [], 'DELETE /api/tasks/t5': () => ({ ok: true }) });
+    const { SimpleHome } = await import('./simple/SimpleHome');
+    renderUI(<SimpleHome />);
+    await userEvent.click(screen.getByRole('button', { name: '移除任务' }));
+    expect(screen.getByText(/项目和视频仍保留在详细模式/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '移除' }));
+    await waitFor(() => expect(api.find('DELETE', '/api/tasks/t5')).toHaveLength(1));
+  });
+
+  it('a saved style that no longer exists is cleared from the task form', async () => {
+    const { TaskStyleStep } = await import('./simple/TaskStyleStep');
+    const { useLibrary } = await import('@/store/styles');
+    useLibrary.setState({ saved: [builtinSaved()] });
+    mockApi({});
+    const onChange = vi.fn();
+    const simple = { karaoke: defaultStyle(), auto_export: true, separate: true, video_audio: 'original', vocal_keep_pct: 20 } as unknown as AppSettings['simple'];
+    renderUI(<TaskStyleStep value={{ source: 'saved', template: 'glow', color: '#FF8A1E', secondary: '', saved_id: 'st_gone', translation: null,
+      song_info: null, ruby: 'style', video_audio: null }} onChange={onChange} settings={simple} />);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ saved_id: '' })));
+  });
+});

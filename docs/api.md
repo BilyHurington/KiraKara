@@ -25,6 +25,7 @@ pydantic models in `kara_align/models.py`, serialized as-is.
 | POST | `/api/projects` | `{name, mode: "plain"\|"lrc"}` | `ProjectView` |
 | GET | `/api/projects/{pid}` | – | `ProjectView` |
 | PATCH | `/api/projects/{pid}` | `{name?, mode?, config?: AlignConfig (partial ok), mix?: MixSettings}` | `ProjectView` |
+| DELETE | `/api/projects/{pid}` | – | `{ok}`; deletes the project folder (audio, stems, exports). 409 while a simple-mode task or a job works on it |
 | POST | `/api/projects/import` | multipart `file` (project.json or .kara.zip) | `ProjectView` |
 | GET | `/api/projects/{pid}/package?include_audio=1` | – | zip download |
 
@@ -135,3 +136,6 @@ A local rerun (`align` with `line_ids`) creates a new partial result with `paren
 | DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
 
 `PipelineTask`: `{id, name, mode, status: preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted, calibration (while waiting: {line_id, line_text, lrc_ms, lines, check_line, asset_id, duration_ms}), project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, calibrate, readings, separate, align, export` (stage status may be `waiting`). See `docs/simple-mode.md`.
+
+While a simple-mode task is working on a project (preparing / waiting / queued / running), `POST .../align`,
+`.../separate`, `.../ai/auto` and `.../karaoke/burn` answer 409 with the task's name in `detail`.
