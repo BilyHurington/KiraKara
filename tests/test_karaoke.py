@@ -554,7 +554,8 @@ def test_song_info_title_card(tmp_path):
     # glow copies: coming in and going out for each of the two lines
     assert all("\\an9" in l for l in card if "\\p1" not in l) and len([l for l in card if l.startswith("Dialogue: 8,")]) == 4
     assert client.put(f"/api/projects/{pid}/karaoke/info", json={"text": None}).json()["text"] is None
-    # translations along the top edge: the card leaves before the first one shows (but stays at least 2 s)
+    # translations along the top edge (a short one, in the middle): the card is not in its way and stays
+    # its whole time
     st.translation.enabled = True
     st.info.duration_ms = 60000
     h3 = S.open_dir(h.dir)
@@ -563,7 +564,7 @@ def test_song_info_title_card(tmp_path):
     S.set_karaoke_style(h3, st.model_dump(mode="json"))
     text = S.karaoke_ass(h3)[0].splitlines()
     assert min(l.split(",")[1] for l in text if ",KTrans," in l) < "0:00:02.50"
-    assert max(l.split(",")[2] for l in text if ",KInfo," in l) == "0:00:02.50"  # 0.5 s + 2 s, not 60 s
+    assert max(l.split(",")[2] for l in text if ",KInfo," in l) == "0:01:00.50"  # 0.5 s + 60 s
 
 
 def test_ruby_sweep_follows_the_lyric(tmp_path):

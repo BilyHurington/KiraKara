@@ -251,31 +251,52 @@ def _card_project(translation, **kw):
     return p, r
 
 
-def test_title_card_never_shows_over_a_translation_or_lyric():
+def test_title_card_stays_in_its_corner_and_narrows_to_keep_clear():
     st = KaraokeStyle()
     st.info.enabled, st.info.start_ms = True, 0
-    st.translation.enabled = True  # at the top, from 0.7 s
-    wide = "很长很长的翻译文字" * 6  # shrunk to the room between the margins: under both corners
-    p, r = _card_project(wide)
+    st.translation.enabled = True  # along the top, from 0.7 s
+
+    def card(text):
+        rows = [l for l in _events(text, "KInfo") if "\\p1" not in l]
+        bars = [l for l in _events(text, "KInfo") if "\\p1" in l]
+        return rows, bars
+
+    # a translation that reaches toward the card's corner: the card keeps its place and its whole time,
+    # and its lines wrap so it ends before the translation begins
+    mid = "很长很长的翻译文字" * 3
+    p, r = _card_project(mid)
+    p.lyrics.meta.title = "ハイファイ☆デイズ (M@STER VERSION) 赤城みりあ ソロ・リミックス"
     text, warnings = A.build_ass(p, r, st)
-    # the card is not dropped: it moves down, below the translation along the top edge
-    trans_bottom = 40 + 88 * 0.6  # (margin_v, translation size of the default style)
-    tops = [float(re.search(r"\\pos\([\d.]+,([\d.]+)\)", l).group(1)) for l in _events(text, "KInfo") if "\\p1" in l]
-    assert tops and min(tops) > trans_bottom and not any("没有显示" in w for w in warnings)
-    # a short one in the middle: the card stays (the 2 s rule for the top edge still applies)
+    rows, bars = card(text)
+    trans = _events(text, "KTrans")[0]
+    tw = Measurer(default_family(), st.translation.bold, 88 * st.translation.size_pct / 100).width(mid)
+    trans_x0 = 960 - tw / 2
+    assert all(_pos(b)[1] == 56 and _pos(b)[0] == 56 for b in bars)  # top-left, as set
+    assert max(_ms(b.split(",")[2]) for b in bars) == 7000  # its whole time
+    for l in rows:  # every row ends before the translation starts
+        size = float(re.search(r"\\fs([\d.]+)", l).group(1))
+        w = Measurer(default_family(), "\\b1" in l, size).width(l.split("}", 1)[1])
+        assert 76 + w < trans_x0, (l, trans_x0)
+    assert len({l.split("}", 1)[1] for l in rows}) > 3 and not warnings  # wrapped (title + artist + more rows)
+    # a short translation in the middle: nothing to avoid, one row per line
     p, r = _card_project("短")
     text, _ = A.build_ass(p, r, st)
-    card = _events(text, "KInfo")
-    assert card and max(_ms(l.split(",")[2]) for l in card) == 2000
-    # lyrics along the top, the first line where the card is: the card goes to the other corner
+    rows, bars = card(text)
+    assert max(_ms(b.split(",")[2]) for b in bars) == 7000 and len({l.split("}", 1)[1] for l in rows}) == 2
+    # a translation across the whole top: no narrow card fits beside it; it moves down below it (same corner)
+    p, r = _card_project("很长很长的翻译文字" * 6)
+    text, warnings = A.build_ass(p, r, st)
+    rows, bars = card(text)
+    assert bars and all(_pos(b)[0] == 56 and _pos(b)[1] > 40 + 88 * 0.6 for b in bars) and not warnings
+    # lyrics along the top where the card is: same corner, below the top row
     st = KaraokeStyle()
     st.info.enabled, st.info.start_ms = True, 0
     st.layout.position, st.layout.margin_v, st.layout.alternate_indent = "top", 40, 0
     p, r = _card_project(None)
     text, warnings = A.build_ass(p, r, st)
-    card = [l for l in _events(text, "KInfo") if "\\p1" not in l]
-    assert card and all("\\an9" in l for l in card) and any("另一侧" in w for w in warnings)
-
+    rows, bars = card(text)
+    first_row = min(_pos(l)[1] for l in _events(text, "KMain"))
+    assert rows and all("\\an7" in l for l in rows) and all(_pos(b)[1] > first_row for b in bars) and not warnings
 
 def test_accent_bar_is_as_tall_as_the_text_and_joint_credits():
     from kara_align.karaoke.info import song_fields
@@ -616,16 +637,18 @@ def test_title_card_comes_again_at_the_end_of_the_song():
     assert any("\\p1" in l and "\\t(0,380,1.6,\\fscy0)" in l and l.split(",")[2] == "0:00:03.00" for l in _events(text, "KInfo"))
     st.info.outro = False
     assert cards(st)[0] == [(0, 3000)]
-    # lyrics along the top at the end, where the card is: it comes in after they have gone (2 s at least)
+    # lyrics along the top at the end, right where the card is (no narrow card fits beside them): it
+    # comes in after they have gone, in its corner
     st = KaraokeStyle()
-    st.info.enabled, st.info.start_ms, st.info.outro_duration_ms = True, 0, 6000
+    st.info.enabled, st.info.start_ms, st.info.duration_ms, st.info.outro_duration_ms = True, 0, 2000, 6000
     st.layout.position, st.layout.margin_v, st.layout.alternate_indent = "top", 40, 0
     st.timing.advance_ms = 0
     p.audio = [AudioAsset.model_construct(role="original", duration_ms=9000, id="a", sha256="s")]
     text, _ = A.build_ass(p, r, st)
-    lyrics_gone = max(_ms(l.split(",")[2]) for l in _events(text, "KMain"))
+    # (only what is in its corner counts: a lyric on the right side does not hold it back)
+    corner_gone = max(_ms(l.split(",")[2]) for l in _events(text, "KMain") if _pos(l)[0] < 960)
     spans, _ = cards(st)
-    assert spans[-1][1] == 9000 and spans[-1][0] >= lyrics_gone + 200 > 9000 - 6000
+    assert spans[-1] == (corner_gone + 200, 9000) and corner_gone + 200 > 9000 - 6000
     # an ending card that would run into the opening one is left out
     p.audio = [AudioAsset.model_construct(role="original", duration_ms=5000, id="a", sha256="s")]
     assert all(e < 5000 for _, e in cards(st)[0])

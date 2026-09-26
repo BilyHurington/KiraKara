@@ -120,40 +120,33 @@ def wrap_text(text: str, width, max_w: float) -> list[str]:
 
 
 def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float, family: str,
-                time_offset_ms: float, busy_from_ms: Optional[float], *,
+                time_offset_ms: float, *,
                 boxes: Sequence[tuple[float, float, float, float, float, float]] = (),
-                warnings: Optional[list[str]] = None, end_ms: Optional[float] = None,
-                busy_until_ms: Optional[float] = None) -> list[str]:
-    """Dialogue lines of the card (style ``KInfo``); ``busy_from_ms`` is when a lyric or
-    translation first shows at the top edge (the card is gone by then, but stays 2 s);
-    ``boxes``: (from, to, x0, y0, x1, y1) of what else is drawn — the card is gone before
-    any of it shows where the card is.  ``end_ms`` (the end of the song on the subtitles'
-    timeline): the ending card too, which comes in after ``busy_until_ms`` (the last lyric /
-    translation along the top edge) and after everything drawn where it is."""
+                warnings: Optional[list[str]] = None, end_ms: Optional[float] = None) -> list[str]:
+    """Dialogue lines of the card (style ``KInfo``) in its corner at the top, for its whole
+    duration: when a translation or lyric (``boxes``: (from, to, x0, y0, x1, y1) of what else is
+    drawn) would be where the card is, the card gets narrower (its lines wrap) so it ends before it.
+    ``end_ms`` (the end of the song on the subtitles' timeline): the ending card too."""
     info = style.info
     lines = info_lines(project, style)
     if not info.enabled or not lines:
         return []
-    t0 = info.start_ms + time_offset_ms
+    t0 = max(0.0, info.start_ms + time_offset_ms)
     t1 = t0 + info.duration_ms
-    if busy_from_ms is not None and busy_from_ms - 200 < t1:
-        t1 = max(t0 + 2000, busy_from_ms - 200)
-    t0 = max(0.0, t0)
     events = _card(lines, style, W, H, k, family, t0, t1, boxes, warnings, at_end=False)
     if info.outro and end_ms is not None and end_ms - info.outro_duration_ms > t1:
-        e1 = end_ms
-        e0 = e1 - info.outro_duration_ms
-        if busy_until_ms is not None and busy_until_ms + 200 > e0:
-            e0 = min(e1 - 2000, busy_until_ms + 200)
-        events += _card(lines, style, W, H, k, family, max(e0, t1), e1, boxes, warnings, at_end=True)
+        events += _card(lines, style, W, H, k, family, end_ms - info.outro_duration_ms, end_ms, boxes, warnings,
+                        at_end=True)
     return events
 
 
 def _card(lines: list[str], style: KaraokeStyle, W: int, H: int, k: float, family: str, t0: float, t1: float,
           boxes: Sequence[tuple[float, float, float, float, float, float]], warnings: Optional[list[str]], *,
           at_end: bool) -> list[str]:
-    """One showing of the card from t0 to t1 (cut short by what else is drawn in its corner: at the
-    start it leaves before that shows, at the end it comes in after that has gone)."""
+    """One showing of the card from t0 to t1, in its corner at the top, as narrow as it needs to be
+    to stay clear of what else is drawn there (its lines wrap).  Only when not even a narrow card
+    fits beside it: shorter (gone before that shows / in after it has gone), else moved down below
+    it, else in the other corner."""
     info, txt, glow = style.info, style.text, style.glow
 
     title_size = info.size * k
@@ -166,79 +159,111 @@ def _card(lines: list[str], style: KaraokeStyle, W: int, H: int, k: float, famil
     accent = _bgr(info.accent or txt.color_sung)
     outline_c = _bgr(txt.outline_color)
 
-    # rows, top to bottom, relative to the card's top (\an7 / \an9: a row's top at y, its height
-    # the font size); a line too wide for the card wraps (at a space, before a bracket …) instead
-    # of being squeezed.  level 0 = the title.
-    placed = []
-    y = bottom = 0.0
-    for i, text in enumerate(lines):
-        size = title_size if i == 0 else sub_size
-        bold = txt.bold if i == 0 else False
-        m = Measurer(family, bold, size)
-        rows = wrap_text(text, m.width, max_w)
-        for j, row in enumerate(rows):
-            if placed:  # below the previous row: a wrapped row closer, the title's rows further
-                prev_size, prev_level = placed[-1][1], placed[-1][5]
-                y += prev_size * (1.1 if j else (1.18 if prev_level == 0 else 1.32))
-            placed.append((row, size, bold, m.width(row), y, 0 if i == 0 else 1))
-            bottom = y + size
-    block_h = bottom  # the accent bar is as tall as the text
-    # the card's area (sliding in, outline and glow included) must stay clear of everything else
     pad = (txt.outline + (glow.size + glow.blur if glow.enabled else 0)) * k + 8 * k
-    reach = bar_w + gap + min(max_w, max(w for _, _, _, w, _, _ in placed)) + 28 * k
     lowest = H * 0.45  # a card moved down stays in the upper part of the frame
+    slide_room = 28 * k  # the lines slide in from beyond the text by this much
 
-    def clear(right: bool, top: float) -> tuple[float, float]:
-        """The card's time with nothing else where it would be (that corner, from ``top``), 0.2 s apart."""
-        cx0, cx1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
-        cy0, cy1 = top - pad, top + block_h + pad
-        start, end = t0, t1
-        hits = [(b0, b1) for b0, b1, bx0, by0, bx1, by1 in boxes
-                if bx0 < cx1 and cx0 < bx1 and by0 < cy1 and cy0 < by1]
-        if at_end:  # comes in after the last of them has gone
-            moved = True
-            while moved:
-                moved = False
-                for b0, b1 in hits:
-                    if b0 - 200 < end and b1 + 200 > start:
-                        start, moved = b1 + 200, True
-        else:  # leaves before the first of them shows
-            for b0, b1 in hits:
-                if b1 > start and b0 - 200 < end:
-                    end = b0 - 200
-        return start, end
+    def rows(width: float) -> tuple[list, float, float]:
+        """(rows, height, reach) of the card with its lines wrapped to ``width``: each row
+        (text, size, bold, width, y from the card's top, level; level 0 = the title).  A line too
+        wide wraps (at a space, before a bracket …) instead of being squeezed."""
+        placed: list = []
+        y = bottom = 0.0
+        for i, text in enumerate(lines):
+            size = title_size if i == 0 else sub_size
+            bold = txt.bold if i == 0 else False
+            m = Measurer(family, bold, size)
+            for j, row in enumerate(wrap_text(text, m.width, width)):
+                if placed:  # below the previous row: a wrapped row closer, the title's rows further
+                    prev_size, prev_level = placed[-1][1], placed[-1][5]
+                    y += prev_size * (1.1 if j else (1.18 if prev_level == 0 else 1.32))
+                placed.append((row, size, bold, m.width(row), y, 0 if i == 0 else 1))
+                bottom = y + size
+        reach = bar_w + gap + min(width, max(r[3] for r in placed)) + slide_room
+        return placed, bottom, reach  # (the accent bar is as tall as the text)
 
-    def place(right: bool, move: bool) -> Optional[tuple[float, float, float]]:
-        """(top, from, to) in that corner: at the top, or (``move``) moved down just below what is in
-        the way there (e.g. a translation along the top edge), with at least 1 s to show."""
-        cx0, cx1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
-        tops = [margin] + sorted({by1 + pad + 6 * k for b0, b1, bx0, by0, bx1, by1 in boxes
-                                  if bx0 < cx1 and cx0 < bx1 and b1 > t0 and b0 < t1 and by1 + pad + 6 * k > margin})
-        for top in (tops if move else tops[:1]):
-            if top + block_h > lowest:
-                break
-            a, b = clear(right, top)
-            if b - a >= 1000:
-                return top, a, b
-        return None
+    def region(right: bool, top: float, block_h: float, reach: float) -> tuple[float, float, float, float]:
+        """Where the card is drawn (sliding in, outline and glow included)."""
+        x0, x1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
+        return x0, top - pad, x1, top + block_h + pad
 
-    where = "结尾" if at_end else "开头"
+    def in_the_way(area, a: float, b: float) -> list:
+        x0, y0, x1, y1 = area
+        return [bx for bx in boxes if bx[2] < x1 and x0 < bx[4] and bx[3] < y1 and y0 < bx[5]
+                and bx[0] - 200 < b and a < bx[1] + 200]
+
     right = info.position == "top-right"
-    # its corner at the top; else the other corner; else moved down below what is in the way
-    # (its corner first); else no card
-    for side, move in ((right, False), (not right, False), (right, True), (not right, True)):
-        got = place(side, move)
-        if got is not None:
+    where = "结尾" if at_end else "开头"
+
+    # 1) in its corner at the top for its whole time, as narrow as needed to end before whatever
+    #    else is drawn there (a translation along the top edge): the lines wrap
+    min_w = max(title_size * 4, 240 * k)
+    width = max_w
+    for _ in range(8):
+        placed, block_h, reach = rows(width)
+        hits = in_the_way(region(right, margin, block_h, reach), t0, t1)
+        if not hits:
+            top, n0, n1 = margin, t0, t1
             break
-    if got is None:
-        if warnings is not None:
-            warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息没有显示"
-                            f"（可调整它的{'显示时长' if at_end else '开始时间'}）")
-        return []
-    if side != right and warnings is not None:
-        warnings.append(f"{where}的歌词 / 翻译会显示在歌曲信息的位置，{where}的歌曲信息改到了另一侧")
-    right = side
-    top, n0, n1 = got
+        # the room between the corner and the nearest thing in the way
+        room = (W - margin - max(bx[4] for bx in hits) if right else min(bx[2] for bx in hits) - margin) \
+            - 2 * pad - bar_w - gap - slide_room
+        if room < min_w or room >= width - 1:
+            placed = None
+            break
+        width = room
+    else:
+        placed = None
+
+    if placed is None:
+        # 2) nothing narrow enough fits beside it (e.g. a translation across the whole top): the
+        #    full-width card, gone before it shows / come in after it has gone; else moved down
+        #    below it; else the other corner (same order); else no card
+        placed, block_h, reach = rows(max_w)
+
+        def clear(side: bool, top: float) -> tuple[float, float]:
+            hits = in_the_way(region(side, top, block_h, reach), t0, t1)
+            start, end = t0, t1
+            if at_end:  # comes in after the last of them has gone
+                moved = True
+                while moved:
+                    moved = False
+                    for bx in hits:
+                        if bx[0] - 200 < end and bx[1] + 200 > start:
+                            start, moved = bx[1] + 200, True
+            else:  # leaves before the first of them shows
+                for bx in hits:
+                    if bx[1] > start and bx[0] - 200 < end:
+                        end = bx[0] - 200
+            return start, end
+
+        def place(side: bool, move: bool) -> Optional[tuple[float, float, float]]:
+            x0, _, x1, _ = region(side, margin, block_h, reach)
+            tops = [margin] + sorted({bx[5] + pad + 6 * k for bx in boxes
+                                      if bx[2] < x1 and x0 < bx[4] and bx[1] > t0 and bx[0] < t1
+                                      and bx[5] + pad + 6 * k > margin})
+            for top in (tops if move else tops[:1]):
+                if top + block_h > lowest:
+                    break
+                a, b = clear(side, top)
+                if b - a >= 1000:
+                    return top, a, b
+            return None
+
+        got = None
+        for side, move in ((right, False), (right, True), (not right, False), (not right, True)):
+            got = place(side, move)
+            if got is not None:
+                break
+        if got is None:
+            if warnings is not None:
+                warnings.append(f"{where}的歌词 / 翻译占满了画面顶部，{where}的歌曲信息没有显示"
+                                f"（可调整它的{'显示时长' if at_end else '开始时间'}）")
+            return []
+        if side != right and warnings is not None:
+            warnings.append(f"{where}的歌词 / 翻译占满了画面顶部，{where}的歌曲信息改到了另一侧")
+        right = side
+        top, n0, n1 = got
     t0, t1 = n0, n1
     slide = 28 * k * (1 if right else -1)
     x_text = (W - margin - bar_w - gap) if right else (margin + bar_w + gap)
