@@ -403,7 +403,7 @@ def cmd_serve(a) -> None:
     if a.host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
         extra.add(a.host)  # listening on a named address: requests to it are accepted
     app = create_app(Path(a.root) if a.root else None, allowed_hosts=extra)
-    print(f"MiriKara WebUI: http://{a.host}:{a.port}", file=sys.stderr)
+    print(f"KiraKara WebUI: http://{a.host}:{a.port}", file=sys.stderr)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 
@@ -411,7 +411,7 @@ def cmd_serve(a) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="mirikara", description="MiriKara：用歌曲和已知歌词做逐字卡拉OK字幕与视频")
+    ap = argparse.ArgumentParser(prog="kirakara", description="KiraKara：用歌曲和已知歌词做逐字卡拉OK字幕与视频")
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -472,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--role", choices=["original", "vocals", "instrumental"], default="original")
 
-    p = add("separate", cmd_separate, "人声分离（需要 mirikara[separation]）")
+    p = add("separate", cmd_separate, "人声分离（需要 kirakara[separation]）")
     p.add_argument("--preset", default="melband-roformer", choices=_preset_names(),
                    help="分离预设（kara-align backends 列出说明）")
     p.add_argument("--device", choices=["auto", "cpu"], default="auto",

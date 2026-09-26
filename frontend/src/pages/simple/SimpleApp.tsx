@@ -31,7 +31,7 @@ export function SimpleApp() {
           <AudioWaveform className="size-4.5" />
         </div>
         <div className="mr-2 hidden sm:block">
-          <div className="text-[15px] leading-5 font-semibold tracking-tight">MiriKara</div>
+          <div className="text-[15px] leading-5 font-semibold tracking-tight">KiraKara</div>
           <div className="text-[11px] text-muted">一键卡拉OK</div>
         </div>
         <nav className="flex items-center gap-1" aria-label="极简模式">

@@ -176,7 +176,7 @@ function RunCard() {
               {backend.default_model && <Badge>模型 {backend.default_model}</Badge>}
               <Badge tone="info">语言 {backend.languages.join(' / ')}</Badge>
               <Badge tone={/nc/i.test(backend.license) ? 'warn' : 'neutral'}>许可 {backend.license}</Badge>
-              {!backend.available && <Badge tone="danger">缺少依赖：{(backend.missing ?? []).join(', ') || 'mirikara[ml]'}</Badge>}
+              {!backend.available && <Badge tone="danger">缺少依赖：{(backend.missing ?? []).join(', ') || 'kirakara[ml]'}</Badge>}
             </div>
           </div>
         )}

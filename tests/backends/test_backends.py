@@ -141,7 +141,7 @@ def test_registry_error_without_torch(monkeypatch):
     import importlib.util as iu
     real = iu.find_spec
     monkeypatch.setattr(iu, "find_spec", lambda name, *a, **k: None if name in ("torch", "transformers") else real(name, *a, **k))
-    with pytest.raises(RuntimeError, match=r"mirikara\[ml\]"):
+    with pytest.raises(RuntimeError, match=r"kirakara\[ml\]"):
         B.get_backend(AlignConfig(backend="mms-ja"))
     mms = next(b for b in B.list_backends() if b["name"] == "mms-ja")
     assert mms["available"] is False and "torch" in mms["missing"]
@@ -157,7 +157,7 @@ def test_import_ml_error_message(monkeypatch):
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(RuntimeError, match=r"pip install 'mirikara\[ml\]'"):
+    with pytest.raises(RuntimeError, match=r"pip install 'kirakara\[ml\]'"):
         W._import_ml()
 
 

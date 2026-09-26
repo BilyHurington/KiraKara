@@ -68,7 +68,7 @@ class QueueElsewhere(TaskConflict):
     """Another server process on the same workspace runs the task queue."""
 
     def __init__(self) -> None:
-        super().__init__("另一个 MiriKara 服务进程正在使用这个工作区的任务队列；请在那个进程打开的页面中操作，"
+        super().__init__("另一个 KiraKara 服务进程正在使用这个工作区的任务队列；请在那个进程打开的页面中操作，"
                          "或关闭它后重启本服务")
 
 STAGES: list[tuple[str, str, float]] = [  # key, label, share of the progress bar
@@ -202,7 +202,7 @@ class TaskQueue:
 
     One server process per workspace runs the queue: it holds an exclusive lock on
     ``<workspace>/.tasks/lock``.  A second process on the same workspace (e.g. a second
-    ``mirikara serve``) starts *passive*: it shows the tasks as saved by the first one and
+    ``kirakara serve``) starts *passive*: it shows the tasks as saved by the first one and
     refuses every change (:class:`QueueElsewhere`), so tasks never run twice and tasks.json is
     never written by two processes.
     """
