@@ -1,9 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AppSettings, KaraokeStyle, PipelineTask } from '@/lib/types';
 import { useApp } from '@/store/app';
-import { useSimple } from '@/store/simple';
+import { loadTasks, useSimple } from '@/store/simple';
 import { useLibrary } from '@/store/styles';
 
 const useLibraryReset = () => useLibrary.setState({ saved: null });
@@ -132,6 +132,7 @@ describe('simple mode home', () => {
       [`GET /api/projects/${pv.project.id}/jobs`]: () => [],
       [`GET /api/projects/${pv.project.id}`]: () => pv,
     });
+    await act(async () => { await loadTasks(); });  // the app polls the queue (App.tsx), not this page
     renderUI(<SimpleHome />);
     const rows = await screen.findAllByRole('listitem', { name: undefined });
     expect(await screen.findByText('人声分离 · 42%')).toBeInTheDocument();

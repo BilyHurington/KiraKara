@@ -56,7 +56,8 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
 
   return (
     <div className="space-y-4">
-      <Segmented<TaskStyleOptions['source']> value={o.source} onChange={(v) => set({ source: v })} options={[
+      <Segmented<TaskStyleOptions['source']> value={o.source}
+        onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null })} options={[
         { value: 'template', label: '模版配色' },
         { value: 'saved', label: '保存的预设' },
         { value: 'default', label: '设置里的样式' },

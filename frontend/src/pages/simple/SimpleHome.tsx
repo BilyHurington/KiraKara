@@ -11,7 +11,7 @@ import { cn, fmtRelative } from '@/lib/format';
 import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import {
-  addTask, hasActiveTasks, loadTasks, openInDetail, saveSettings, setSimplePage, taskAction, useSimple,
+  addTask, forgetOwnTask, hasActiveTasks, markOwnTask, openInDetail, saveSettings, setSimplePage, taskAction, useSimple,
 } from '@/store/simple';
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Progress, Segmented, Textarea } from '@/components/ui';
 import { MEDIA_ACCEPT } from '@/pages/input/AudioCard';
@@ -46,8 +46,7 @@ export function SimpleHome() {
   const [styleOpts, setStyleOpts] = useState<TaskStyleOptions | null>(settings?.simple.task_style ?? null);
   const styleDirty = useRef(false);
   const [calibrating, setCalibrating] = useState<string | null>(null);
-  // tasks added from this page: their offset dialog opens by itself when they are ready
-  const mine = useRef(new Set<string>());
+  const own = useSimple((s) => s.ownTasks);
   const detected = useMemo(() => detectLyrics(lyrics), [lyrics]);
   const active = hasActiveTasks(tasks);
 
@@ -66,27 +65,14 @@ export function SimpleHome() {
   }, [styleOpts]);
   const changeStyle = (next: TaskStyleOptions) => { styleDirty.current = true; setStyleOpts(next); };
 
-  // poll the queue: fast while something runs
-  useEffect(() => {
-    let stop = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      let list: PipelineTask[] = [];
-      try { list = await loadTasks(); } catch { /* server restarting */ }
-      if (!stop) timer = setTimeout(tick, hasActiveTasks(list) ? 1000 : 5000);
-    };
-    void tick();
-    return () => { stop = true; clearTimeout(timer); };
-  }, []);
-
   useEffect(() => {
     if (calibrating) return;
-    const ready = tasks.find((t) => t.status === 'waiting' && mine.current.has(t.id));
+    const ready = tasks.find((t) => t.status === 'waiting' && own.includes(t.id));
     if (ready) {
-      mine.current.delete(ready.id);
+      forgetOwnTask(ready.id);
       setCalibrating(ready.id);
     }
-  }, [tasks, calibrating]);
+  }, [tasks, calibrating, own]);
   const calTask = tasks.find((t) => t.id === calibrating && t.status === 'waiting' && t.calibration);
 
   const chooseMode = (m: Mode) => {
@@ -99,7 +85,7 @@ export function SimpleHome() {
     setBusy(true);
     try {
       const t = await addTask(file, lyrics, mode, name, styleOpts ?? undefined);
-      mine.current.add(t.id);
+      markOwnTask(t.id);
       toast('ok', '已开始', mode === 'lrc' ? '读取视频和歌词后请确认开头位置，之后全部自动完成' : active ? '前面的任务完成后自动继续' : '马上开始');
       setFile(null);
       setLyrics('');

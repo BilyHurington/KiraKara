@@ -2,7 +2,7 @@
 // moment, ASS download and one-click burn-in (see docs/karaoke.md).
 
 import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Loader2, Sparkles, Subtitles } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, parseTime } from '@/lib/format';
 import type { FontFamily, Job, KaraokeStyle, ProjectView, SongInfo } from '@/lib/types';
@@ -13,7 +13,7 @@ import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
 import { StylePanel } from '@/components/karaoke/StylePanel';
-import { saveSettings } from '@/store/simple';
+import { setSimpleDefault } from '@/store/simple';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number }
 
@@ -41,14 +41,22 @@ export function KaraokePage() {
     setSongInfo(await api.put<SongInfo>(ppath('/karaoke/info'), { text }));
   }, '保存歌曲信息失败');
 
-  // autosave (debounced); exports and burn-in always use the saved style
+  // autosave (debounced); exports and burn-in always use the saved style, so an edit still waiting
+  // is saved at once when the page is left (switching step or mode) and before burning
+  const pending = useRef<{ pid: string; style: KaraokeStyle } | null>(null);
+  const flush = useCallback(async () => {
+    const p = pending.current;
+    if (!p) return;
+    pending.current = null;
+    await api.put(`/api/projects/${p.pid}/karaoke`, p.style);
+  }, []);
   useEffect(() => {
     if (!style || !dirty.current) return;
-    const t = setTimeout(() => {
-      void run(() => api.put(ppath('/karaoke'), style), '保存字幕样式失败');
-    }, 600);
+    pending.current = { pid: project.id, style };
+    const t = setTimeout(() => { void run(flush, '保存字幕样式失败'); }, 600);
     return () => clearTimeout(t);
-  }, [style]);
+  }, [style]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { void run(flush, '保存字幕样式失败'); }, [flush]);
 
   const patch = (fn: (s: KaraokeStyle) => void) => {
     setStyle((prev) => {
@@ -102,14 +110,14 @@ export function KaraokePage() {
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <PreviewCard style={style} lines={lines} refreshKey={songInfo?.text ?? ''} />
-          <BurnCard style={style} patch={patch} />
+          <BurnCard style={style} patch={patch} beforeBurn={flush} />
         </div>
         <div className="space-y-6 xl:sticky xl:top-4">
           <Card>
             <CardHeader title="字幕样式" actions={
-              <Tip content="极简模式新建的任务使用这套样式（含布局、注音、时间与特效）">
+              <Tip content="极简模式之后的任务完整使用这套样式（配色、布局、注音、翻译、时间与特效）：第 4 步会切到“设置里的样式”，注音、翻译、歌曲信息跟随这套样式">
                 <Button size="xs" variant="ghost" icon={<Sparkles className="size-3.5" />}
-                  onClick={() => run(async () => { await saveSettings({ simple: { karaoke: style } }); toast('ok', '已设为极简模式默认样式'); }, '保存失败')}>
+                  onClick={() => run(async () => { await setSimpleDefault(style); toast('ok', '已设为极简模式默认样式', '第 4 步已改为使用这套样式'); }, '保存失败')}>
                   设为极简默认
                 </Button>
               </Tip>
@@ -257,7 +265,9 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
 
 // ------------------------------------------------------------------ export / burn
 
-function BurnCard({ style, patch }: { style: KaraokeStyle; patch: (fn: (s: KaraokeStyle) => void) => void }) {
+function BurnCard({ style, patch, beforeBurn }: {
+  style: KaraokeStyle; patch: (fn: (s: KaraokeStyle) => void) => void; beforeBurn: () => Promise<void>;
+}) {
   const project = useProject()!;
   const view = useApp((s) => s.pv?.view);
   const job = useJob('burn');
@@ -272,6 +282,7 @@ function BurnCard({ style, patch }: { style: KaraokeStyle; patch: (fn: (s: Karao
 
   const start = () => run(async () => {
     setOut(null);
+    await beforeBurn();  // the burn uses the saved style: save the latest edit first
     const j = await api.post<Job>(ppath('/karaoke/burn'), { background, audio, quality, vocal_keep_pct: vocalPct });
     trackJob(j, { label: '字幕烧录', onDone: (d) => { if (d.status === 'succeeded' && d.output) setOut(d.output); } });
   }, '无法开始烧录');

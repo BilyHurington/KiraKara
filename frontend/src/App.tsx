@@ -18,7 +18,8 @@ import { ReviewPage } from '@/pages/Review';
 import { KaraokePage } from '@/pages/Karaoke';
 import { ExportPage } from '@/pages/Export';
 import { SimpleApp } from '@/pages/simple/SimpleApp';
-import { useSimple } from '@/store/simple';
+import { setUi, startTaskPolling, taskOnProject, useSimple } from '@/store/simple';
+import { Button, Callout } from '@/components/ui';
 
 const PAGES = {
   mode: ModePage,
@@ -35,6 +36,9 @@ export default function App() {
   const pid = useApp((s) => s.pid);
   const step = useApp((s) => s.step);
   const ui = useSimple((s) => s.ui);
+
+  // the simple mode's queue is watched in both modes (notifications, open project refresh)
+  useEffect(() => { startTaskPolling(); }, []);
 
   useEffect(() => {
     void run(async () => {
@@ -87,6 +91,7 @@ export default function App() {
           <main className="min-h-0 flex-1 overflow-y-auto">
             <div key={`${pid}-${step}`} className="mx-auto max-w-6xl animate-slide-up px-6 py-8 xl:px-10">
               <ErrorBoundary resetKey={`${pid}-${step}`}>
+                <TaskBusyBanner />
                 <Page />
               </ErrorBoundary>
             </div>
@@ -98,5 +103,19 @@ export default function App() {
       </div>
       <Toaster />
     </TooltipProvider>
+  );
+}
+
+/** A simple-mode task is still working on the open project: say so, and what waits for it. */
+export function TaskBusyBanner() {
+  const pid = useApp((s) => s.pid);
+  const task = taskOnProject(useSimple((s) => s.tasks), pid);
+  if (!task) return null;
+  const doing = task.status === 'waiting' ? '等待确认开头位置' : task.status === 'running' ? task.message || '处理中' : '排队中';
+  return (
+    <Callout tone="warn" className="mb-6" title={`极简模式任务「${task.name || task.media_filename}」正在处理这个项目（${doing}）`}
+      actions={<Button size="sm" variant="secondary" onClick={() => setUi('simple')}>查看任务队列</Button>}>
+      完成前这里不能对齐、人声分离、AI 注音或烧录视频；任务每完成一步，这里会自动更新。
+    </Callout>
   );
 }

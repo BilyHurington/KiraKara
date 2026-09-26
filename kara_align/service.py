@@ -28,6 +28,11 @@ class ServiceError(ValueError):
     """User-facing error (bad input, missing prerequisite)."""
 
 
+class LrcTimesError(ServiceError):
+    """The LRC line times cannot be used for alignment (missing, or anchors outside the audio);
+    aligning in plain mode is the way out."""
+
+
 # ---------------------------------------------------------------------------
 # workspace / handles
 # ---------------------------------------------------------------------------
@@ -1138,12 +1143,12 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
         from .align.calibration import effective_line_starts, validate_anchors
 
         if not effective_line_starts(snap.lyrics, snap.calibration):
-            raise ServiceError("LRC 增强模式需要有效的行时间；请补充时间或切换到普通模式")
+            raise LrcTimesError("LRC 增强模式需要有效的行时间；请补充时间或切换到普通模式")
         orig = snap.asset("original")
         errors = [i for i in validate_anchors(snap.lyrics, snap.calibration, orig.duration_ms if orig else None)
                   if i.severity == "error"]
         if errors:
-            raise ServiceError("锚点需要修正: " + "; ".join(i.message for i in errors[:5]))
+            raise LrcTimesError("锚点需要修正: " + "; ".join(i.message for i in errors[:5]))
     missing_units = [ln.id for ln in snap.lyrics.sung_lines() if not ln.units()]
     if missing_units:
         from .reading.prepare import prepare_doc

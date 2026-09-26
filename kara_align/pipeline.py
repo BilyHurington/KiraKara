@@ -232,6 +232,13 @@ class TaskQueue:
         self._prep_pool.submit(self._prepare, t)
         return t
 
+    def active_for_project(self, pid: str) -> Optional[PipelineTask]:
+        """The unfinished task working on a project, if any (the detailed mode must not run heavy
+        jobs on it meanwhile)."""
+        with self._lock:
+            return next((t for t in self.tasks if t.project_id == pid
+                         and t.status in ("preparing", "waiting", "queued", "running")), None)
+
     def _prepare(self, task: PipelineTask) -> None:
         """Quick stages right away; then wait for the user (LRC) or join the queue."""
         token = CancelToken()
@@ -606,26 +613,31 @@ def calibration_request(h: "S.ProjectHandle") -> dict:
     }
 
 
-def stage_align(q, task, cfg, cancel, progress):
-    h = _handle(q, task)
+def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: CancelToken, progress):
     role = _audio_role(h)
     S.update_settings(h, config={"audio_role": role})
 
     def align():
         try:
             return S.run_align(h, audio_role=role, cancel=cancel, progress=progress)
-        except S.ServiceError as e:
+        except S.LrcTimesError as e:
             if h.project.mode != "lrc":
                 raise
-            # LRC times that cannot be used (e.g. outside the audio): align without them
+            # only unusable LRC times fall back to plain mode; any other error fails the task
             _warn(task, f"LRC 时间无法使用（{e}）；已改用普通模式")
             S.update_settings(h, mode="plain")
+            task.mode = "plain"
             return S.run_align(h, audio_role=role, cancel=cancel, progress=progress)
 
     r = run_heavy(align, lambda m: progress(0.0, m), cancel)
     warns = [i for i in r.issues if i.severity in ("warning", "error") and i.code in ("unit_in_rest", "line_gap")]
     if warns:
         _warn(task, f"有 {len(warns)} 处可能需要人工检查（点开任务在“人工检查”中查看）")
+    return r
+
+
+def stage_align(q, task, cfg, cancel, progress):
+    r = _align(q, task, _handle(q, task), cancel, progress)
     return f"{len(r.units)} 个发音单元"
 
 
@@ -691,6 +703,13 @@ def stage_export(q, task, cfg, cancel, progress):
                           vocal_keep_pct=cfg.simple.vocal_keep_pct, quality=cfg.simple.quality)
     if not video.auto_export:
         return "skipped"
+    r = h.project.result()
+    if r is None or S.staleness(h.project, r) is not None:  # computed now, not the saved flag
+        # e.g. a retry re-ran the AI readings, or the lyrics were edited in the detailed mode:
+        # the video must not be burned from an alignment of different lyrics
+        progress(0.0, "对齐结果已过期，重新对齐")
+        _warn(task, "歌词或读音在对齐后有变化，已重新对齐后再生成视频")
+        _align(q, task, h, cancel, lambda f, m="": progress(0.0, m))
     audio = video.video_audio
     if audio == "mix" and (h.project.asset("vocals") is None or h.project.asset("instrumental") is None):
         _warn(task, "没有人声分轨，视频使用原声")

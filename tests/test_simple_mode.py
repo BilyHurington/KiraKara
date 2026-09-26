@@ -437,3 +437,86 @@ def test_theme_api(tmp_path):
     r = client.post("/api/karaoke/theme", json={"template": "glow", "color": "#FF8A1E", "secondary": "#FFC53D"}).json()
     assert r["palette"]["glow_unsung"] == "#FFC53D" and r["style"]["glow"]["enabled"]
     assert client.post("/api/karaoke/theme", json={"template": "glow", "color": "zz"}).status_code == 400
+
+
+def test_only_unusable_lrc_times_fall_back_to_plain(monkeypatch):
+    from types import SimpleNamespace
+
+    calls, updates = [], []
+    proj = SimpleNamespace(mode="lrc", asset=lambda role: None)
+    h = SimpleNamespace(project=proj)
+
+    def update(_h, **kw):
+        updates.append(kw)
+        if kw.get("mode"):
+            proj.mode = kw["mode"]
+
+    monkeypatch.setattr(S, "update_settings", update)
+    task = P.PipelineTask(mode="lrc")
+    # any other error: the task fails, the project stays in LRC mode, no misleading note
+    monkeypatch.setattr(S, "run_align", lambda *a, **k: (_ for _ in ()).throw(S.ServiceError("请先上传原曲")))
+    with pytest.raises(S.ServiceError, match="请先上传原曲"):
+        P._align(None, task, h, CancelToken(), lambda *a: None)
+    assert proj.mode == task.mode == "lrc" and not task.warnings
+    # unusable LRC times: aligned again in plain mode, and the task says so
+    def run_align(*a, **k):
+        calls.append(proj.mode)
+        if proj.mode == "lrc":
+            raise S.LrcTimesError("锚点需要修正: 超出音频")
+        return SimpleNamespace(units=[], issues=[])
+
+    monkeypatch.setattr(S, "run_align", run_align)
+    P._align(None, task, h, CancelToken(), lambda *a: None)
+    assert calls == ["lrc", "plain"] and proj.mode == task.mode == "plain"
+    assert any("LRC 时间无法使用" in w for w in task.warnings)
+
+
+def test_export_realigns_a_stale_result_and_detailed_jobs_wait_for_the_task(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n",
+                       mode="plain", name="A").id)
+    assert t.status == "succeeded", t.error
+    h = q.ws.get(t.project_id)
+    first = h.project.result().id
+    # the readings change after the alignment (e.g. a retry re-ran the AI readings)
+    with h.lock:
+        h.project.lyrics.sung_lines()[0].segments[0].units[0].reading = "ぎ"
+        h.save()
+    assert S.staleness(h.project, h.project.result()) is not None
+    burned = []
+    monkeypatch.setattr(S, "karaoke_burn", lambda h, **k: burned.append(h.project.result().id) or {"filename": "x.mp4", "warnings": []})
+    t.video = P.TaskVideo(auto_export=True)
+    P.stage_export(q, t, AS.load(), CancelToken(), lambda *a: None)
+    assert burned and burned[0] != first  # burned from a fresh alignment
+    assert S.staleness(h.project, h.project.result()) is None
+    assert any("重新对齐" in w for w in t.warnings)
+
+    # while a task works on a project, the detailed mode's heavy jobs are refused with a clear reason
+    client = TestClient(create_app(tmp_path / "projects"))
+    app_q = client.app.state.tasks
+    busy = P.PipelineTask(name="B", project_id=t.project_id, status="running")
+    app_q.tasks.append(busy)
+    r = client.post(f"/api/projects/{t.project_id}/align", json={})
+    assert r.status_code == 409 and "极简模式任务「B」" in r.json()["detail"]
+    assert client.post(f"/api/projects/{t.project_id}/karaoke/burn", json={}).status_code == 409
+    busy.status = "succeeded"
+    assert client.post(f"/api/projects/{t.project_id}/align", json={}).status_code == 200
+    q.shutdown()
+    app_q.shutdown()
+
+
+def test_settings_from_before_still_load(tmp_path):
+    """A settings file with options that no longer exist (e.g. the removed task font size) loads, keeping the rest."""
+    AS.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    AS.settings_path().write_text(json.dumps({"version": 1, "simple": {"quality": "high", "task_style": {
+        "source": "saved", "saved_id": "warm", "font_size": 72, "ruby": "romaji"}}}), encoding="utf-8")
+    s = AS.load()
+    assert s.simple.quality == "high" and s.simple.task_style.source == "saved" and s.simple.task_style.ruby == "romaji"
+    assert "font_size" not in s.simple.task_style.model_dump()
+    assert not AS.settings_path().with_suffix(".broken.json").exists()

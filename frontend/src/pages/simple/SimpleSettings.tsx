@@ -127,7 +127,7 @@ function DefaultStyleCard({ style }: { style: KaraokeStyle }) {
   return (
     <Card>
       <CardHeader icon={<Subtitles className="size-4" />} title="卡拉OK字幕样式"
-        description="新任务使用的完整字幕样式：配色、歌词、注音、翻译、布局、时间与特效。可以保存成预设，随时切换。" />
+        description="第 4 步选“设置里的样式”时完整使用这套样式；选“模版配色”时使用它的布局、字号、时间等，配色和荧光由模版决定。可以保存成预设，随时切换。" />
       <CardBody className="space-y-3 pt-3">
         <StylePanel style={draft} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
           defaultOpen={['colors']} storageKey="simple" />

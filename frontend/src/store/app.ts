@@ -3,7 +3,7 @@
 
 import { useMemo } from 'react';
 import { create } from 'zustand';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type { AlignmentResult, Info, Job, ManualEdit, ProjectListItem, ProjectView } from '@/lib/types';
 
 export type Step = 'mode' | 'input' | 'enhance' | 'calibrate' | 'align' | 'review' | 'karaoke' | 'export';
@@ -234,9 +234,13 @@ export function trackJob(job: Job, opts: { label: string; onDone?: (j: Job) => v
     let j: Job;
     try {
       j = await api.get<Job>(`/api/jobs/${job.id}`);
-    } catch {
-      setTimeout(tick, 1500);
-      return;
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {  // server unreachable for a moment: keep trying
+        setTimeout(tick, 1500);
+        return;
+      }
+      // jobs live in the server's memory: after a restart this one is gone
+      j = { ...job, status: 'failed', error: '本地服务已重启，这个操作被中断了，请重新开始', message: '' };
     }
     j.label = opts.label;
     set((s) => ({ jobs: { ...s.jobs, [j.id]: j } }));

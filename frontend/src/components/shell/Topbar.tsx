@@ -2,7 +2,7 @@ import * as Popover from '@radix-ui/react-popover';
 import { Activity, Download, Moon, Redo2, Sparkles, Sun, Undo2, X } from 'lucide-react';
 import { cn } from '@/lib/format';
 import { cancelJob, ppath, run, setTheme, STEPS, useApp } from '@/store/app';
-import { setUi } from '@/store/simple';
+import { hasActiveTasks, setUi, useSimple } from '@/store/simple';
 import { redo, undo } from '@/store/edits';
 import { Badge, Button, IconButton, Kbd, Progress, Tip } from '@/components/ui';
 
@@ -51,6 +51,7 @@ export function Topbar() {
         <button onClick={() => setUi('simple')} title="切换到极简模式：放入视频和歌词，一键生成卡拉OK视频；任务队列也在那里"
           className="focus-ring flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-muted transition hover:bg-surface-2 hover:text-fg">
           <Sparkles className="size-4 text-accent" /><span className="hidden sm:inline">极简模式</span>
+          <QueueCount />
         </button>
         <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="切换主题" title={theme === 'dark' ? '浅色模式' : '深色模式'}
           className="focus-ring grid size-8 place-items-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-fg">
@@ -110,5 +111,20 @@ function JobsIndicator() {
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+/** Simple-mode tasks seen from the detailed mode: how many run, how many wait for the user. */
+function QueueCount() {
+  const tasks = useSimple((s) => s.tasks);
+  const waiting = tasks.filter((t) => t.status === 'waiting').length;
+  const busy = hasActiveTasks(tasks) ? tasks.filter((t) => ['preparing', 'queued', 'running'].includes(t.status)).length : 0;
+  if (!waiting && !busy) return null;
+  return (
+    <span className={cn('rounded-full px-1.5 text-[11px] font-semibold tabular-nums',
+      waiting ? 'bg-warn-soft text-warn' : 'bg-accent-soft text-accent')}
+      title={[busy && `${busy} 个任务进行中`, waiting && `${waiting} 个需要确认开头位置`].filter(Boolean).join('，')}>
+      {waiting ? `${waiting} 待确认` : busy}
+    </span>
   );
 }

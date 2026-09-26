@@ -175,6 +175,13 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         v.update(extra)
         return v
 
+    def not_busy(pid: str) -> None:
+        """Heavy jobs in the detailed mode wait until the simple-mode task on this project is done."""
+        t = tq.active_for_project(pid)
+        if t is not None:
+            raise HTTPException(409, f"极简模式任务「{t.name or t.media_filename}」正在处理这个项目；"
+                                     "请等它完成，或在极简模式的任务队列里取消后再操作")
+
     def guard(fn, *args, **kw):
         """Map module-level validation errors to 400 with a readable message."""
         try:
@@ -472,6 +479,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from .. import settings as app_settings
 
         h = handle(pid)
+        not_busy(pid)
         cfg = app_settings.load().ai
         if cfg.provider == "none":
             raise HTTPException(400, "还没有设置 AI：请在“设置”中选择 Claude Code、Codex 或 API")
@@ -521,6 +529,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/separate")
     def separate(pid: str, body: SeparateBody):
         h = handle(pid)
+        not_busy(pid)
         if h.project.asset("original") is None:
             raise HTTPException(400, "请先上传原曲")
 
@@ -648,6 +657,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/karaoke/burn")
     def karaoke_burn(pid: str, body: dict):
         h = handle(pid)
+        not_busy(pid)
         if h.project.result() is None:
             raise HTTPException(400, "还没有对齐结果：请先完成对齐")
         audio = body.get("audio", "original")
@@ -744,6 +754,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/projects/{pid}/align")
     def align(pid: str, body: AlignBody):
         h = handle(pid)
+        not_busy(pid)
 
         def run(job: Job):
             r = S.run_align(h, line_ids=body.line_ids, audio_role=body.audio_role, config=body.config,
