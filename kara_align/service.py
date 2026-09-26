@@ -1106,11 +1106,15 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
     from .karaoke.ass import build_ass, resolution
     from .karaoke.render import preview_png
 
+    from .karaoke.render import frame_size
+
     r, k = _karaoke_inputs(h, style)
-    text, _ = build_ass(h.project, r, k)  # audio timeline; the frame is taken at t (+offset)
     video = _video_file(h) if background != "black" else None
+    # the size the video is shown at (non-square pixels applied), like the burn: same layout, no squash
+    size = frame_size(video, resolution(h.project)) if video else resolution(h.project)
+    text, _ = build_ass(h.project, r, k, size=size)  # audio timeline; the frame is taken at t (+offset)
     off = h.project.video.audio_offset_s if video else 0.0
-    return preview_png(text, int(t_ms), resolution(h.project), video=video, audio_offset_s=off)
+    return preview_png(text, int(t_ms), size, video=video, audio_offset_s=off)
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",

@@ -41,6 +41,14 @@ class FontFace:
     bold: bool
 
 
+def _fc_run(args: list[str]) -> subprocess.CompletedProcess:
+    """A fontconfig query; a hung or failing one counts as "nothing found" (never blocks a render)."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=20)
+    except (subprocess.TimeoutExpired, OSError):
+        return subprocess.CompletedProcess(args, 1, "", "")
+
+
 def _fc(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
@@ -50,8 +58,7 @@ def list_faces() -> tuple[FontFace, ...]:
     """Faces that can render Japanese (kana + kanji)."""
     faces: list[FontFace] = []
     if _fc("fc-list"):
-        out = subprocess.run(["fc-list", ":lang=ja", "family", "file", "index", "weight"],
-                             capture_output=True, text=True).stdout
+        out = _fc_run(["fc-list", ":lang=ja", "family", "file", "index", "weight"]).stdout
         for line in out.splitlines():
             # "<file>: <family,family>:index=0:weight=80"
             try:
@@ -143,7 +150,7 @@ def resolve(family: str, bold: bool) -> tuple[str, int]:
     family = family or default_family()
     if _fc("fc-match"):
         pattern = f"{fc_escape(family)}:weight={'bold' if bold else 'regular'}"
-        out = subprocess.run(["fc-match", "-f", "%{file}|%{index}", pattern], capture_output=True, text=True)
+        out = _fc_run(["fc-match", "-f", "%{file}|%{index}", pattern])
         if out.returncode == 0 and "|" in out.stdout:
             file, idx = out.stdout.rsplit("|", 1)
             return file, _first_int(idx or "0")
@@ -207,7 +214,7 @@ def _fc_fallback(family: str, bold: bool, cp: int) -> Optional[tuple[str, int]]:
     if not _fc("fc-match"):
         return None
     pattern = f"{fc_escape(family)}:charset={cp:x}:weight={'bold' if bold else 'regular'}"
-    out = subprocess.run(["fc-match", "-f", "%{file}|%{index}", pattern], capture_output=True, text=True)
+    out = _fc_run(["fc-match", "-f", "%{file}|%{index}", pattern])
     if out.returncode != 0 or "|" not in out.stdout:
         return None
     file, idx = out.stdout.rsplit("|", 1)
