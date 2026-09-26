@@ -4,7 +4,23 @@
 
 放入视频（或音频 + 背景图），粘贴网易云 / QQ 音乐的歌曲链接或 LRC 歌词，KiraKara 会自动给汉字注音、分离人声、把每一个假名（拍）对齐到演唱的时间上，然后把带注音、翻译和歌曲信息的卡拉OK字幕直接烧录进视频。全部在本机运行。
 
-![成品视频的一帧：逐字扫光、汉字注音、顶部翻译](docs/images/output-frame.jpg)
+<p align="center">
+  <img src="docs/images/simple-form.png" alt="极简模式：放入视频，粘贴歌曲链接，选好字幕配色，点“开始制作”" width="640">
+  <br>
+  <sub>极简模式：放入视频，粘贴歌曲链接，选好字幕配色，点“开始制作”</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/detail-review.png" alt="详细模式（人工检查）：每一行、每一个假名的时间都可以试听、拖动修改和局部重跑" width="860">
+  <br>
+  <sub>详细模式（人工检查）：每一行、每一个假名的时间都可以试听、拖动修改和局部重跑</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/output-frame.jpg" alt="成品视频的一帧：逐字扫光、汉字注音，顶部是中文翻译" width="860">
+  <br>
+  <sub>成品视频的一帧：逐字扫光、汉字注音，顶部是中文翻译</sub>
+</p>
 
 ## 特点
 
@@ -42,7 +58,11 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 4. 几秒后会弹出波形，**标出第一句开始唱的位置**（设置里也可以改成自动检测）；AI 注音选的是“手动（网页聊天）”时，接着把提示词发给 AI 并粘贴回复。
 5. 其余步骤自动完成，任务完成后点 **下载视频**。点开任务可以进入详细模式继续调整。
 
-![极简模式：放入视频、粘贴链接、选好配色](docs/images/simple-form.png)
+<p align="center">
+  <img src="docs/images/simple-tasks.png" alt="任务列表：上面的任务在等你确认第一句的位置，下面的已经完成，可以下载视频" width="760">
+  <br>
+  <sub>任务列表：上面的任务在等你确认第一句的位置，下面的已经完成，可以下载视频</sub>
+</p>
 
 ## 文档
 
