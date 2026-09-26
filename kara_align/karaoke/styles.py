@@ -84,7 +84,10 @@ def _read_raw() -> list:
         return []
     except Exception:  # unreadable: kept aside (never overwritten by the next save), start empty
         try:
-            _path().replace(_path().with_suffix(".broken.json"))
+            aside = _path().with_suffix(".broken.json")
+            if aside.exists():  # an earlier one is kept too
+                aside = _path().with_suffix(f".broken-{utcnow().replace(':', '')[:17]}-{new_id()[:4]}.json")
+            _path().replace(aside)
         except OSError:
             pass
         return []
@@ -130,10 +133,11 @@ def save_style(name: str, style: dict, style_id: Optional[str] = None) -> dict:
     if not name:
         raise StyleError("请给预设起个名字")
     for i, n, _ in _BUILTIN:
-        if style_id == i or (style_id is None and name == n):
+        # nor can a saved style be renamed to a built-in name (the list would show two of them)
+        if style_id == i or name == n:
             raise StyleError(f"“{n}”是内置预设，不能修改，请换个名字另存")
     try:
-        st = KaraokeStyle.model_validate(style)
+        st = KaraokeStyle.model_validate(style, context={"strict": True})
     except Exception as e:
         raise StyleError(f"字幕样式无效：{e}") from e
     st.preset = name

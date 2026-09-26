@@ -135,8 +135,12 @@ def _line_units(result: AlignmentResult) -> dict[str, list[UnitTiming]]:
 
 
 def _meta_tags(doc: LyricsDoc) -> list[str]:
+    import re
+
     tags = []
     for key, val in (("ti", doc.meta.title), ("ar", doc.meta.artist), ("al", doc.meta.album)):
+        # one tag per line, ended by the first "]": line breaks become spaces, brackets are dropped
+        val = " ".join(re.sub(r"[\[\]]", "", val or "").split())
         if val:
             tags.append(f"[{key}:{val}]")
     return tags

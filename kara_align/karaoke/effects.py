@@ -22,7 +22,12 @@ Effects (``KaraokeEffects.kind``):
 Particle bursts are rate-limited (a burst at most every ~200 ms) so fast
 passages don't turn into noise.  Particles are drawn behind the lyrics by default
 (``behind``) so they never cover a glyph.  Drawings are centred on (0, 0) and always get
-``\\bord0\\shad0`` (the style's outline would apply to them too).
+``\\bord0\\shad0`` (the style's outline would apply to them too).  Copies of a syllable's
+text are drawn ``\\an5`` at the middle of its line box, which puts them exactly on the
+lyric's glyphs (drawn ``\\an2`` at the box's bottom) and scales them around their centre
+(libass scales around the alignment point; ``\\org`` only moves the rotation centre).  The
+bouncing ball never hops higher than the room above its line (rows are kept apart for it,
+ball_room()).
 """
 
 from __future__ import annotations
@@ -57,7 +62,7 @@ class Syllable:
     start: int  # ms, sung from
     end: int
     x: float  # centre on screen
-    y: float
+    y: float  # middle of the line box: text drawn \an5 here sits exactly on the lyric's glyphs
     w: float  # width of the syllable
     h: float  # font size (px)
     font: str
@@ -66,11 +71,28 @@ class Syllable:
     visible_until: int  # the line disappears here: effects never outlive it
     group: str = ""  # syllables shown together (one line while it is on screen)
     top: float = 0.0  # top edge of the whole line, ruby included
+    room: float = 1e9  # free space above ``top`` (up to the line above or the frame's edge)
 
 
 def _bgr(hex_rgb: str) -> str:
-    h = hex_rgb.lstrip("#")
-    return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
+    from .ass import bgr_tag
+
+    return bgr_tag(hex_rgb)
+
+
+def _ball_geometry(fx_size: int, h: float, k: float) -> tuple[float, float, float]:
+    """(radius, resting lift of its centre above the line, highest hop) of the bouncing ball."""
+    r = h * 0.1 * fx_size / 100
+    return r, 2 * r + 4 * k, h * 0.25
+
+
+def ball_room(style: KaraokeStyle, h: float, k: float) -> float:
+    """Room the bouncing ball needs above a line (0 for the other effects): rows are kept at
+    least this far apart so it never hops into the line above."""
+    if style.effects.kind != "ball":
+        return 0.0
+    r, lift, hop = _ball_geometry(style.effects.size, h, k)
+    return lift + r + hop
 
 
 def _alpha(visible: float) -> str:
@@ -211,7 +233,12 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
         syl.sort(key=lambda s: s.start)
         h = syl[0].h
         sc = 100 * 0.2 * h * fx.size / 100 / 16  # 20 % of the font size across
-        lift = h * 0.2 * fx.size / 100 + 4 * k  # the ball rests this far above the line (its ruby included)
+        # the ball rests this far above the line (its ruby included) and hops no higher than the room
+        # above it (the rows are kept apart for it, ball_room(); the top row: up to the frame's edge)
+        r, lift, _ = _ball_geometry(fx.size, h, k)
+        room = min(s.room for s in syl)
+        lift = max(r, min(lift, room - r))
+        headroom = max(0.0, room - lift - r)
         tags = f"\\an5\\bord0\\shad0\\blur{0.8 * k:.1f}\\1c{color}\\fscx{sc:.0f}\\fscy{sc:.0f}"
         body = f"{{\\p1}}{_BALL}{{\\p0}}"
         until = syl[-1].visible_until
@@ -225,14 +252,14 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
         # drops in onto the first syllable
         first = syl[0]
         rest = (first.x, first.top - lift)
-        seg(first.start - 250, first.start, (first.x, rest[1] - h * 0.5), rest, "\\fad(150,0)")
+        seg(first.start - 250, first.start, (first.x, rest[1] - min(h * 0.5, headroom)), rest, "\\fad(150,0)")
         for a, b in zip(syl, syl[1:]):
             here, there = (a.x, a.top - lift), (b.x, b.top - lift)
             hop = min(420.0, float(b.start - a.start))
             wait_until = b.start - hop
             if wait_until > a.start:
                 seg(a.start, wait_until, here, here)
-            height = min(h * 0.55, 12 * k + abs(b.x - a.x) * 0.25)
+            height = min(h * 0.55, 12 * k + abs(b.x - a.x) * 0.25, headroom)
             steps = 4 if hop >= 200 else 1  # very fast syllables: a straight slide
             pts = [(here[0] + (there[0] - here[0]) * i / steps,
                     here[1] + (there[1] - here[1]) * i / steps - height * 4 * (i / steps) * (1 - i / steps))

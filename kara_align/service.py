@@ -1003,7 +1003,8 @@ def set_karaoke_style(h: ProjectHandle, style: dict) -> None:
     from .models import KaraokeStyle
 
     try:
-        k = KaraokeStyle.model_validate(style)
+        # strict: a colour / number out of range is refused here (stored styles are only clamped on load)
+        k = KaraokeStyle.model_validate(style, context={"strict": True})
     except Exception as e:
         raise ServiceError(f"字幕样式无效：{e}") from e
     with h.lock:
@@ -1075,9 +1076,15 @@ def karaoke_ass(h: ProjectHandle, style: Optional[dict] = None, *, for_video: bo
     ensure_upright_video(h)
     from .karaoke.ass import build_ass
 
+    from .karaoke.ass import resolution
+    from .karaoke.render import frame_size
+
     r, k = _karaoke_inputs(h, style)
-    offset = h.project.video.audio_offset_s * 1000 if (for_video and _video_file(h)) else 0.0
-    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset)
+    video = _video_file(h) if for_video else None
+    offset = h.project.video.audio_offset_s * 1000 if video else 0.0
+    # laid out for the frame as the video shows it (non-square pixels applied)
+    size = frame_size(video, resolution(h.project)) if video else None
+    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset, size=size)
     if r.stale:
         warnings.append(f"对齐结果已过期：{r.stale_reason}")
     if offset:
@@ -1119,7 +1126,7 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     import tempfile
 
     from .karaoke.ass import build_ass, resolution
-    from .karaoke.render import burn
+    from .karaoke.render import burn, even_size, frame_size
 
     r, k = _karaoke_inputs(h, None)
     orig = h.project.asset("original")
@@ -1127,8 +1134,10 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
         raise ServiceError("请先上传原曲")
     video = _video_file(h) if background != "black" else None
     offset_s = h.project.video.audio_offset_s if video else 0.0
-    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset_s * 1000)
-    size = resolution(h.project) if video else (resolution(h.project) if h.project.video else (1920, 1080))
+    # the frame the subtitles are drawn on: the video as shown (square pixels), both sides even (yuv420p);
+    # the ASS is laid out for exactly that frame
+    size = even_size(frame_size(video, resolution(h.project)) if video else resolution(h.project))
+    text, warnings = build_ass(h.project, r, k, time_offset_ms=offset_s * 1000, size=size)
     stem = Path((h.project.video.filename if video else None) or h.project.name or "karaoke").stem
     pct = float(k.output.vocal_keep_pct if vocal_keep_pct is None else vocal_keep_pct)
     if not 0.0 <= pct <= 100.0:

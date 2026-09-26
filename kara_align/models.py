@@ -543,41 +543,148 @@ class VideoAsset(_Base):
 # ---------------------------------------------------------------------------
 # Karaoke subtitle style (ASS). Pixel values are defined for a frame 1920 px wide
 # and scaled by the actual video width (same share of the width at any resolution).
+#
+# Every colour is ``#RRGGBB`` ("" only where it means "follow another colour") and every
+# number has a range (the editor's slider limits): these values go straight into ASS tags.
+# Styles are stored in projects, the preset library and the settings; a value there that
+# no longer fits (hand-edited, an older version's range) is clamped / replaced by its
+# default when loaded, so a style never makes them unloadable.  Validating with the
+# context ``{"strict": True}`` (a style sent to be saved) rejects such values instead.
 # ---------------------------------------------------------------------------
 
+COLOR_RE = r"^#[0-9A-Fa-f]{6}$"
+COLOR_OR_EMPTY_RE = r"^(#[0-9A-Fa-f]{6})?$"
+_FONT_MAX = 200
+_DROP = object()  # _lenient_value(): use the field's default
 
-class KaraokeText(_Base):
-    font: str = ""  # font family; "" = best available Japanese font
-    size: int = 88
+
+def _color(default: str, *, follow: bool = False) -> Any:
+    return Field(default=default, pattern=COLOR_OR_EMPTY_RE if follow else COLOR_RE)
+
+
+def _font() -> Any:
+    return Field(default="", max_length=_FONT_MAX)
+
+
+def _lenient_value(field: Any, value: Any) -> Any:
+    """``value`` made to fit ``field`` (clamped, fixed up), or ``_DROP`` for the field's default."""
+    import math
+    import re
+    import typing
+
+    ann = field.annotation
+    args = typing.get_args(ann)
+    if type(None) in args:  # Optional[X]
+        if value is None:
+            return value
+        ann = next(a for a in args if a is not type(None))
+        args = typing.get_args(ann)
+    meta = field.metadata
+    ge = next((m.ge for m in meta if hasattr(m, "ge")), None)
+    le = next((m.le for m in meta if hasattr(m, "le")), None)
+    pattern = next((m.pattern for m in meta if getattr(m, "pattern", None)), None)
+    max_len = next((m.max_length for m in meta if getattr(m, "max_length", None)), None)
+    if ann is bool:
+        return value if isinstance(value, bool) or value in (0, 1) else _DROP
+    if ann in (int, float):
+        if isinstance(value, str):
+            try:
+                value = float(value.strip())
+            except ValueError:
+                return _DROP
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return _DROP
+        value = value if ge is None else max(ge, value)
+        value = value if le is None else min(le, value)
+        return int(round(value)) if ann is int else float(value)
+    if typing.get_origin(ann) is Literal:
+        return value if value in args else _DROP
+    if typing.get_origin(ann) is list and args and typing.get_origin(args[0]) is Literal:
+        if not isinstance(value, list):
+            return _DROP
+        ok = typing.get_args(args[0])
+        return list(dict.fromkeys(v for v in value if isinstance(v, str) and v in ok))
+    if ann is str:
+        if not isinstance(value, str):
+            return _DROP
+        if pattern in (COLOR_RE, COLOR_OR_EMPTY_RE):
+            v = value.strip()
+            if re.fullmatch(r"#?[0-9A-Fa-f]{3}", v):  # #FFF
+                v = "#" + "".join(c * 2 for c in v.lstrip("#"))
+            elif re.fullmatch(r"[0-9A-Fa-f]{6}", v):
+                v = "#" + v
+            return v if re.fullmatch(pattern, v) else _DROP
+        if max_len == _FONT_MAX:  # a font family name: must not break the ASS syntax
+            value = re.sub(r"[,{}\\\x00-\x1f  ]", "", value).strip()
+        if max_len is not None:
+            value = value[:max_len]
+        return value if pattern is None or re.fullmatch(pattern, value) else _DROP
+    return value
+
+
+class _KaraokeBase(_Base):
+    @model_validator(mode="before")
+    @classmethod
+    def _lenient(cls, data: Any, info: Any) -> Any:
+        """Clamp / fix what a stored style carries (see the section comment); when strict only
+        colours are written out (#F80 → #FF8800), anything else that does not fit is an error."""
+        if not isinstance(data, dict):
+            return data
+        strict = (info.context or {}).get("strict")
+        out = dict(data)
+        for name, field in cls.model_fields.items():
+            if name not in out:
+                continue
+            if strict:
+                if isinstance(out[name], str) and any(getattr(m, "pattern", None) in (COLOR_RE, COLOR_OR_EMPTY_RE)
+                                                      for m in field.metadata):
+                    v = _lenient_value(field, out[name])
+                    out[name] = out[name] if v is _DROP else v
+                continue
+            if isinstance(field.annotation, type) and issubclass(field.annotation, BaseModel):
+                if not isinstance(out[name], (dict, BaseModel)):
+                    del out[name]  # not an object: the default part
+                continue
+            v = _lenient_value(field, out[name])
+            if v is _DROP:
+                del out[name]
+            else:
+                out[name] = v
+        return out
+
+
+class KaraokeText(_KaraokeBase):
+    font: str = _font()  # font family; "" = best available Japanese font
+    size: int = Field(default=88, ge=24, le=200)
     bold: bool = True
-    color_unsung: str = "#FFFFFF"
-    color_sung: str = "#2F80ED"
-    outline_color: str = "#0B1F3A"
-    outline: float = 4.5
-    shadow: float = 2.0
-    shadow_color: str = "#000000"
-    shadow_opacity: int = 45  # %
+    color_unsung: str = _color("#FFFFFF")
+    color_sung: str = _color("#2F80ED")
+    outline_color: str = _color("#0B1F3A")
+    outline: float = Field(default=4.5, ge=0, le=16)
+    shadow: float = Field(default=2.0, ge=0, le=16)
+    shadow_color: str = _color("#000000")
+    shadow_opacity: int = Field(default=45, ge=0, le=100)  # %
 
 
-class KaraokeRuby(_Base):
+class KaraokeRuby(_KaraokeBase):
     enabled: bool = True
     script: Literal["hiragana", "katakana", "romaji"] = "hiragana"
     target: Literal["kanji", "all"] = "kanji"
-    size_pct: int = 45  # of the lyric size
-    gap: int = 2  # px between ruby and lyric
+    size_pct: int = Field(default=45, ge=20, le=80)  # of the lyric size
+    gap: int = Field(default=2, ge=-20, le=60)  # px between ruby and lyric
     fit: Literal["widen", "overflow"] = "widen"
     # "own": each reading syllable sweeps on its own timing; "base": the sung part of the ruby is exactly
     # the part above the sung part of the lyric (one sweep line through both)
     sweep: Literal["own", "base"] = "own"
     follow_colors: bool = True
-    font: str = ""  # "" = same as the lyric font
-    color_unsung: str = "#FFFFFF"
-    color_sung: str = "#2F80ED"
-    outline_color: str = "#0B1F3A"
-    outline: float = 3.0
+    font: str = _font()  # "" = same as the lyric font
+    color_unsung: str = _color("#FFFFFF")
+    color_sung: str = _color("#2F80ED")
+    outline_color: str = _color("#0B1F3A")
+    outline: float = Field(default=3.0, ge=0, le=12)
 
 
-class KaraokeTranslation(_Base):
+class KaraokeTranslation(_KaraokeBase):
     """Translation subtitle (shown when the lyrics carry translations)."""
 
     enabled: bool = False
@@ -585,46 +692,46 @@ class KaraokeTranslation(_Base):
     # bottom); block: one line just outside the lyric block; line: under each lyric line
     position: Literal["opposite", "block", "line"] = "opposite"
     size_pct: int = Field(default=60, ge=20, le=100)  # of the lyric size
-    font: str = ""  # "" = same as the lyric font
+    font: str = _font()  # "" = same as the lyric font
     bold: bool = True
-    color: str = "#FFFFFF"
-    outline_color: str = "#0B1F3A"
-    outline: float = 3.0
-    shadow: float = 1.5
+    color: str = _color("#FFFFFF")
+    outline_color: str = _color("#0B1F3A")
+    outline: float = Field(default=3.0, ge=0, le=12)
+    shadow: float = Field(default=1.5, ge=0, le=12)
     glow: bool = True  # also glow when the glow effect is on
 
 
-class KaraokeGlow(_Base):
+class KaraokeGlow(_KaraokeBase):
     """Soft glowing edge around the text (a blurred wide border under it)."""
 
     enabled: bool = False
-    color_unsung: str = "#FF8AC2"
-    color_sung: str = "#FFF2B3"  # the glow changes colour as each syllable is sung
-    size: float = 9.0  # px at 1920 wide
-    blur: float = 7.0
-    strength: int = Field(default=85, ge=0, le=100)  # %
+    color_unsung: str = _color("#FF8AC2")
+    color_sung: str = _color("#FFF2B3")  # the glow changes colour as each syllable is sung
+    size: float = Field(default=9.0, ge=1, le=40)  # px at 1920 wide
+    blur: float = Field(default=7.0, ge=0, le=30)
+    strength: int = Field(default=85, ge=10, le=100)  # %
     ruby: bool = True  # glow the ruby too
 
 
-class KaraokeLayout(_Base):
+class KaraokeLayout(_KaraokeBase):
     position: Literal["bottom", "top"] = "bottom"
     lines: int = Field(default=2, ge=1, le=3)
     arrangement: Literal["alternate", "center"] = "alternate"
-    margin_v: int = 70  # px from the top / bottom edge
-    line_spacing: int = 26  # px between stacked lines
-    margin_h: int = 140  # px left and right (the widest a line may get)
+    margin_v: int = Field(default=70, ge=0, le=400)  # px from the top / bottom edge
+    line_spacing: int = Field(default=26, ge=0, le=200)  # px between stacked lines
+    margin_h: int = Field(default=140, ge=0, le=600)  # px left and right (the widest a line may get)
     # alternating lines: extra inset toward the centre for lines that fit, so two
     # short lines are not pinned to opposite edges (long lines use the full width)
-    alternate_indent: int = 240
+    alternate_indent: int = Field(default=240, ge=0, le=800)
     shrink_long_lines: bool = True  # scale down lines wider than the frame
 
 
-class KaraokeTiming(_Base):
-    lead_in_ms: int = 1000  # line appears at least this long before its first syllable
-    hold_ms: int = 500  # and stays after its last one
+class KaraokeTiming(_KaraokeBase):
+    lead_in_ms: int = Field(default=1000, ge=0, le=8000)  # line appears at least this long before its first syllable
+    hold_ms: int = Field(default=500, ge=0, le=5000)  # and stays after its last one
     # show the next line as soon as its slot is free (at most early_max_ms ahead)
     early_show: bool = True
-    early_max_ms: int = 4000
+    early_max_ms: int = Field(default=4000, ge=1000, le=10000)
     highlight: Literal["sweep", "instant"] = "sweep"  # \kf or \k
     # show (and highlight) the lyrics this much before they are sung; 0 = off.
     # Applies to every subtitle / LRC export, never to the alignment data itself.
@@ -633,13 +740,13 @@ class KaraokeTiming(_Base):
     fade_out_ms: int = Field(default=200, ge=0, le=2000)
 
 
-class KaraokeEffects(_Base):
+class KaraokeEffects(_KaraokeBase):
     """Effects around the lyrics, fired by each syllable as it is sung (see karaoke.effects)."""
 
     kind: Literal["none", "pulse", "ring", "shine", "sparkle", "petals", "hearts", "ball"] = "none"
     amount: int = Field(default=100, ge=20, le=200)  # % (how many particles per syllable)
     size: int = Field(default=100, ge=40, le=250)  # %
-    color: str = ""  # "" = the sung glow colour when the glow is on, else the sung lyric colour
+    color: str = _color("", follow=True)  # "" = the sung glow colour when the glow is on, else the sung lyric colour
     ruby: bool = False  # also fire on the ruby syllables
     # particles (stars, petals, hearts, the ball) drawn behind the lyrics so they never cover a glyph;
     # off: in front of the lyrics and ruby
@@ -654,7 +761,7 @@ class KaraokeEffects(_Base):
         return data
 
 
-class KaraokeOutput(_Base):
+class KaraokeOutput(_KaraokeBase):
     # "reduced vocals" audio for burn-in: vocals at this %, instrumental at 100 %
     # (independent of the Export page's mix, which comes later in the flow)
     vocal_keep_pct: float = Field(default=20.0, ge=0.0, le=100.0)
@@ -663,7 +770,7 @@ class KaraokeOutput(_Base):
 SongInfoField = Literal["title", "artist", "album", "lyricist", "composer", "arranger"]
 
 
-class KaraokeSongInfo(_Base):
+class KaraokeSongInfo(_KaraokeBase):
     """Song title card shown in a top corner at the start (see karaoke.info).
 
     Which lines it shows is part of the style; a project can replace the text
@@ -676,22 +783,22 @@ class KaraokeSongInfo(_Base):
     duration_ms: int = Field(default=7000, ge=1000, le=60000)
     size: int = Field(default=56, ge=20, le=160)  # title size at 1920 wide; other lines are smaller
     margin: int = Field(default=56, ge=0, le=400)  # from the top and side edges
-    color: str = ""  # "" = the lyrics' unsung colour
-    accent: str = ""  # accent bar; "" = the lyrics' sung colour
+    color: str = _color("", follow=True)  # "" = the lyrics' unsung colour
+    accent: str = _color("", follow=True)  # accent bar; "" = the lyrics' sung colour
 
 
-class KaraokeTheme(_Base):
+class KaraokeTheme(_KaraokeBase):
     """The colour template a style's colours came from (karaoke.themes).  The editor clears it
     as soon as a colour or effect is changed by hand ("自定义")."""
 
     template: Literal["plain", "glow"]
-    color: str
-    secondary: str = ""
+    color: str = Field(pattern=COLOR_RE)
+    secondary: str = _color("", follow=True)
 
 
-class KaraokeStyle(_Base):
+class KaraokeStyle(_KaraokeBase):
     version: int = 2
-    preset: str = ""  # name of the saved style it was loaded from ("" = none)
+    preset: str = Field(default="", max_length=400)  # name of the saved style it was loaded from ("" = none)
     layout: KaraokeLayout = Field(default_factory=KaraokeLayout)
     text: KaraokeText = Field(default_factory=KaraokeText)
     ruby: KaraokeRuby = Field(default_factory=KaraokeRuby)
@@ -705,9 +812,24 @@ class KaraokeStyle(_Base):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate(cls, data: Any) -> Any:
-        """v1 kept the translation switches in ``layout`` and had built-in preset names."""
-        if not isinstance(data, dict) or int(data.get("version") or 1) >= 2:
+    def _migrate(cls, data: Any, info: Any) -> Any:
+        """v1 kept the translation switches in ``layout`` and had built-in preset names.
+        When loading (not strict), a theme that no longer validates is dropped: the colours
+        stay, the style just shows as set by hand."""
+        if not isinstance(data, dict):
+            return data
+        if not (info.context or {}).get("strict"):
+            data = dict(data)
+            try:
+                data["version"] = int(data.get("version") or 1)
+            except (TypeError, ValueError):
+                data["version"] = 2
+            if data.get("theme") is not None:
+                try:
+                    KaraokeTheme.model_validate(data["theme"], context={"strict": True})
+                except Exception:
+                    data["theme"] = None
+        if int(data.get("version") or 1) >= 2:
             return data
         data = dict(data)
         lay = dict(data.get("layout") or {})
