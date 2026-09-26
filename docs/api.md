@@ -128,7 +128,7 @@ A local rerun (`align` with `line_ids`) creates a new partial result with `paren
 | POST | `/api/ai/test` | optional overrides of the AI settings | `{ok, reply?, model?, elapsed_s?, cost_usd?, error?}` |
 | POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = `/ai/validate` response + `meta {provider, attempts, cost_usd}`; nothing applied) |
 | GET | `/api/tasks` | – | `[PipelineTask]` newest first |
-| POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?` | `PipelineTask` |
+| POST | `/api/tasks` | multipart: `file` (video / audio), `lyrics` (music link or lyrics text), `mode` (`lrc`\|`plain`), `name?`, `style?` (JSON `TaskStyleOptions`: source / template / colours / saved preset / translation / title card / ruby / video sound; omitted = the last choices) | `PipelineTask` (with its `karaoke`, `video` and `processing` snapshots) |
 | POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
 | POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
 | POST | `/api/tasks/{id}/calibration` | `{marked_ms}` (first sung onset of `calibration.line_id`) or `{plain: true}` | `PipelineTask` (only while `waiting`; the task continues) |
@@ -138,4 +138,5 @@ A local rerun (`align` with `line_ids`) creates a new partial result with `paren
 `PipelineTask`: `{id, name, mode, status: preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted, calibration (while waiting: {line_id, line_text, lrc_ms, lines, check_line, asset_id, duration_ms}), project_id, progress, message, error, warnings, stages: [{key, label, status: pending|running|done|skipped|failed, progress, message}], outputs: {video?: {filename, url}}}`; stage keys `import, lyrics, calibrate, readings, separate, align, export` (stage status may be `waiting`). See `docs/simple-mode.md`.
 
 While a simple-mode task is working on a project (preparing / waiting / queued / running), `POST .../align`,
-`.../separate`, `.../ai/auto` and `.../karaoke/burn` answer 409 with the task's name in `detail`.
+`.../separate`, `.../ai/auto`, `.../karaoke/burn` and `.../audio` answer 409 with the task's name in `detail`;
+conversely `POST /api/tasks/{id}/retry` and `/calibration` answer 409 while a detailed-mode job runs on the task's project.

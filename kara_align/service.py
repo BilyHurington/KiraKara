@@ -168,8 +168,12 @@ def staleness(p: Project, r: AlignmentResult) -> Optional[str]:
     if p.mode == "lrc" and s.mode == "lrc" and s.calibration_hash != current_calibration_hash(p):
         reasons.append("校准或锚点已修改")
     asset = next((a for a in p.audio if a.id == s.audio_asset_id), None)
+    orig = p.asset("original")
     if asset is None or asset.sha256 != s.audio_sha256:
         reasons.append("对齐所用音频已更换")
+    elif asset.role != "original" and orig is not None and asset.source.parent_sha256 \
+            and asset.source.parent_sha256 != orig.sha256:
+        reasons.append("原曲已更换，对齐所用的分轨来自旧原曲")
     return "；".join(reasons) or None
 
 

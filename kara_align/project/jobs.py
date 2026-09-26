@@ -64,7 +64,8 @@ class Job:
         }
 
 
-_KIND = {"align": "对齐", "separate": "人声分离", "burn": "字幕烧录", "ai": "AI 注音", "video": "视频导出"}
+_KIND = {"align": "对齐", "separate": "人声分离", "burn": "字幕烧录", "ai": "AI 注音", "video": "视频导出",
+         "calibrate": "自动匹配偏移", "mix": "混音导出"}
 
 
 class JobManager:

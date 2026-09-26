@@ -84,6 +84,8 @@ class TaskVideo(_Base):
 class TaskProcessing(_Base):
     """How the task is processed, fixed when it is added (AI readings, vocal separation)."""
 
+    ai_provider: Optional[str] = None  # None: tasks from before this was recorded (today's setting)
+    ai_model: str = ""
     ai_readings: bool = True
     separate: bool = True
     separation_preset: str = "melband-roformer"
@@ -119,6 +121,9 @@ class PipelineTask(_Base):
     style_label: str = ""
     style_colors: list[str] = Field(default_factory=list)
     style_applied: bool = False
+    warning_stage: dict[str, str] = Field(default_factory=dict)  # warning text -> stage that raised it
+    current_stage: str = ""
+    project_deleted: bool = False  # the project was deleted in the detailed mode
 
     def stage(self, key: str) -> Stage:
         return next(s for s in self.stages if s.key == key)
@@ -170,7 +175,11 @@ class TaskQueue:
             tasks = [PipelineTask.model_validate(t) for t in raw]
         except FileNotFoundError:
             return []
-        except Exception:
+        except Exception:  # unreadable (e.g. written by another version): keep it for inspection, start empty
+            try:
+                self._file().replace(self._file().with_suffix(".broken.json"))
+            except OSError:
+                pass
             return []
         for t in tasks:
             if t.status == "running" and _first_open_stage(t) not in PREP_STAGES:  # stopped while it ran
@@ -199,7 +208,28 @@ class TaskQueue:
     # ---- public API
     def list(self) -> list[dict]:
         with self._lock:
-            return [t.model_dump(mode="json") for t in reversed(self.tasks)]
+            tasks = list(reversed(self.tasks))
+        out = []
+        for t in tasks:
+            d = t.model_dump(mode="json")
+            if t.status == "waiting" and t.calibration and t.project_id:
+                try:  # the project's current offset, if one was set meanwhile (detailed mode)
+                    shift = self.ws.get(t.project_id).project.calibration.user_shift_ms
+                except Exception:
+                    shift = 0
+                d["calibration"]["current_ms"] = t.calibration["lrc_ms"] + shift if shift else None
+            out.append(d)
+        return out
+
+    def forget_project(self, pid: str) -> None:
+        """The project was deleted: its tasks keep their history but lose links to it."""
+        with self._lock:
+            for t in self.tasks:
+                if t.project_id == pid:
+                    t.project_deleted = True
+                    t.outputs = {}
+                    t.message = "项目已删除"
+        self._save()
 
     def get(self, task_id: str) -> PipelineTask:
         with self._lock:
@@ -231,7 +261,8 @@ class TaskQueue:
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
                          stages=[Stage(key=k, label=label) for k, label, _ in STAGES],
                          karaoke=karaoke, video=video, style_label=label, style_colors=colors,
-                         processing=TaskProcessing(ai_readings=cfg.simple.ai_readings, separate=cfg.simple.separate,
+                         processing=TaskProcessing(ai_provider=cfg.ai.provider, ai_model=cfg.ai.model,
+                                                   ai_readings=cfg.simple.ai_readings, separate=cfg.simple.separate,
                                                    separation_preset=cfg.simple.separation_preset,
                                                    separation_device=cfg.simple.separation_device))
         if style is not None:  # the next task starts from these choices
@@ -286,9 +317,16 @@ class TaskQueue:
         with self._lock:
             if t.status not in ("failed", "cancelled", "interrupted"):
                 raise S.ServiceError("只有失败、取消或中断的任务可以重试")
+            if t.project_deleted:
+                raise S.ServiceError("这个任务的项目已被删除，无法重试；请重新添加任务")
+            again = set()
             for s in t.stages:
                 if s.status in ("failed", "running", "skipped", "waiting"):  # optional stages get another chance
                     s.status, s.progress, s.message = "pending", 0.0, ""
+                    again.add(s.key)
+            # warnings from the stages that run again are dropped (they are raised again if still true)
+            t.warnings = [w for w in t.warnings if t.warning_stage.get(w) not in again]
+            t.warning_stage = {w: k for w, k in t.warning_stage.items() if w in t.warnings}
             prep = _first_open_stage(t) in PREP_STAGES
             t.status = "preparing" if prep else "queued"
             t.error, t.detail, t.message, t.finished = None, None, "等待开始", None
@@ -387,18 +425,28 @@ class TaskQueue:
             return
         try:
             run_task(self, task, token, keys)
-            task.status = done_status
-            task.message = "完成" if done_status == "succeeded" else "排队中"
-            if done_status == "succeeded":
-                task.progress = 1.0
+            with self._lock:
+                if token.cancelled:  # cancelled right as the last stage finished
+                    raise Cancelled()
+                task.status = done_status
+                task.message = "完成" if done_status == "succeeded" else "排队中"
+                if done_status == "succeeded":
+                    task.progress = 1.0
         except WaitForUser as w:
             task.status, task.message = "waiting", str(w)
             for s in task.stages:
                 if s.status == "running":
                     s.status, s.message = "waiting", str(w)
         except Cancelled:
-            task.status, task.message = "cancelled", "已取消"
-            self._mark_running_stage(task, "pending")
+            if self._stop:  # the server is shutting down: not the user's cancel
+                self._mark_running_stage(task, "pending")
+                if keys:  # was preparing: prepared again on the next start
+                    task.status, task.message = "preparing", "读取视频和歌词"
+                else:
+                    task.status, task.message = "interrupted", "服务关闭时中断，可以重试"
+            else:
+                task.status, task.message = "cancelled", "已取消"
+                self._mark_running_stage(task, "pending")
         except Exception as e:  # report the real reason on the task
             task.status = "failed"
             task.error = str(e) if isinstance(e, S.ServiceError) else f"{type(e).__name__}: {e}"
@@ -409,7 +457,8 @@ class TaskQueue:
             if task.status in ("succeeded", "failed", "cancelled"):
                 task.finished = utcnow()
             with self._lock:
-                self._cancel.pop(task.id, None)
+                if self._cancel.get(task.id) is token:  # a retry may already have registered a new one
+                    self._cancel.pop(task.id, None)
             self._save()
 
     @staticmethod
@@ -431,7 +480,10 @@ def _first_open_stage(t: PipelineTask) -> Optional[str]:
 def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Optional[tuple[str, ...]] = None) -> None:
     cfg = app_settings.load()
     if task.processing is not None:  # the choices made when the task was added, not today's settings
-        cfg.simple = cfg.simple.model_copy(update=task.processing.model_dump())
+        pr = task.processing
+        cfg.simple = cfg.simple.model_copy(update=pr.model_dump(exclude={"ai_provider", "ai_model"}))
+        if pr.ai_provider is not None:  # keys / URLs stay today's (never copied into the task)
+            cfg.ai = cfg.ai.model_copy(update={"provider": pr.ai_provider, "model": pr.ai_model})
     last_save = [0.0]
 
     def save(force: bool = False) -> None:
@@ -451,6 +503,7 @@ def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Option
         cancel.check()
         st.status, st.progress, st.message = "running", 0.0, ""
         task.message = st.label
+        task.current_stage = key
         overall()
         save(True)
 
@@ -485,6 +538,7 @@ def _holder(task: PipelineTask, what: str) -> str:
 def _warn(task: PipelineTask, text: str) -> None:
     if text not in task.warnings:
         task.warnings.append(text)
+        task.warning_stage[text] = task.current_stage
 
 
 def stage_import(q, task, cfg, cancel, progress):
@@ -557,7 +611,8 @@ def stage_lyrics(q, task, cfg, cancel, progress):
     paired = pair_translation(h, (pv.get("extra_tracks") or {}).get("translation"))
     if task.karaoke is not None and task.karaoke.translation.enabled and not any(
             (ln.translation or "").strip() for ln in h.project.lyrics.sung_lines()):
-        _warn(task, "歌词没有翻译，视频里不会显示翻译（音乐平台链接才会自动带翻译）")
+        _warn(task, "音乐平台没有提供这首歌的翻译，视频里不会显示翻译" if task.lyrics_kind == "link"
+              else "粘贴的歌词没有翻译，视频里不会显示翻译（粘贴网易云 / QQ 音乐链接会自动带上平台的翻译）")
     return f"{n} 行" + (f" · 翻译 {paired} 行" if paired else "")
 
 
@@ -600,7 +655,7 @@ def stage_separate(q, task, cfg, cancel, progress):
     h = _handle(q, task)
     if not cfg.simple.separate:
         return "skipped"
-    if h.project.asset("vocals") is not None and h.project.asset("instrumental") is not None:
+    if _stems_match(h):
         return "已有分轨"  # kept (a retry, or separated in the detailed mode)
     try:
         from .audio.separation import ensure_available
@@ -621,8 +676,15 @@ def stage_separate(q, task, cfg, cancel, progress):
     return "done"
 
 
+def _stems_match(h) -> bool:
+    """Vocals and instrumental exist and were separated from the current original."""
+    orig, voc, inst = (h.project.asset(r) for r in ("original", "vocals", "instrumental"))
+    return bool(orig and voc and inst and voc.source.parent_sha256 == orig.sha256
+                and inst.source.parent_sha256 == orig.sha256)
+
+
 def _audio_role(h) -> str:
-    return "vocals" if h.project.asset("vocals") is not None else "original"
+    return "vocals" if _stems_match(h) else "original"
 
 
 def stage_calibrate(q, task, cfg, cancel, progress):
@@ -688,8 +750,10 @@ def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: Cance
 def stage_align(q, task, cfg, cancel, progress):
     h = _handle(q, task)
     r = h.project.result()
-    if r is not None and S.staleness(h.project, r) is None:
-        # a current alignment exists (a retry, or aligned in the detailed mode): keep it and its edits
+    wanted = h.project.asset(_audio_role(h))
+    if r is not None and S.staleness(h.project, r) is None and wanted is not None \
+            and r.snapshot.audio_asset_id == wanted.id:
+        # a current alignment of the same audio (a retry, or aligned in the detailed mode): keep it and its edits
         return f"已有对齐结果 · {len(r.units)} 个发音单元"
     r = _align(q, task, h, cancel, progress)
     return f"{len(r.units)} 个发音单元"

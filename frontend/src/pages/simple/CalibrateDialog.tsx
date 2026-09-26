@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { fmtMs, fmtSigned, parseTime } from '@/lib/format';
 import type { PipelineTask } from '@/lib/types';
 import { run, toast } from '@/store/app';
-import { confirmCalibration } from '@/store/simple';
+import { confirmCalibration, loadTasks } from '@/store/simple';
 import { Button, Callout, Dialog, Input } from '@/components/ui';
 
 interface Peaks { per_second: number; mins: number[]; maxs: number[] }
@@ -18,9 +18,11 @@ const SPANS = [6000, 12000, 24000];
 export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose: () => void }) {
   const c = task.calibration!;
   const pid = task.project_id!;
-  const [marker, setMarker] = useState(c.confirmed_ms ?? c.lrc_ms);
+  // start from what is already known: a confirmed mark, an offset set in the detailed mode, or the LRC time
+  const start = c.confirmed_ms ?? c.current_ms ?? c.lrc_ms;
+  const [marker, setMarker] = useState(start);
   const [span, setSpan] = useState(SPANS[1]);
-  const [view0, setView0] = useState(Math.max(0, (c.confirmed_ms ?? c.lrc_ms) - SPANS[1] * 0.35));
+  const [view0, setView0] = useState(Math.max(0, start - SPANS[1] * 0.35));
   const [peaks, setPeaks] = useState<Peaks | null>(null);
   const [playhead, setPlayhead] = useState<number | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -140,7 +142,13 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
     setBusy(true);
     try {
       stop();
-      await confirmCalibration(task.id, body);
+      try {
+        await confirmCalibration(task.id, body);
+      } catch (e) {
+        // e.g. the lyrics were edited meanwhile and a new first line was chosen: show it
+        void loadTasks().catch(() => undefined);
+        throw e;
+      }
       toast('ok', body.plain ? '已改用普通模式，任务继续' : `已确认（偏移 ${fmtSigned(shift)}），任务继续`, '接下来全部自动完成');
       onClose();
     } finally {
@@ -179,6 +187,9 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
             {c.lines.length > 1 && <> · 之后：{c.lines.slice(1).map((l) => l.text).join(' / ')}</>}
           </div>
         </div>
+        {c.current_ms != null && c.confirmed_ms == null && (
+          <p className="text-xs text-muted">标记从详细模式里已设置的偏移（{fmtSigned(c.current_ms - c.lrc_ms)}）开始，确认即可继续。</p>
+        )}
 
         <div>
           <div className="mb-1.5 flex items-center gap-2 text-xs text-muted">

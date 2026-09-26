@@ -598,3 +598,93 @@ def test_delete_project(tmp_path):
     assert client.get(f"/api/projects/{pid}").status_code in (400, 404)
     assert pid not in [p["id"] for p in client.get("/api/projects").json()]
     q.shutdown()
+
+
+def test_shutdown_interrupts_instead_of_cancelling(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": True, "auto_export": False}})
+    started = threading.Event()
+
+    def slow(q, task, cfg, cancel, progress):  # a long stage, stopped by the shutdown
+        started.set()
+        while True:
+            cancel.check()
+            time.sleep(0.02)
+
+    monkeypatch.setitem(P.STAGE_FUNCS, "separate", slow)
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n", mode="plain", name="A")
+    assert started.wait(30)
+    q.shutdown()
+    deadline = time.time() + 10
+    while q.get(t.id).status == "running" and time.time() < deadline:
+        time.sleep(0.05)
+    t = q.get(t.id)
+    assert t.status == "interrupted" and t.stage("separate").status == "pending"  # can be retried, not "cancelled"
+    # after a restart it is still there to retry
+    assert P.TaskQueue(S.Workspace(tmp_path / "projects")).get(t.id).status == "interrupted"
+
+
+def test_retry_drops_warnings_of_the_stages_it_redoes_and_deleted_projects(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kara_align.project.jobs import Job
+    from kara_align.web.server import create_app
+
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    client = TestClient(create_app(tmp_path / "projects"))
+    q = client.app.state.tasks
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n",
+                       mode="plain", name="A").id)
+    assert t.status == "succeeded" and t.processing.ai_provider == "none"
+    # a warning raised by separation, then the task failed there: a retry re-runs it and drops the note
+    t.current_stage = "separate"
+    P._warn(t, "人声分离失败，使用原曲对齐：x")
+    t.current_stage = "align"
+    P._warn(t, "有 1 处可能需要人工检查")
+    t.stage("separate").status, t.status = "failed", "failed"
+    # … but not while the detailed mode is separating the same project
+    job = Job(id="job_x", kind="separate", project_id=t.project_id, status="running")
+    client.app.state.jobs._jobs[job.id] = job
+    r = client.post(f"/api/tasks/{t.id}/retry")
+    assert r.status_code == 409 and "人声分离" in r.json()["detail"]
+    job.status = "succeeded"
+    assert client.post(f"/api/tasks/{t.id}/retry").status_code == 200
+    assert "有 1 处可能需要人工检查" in t.warnings  # from a stage that is not redone
+    assert not any("人声分离失败" in w for w in t.warnings)
+    t = _wait(q, t.id)
+    # deleting the project: the task stays listed without links, and cannot be retried
+    assert client.delete(f"/api/projects/{t.project_id}").json() == {"ok": True}
+    listed = next(x for x in client.get("/api/tasks").json() if x["id"] == t.id)
+    assert listed["project_deleted"] and listed["outputs"] == {}
+    t.status = "failed"
+    assert client.post(f"/api/tasks/{t.id}/retry").status_code == 400
+    q.shutdown()
+
+
+def test_stems_are_reused_only_from_the_current_original():
+    from types import SimpleNamespace as NS
+
+    def project(parent):
+        assets = {"original": NS(sha256="new", source=NS(parent_sha256=None)),
+                  "vocals": NS(sha256="v", source=NS(parent_sha256=parent)),
+                  "instrumental": NS(sha256="i", source=NS(parent_sha256=parent))}
+        return NS(project=NS(asset=assets.get))
+
+    assert P._stems_match(project("new")) and P._audio_role(project("new")) == "vocals"
+    assert not P._stems_match(project("old")) and P._audio_role(project("old")) == "original"
+
+
+def test_waiting_task_shows_the_offset_already_set(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=LRC, mode="lrc").id)
+    assert t.status == "waiting"
+    listed = lambda: next(x for x in q.list() if x["id"] == t.id)["calibration"]  # noqa: E731
+    assert listed()["current_ms"] is None
+    h = q.ws.get(t.project_id)
+    S.calibration_op(h, "shift", user_shift_ms=-300)  # set in the detailed mode's calibration page
+    assert listed()["current_ms"] == t.calibration["lrc_ms"] - 300
+    q.shutdown()

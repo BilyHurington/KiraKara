@@ -199,7 +199,9 @@ export async function deleteProject(pid: string) {
 
 export async function refreshProject() {
   const pid = get().pid;
-  if (pid) setPV(await api.get<ProjectView>(`/api/projects/${pid}`));
+  if (!pid) return;
+  const pv = await api.get<ProjectView>(`/api/projects/${pid}`);
+  if (get().pid === pid) setPV(pv);  // another project was opened meanwhile: this answer is stale
 }
 
 /** Replace one result inside the current project view (after unit edits etc.). */

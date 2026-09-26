@@ -398,6 +398,8 @@ export interface CalibrationRequest {
   line_id: string; line_text: string; lrc_ms: number; lines: { id: string; text: string; lrc_ms: number }[];
   check_line: { id: string; text: string; lrc_ms: number } | null;
   asset_id: string | null; duration_ms: number | null; confirmed_ms?: number;
+  /** the offset already set on the project (e.g. in the detailed mode's calibration page), as a marker */
+  current_ms?: number | null;
 }
 
 export interface PipelineTask {
@@ -406,6 +408,8 @@ export interface PipelineTask {
   stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
   warnings: string[]; outputs: { video?: { filename: string; url: string } };
   calibration?: CalibrationRequest | null; calibration_confirmed?: boolean;
+  /** the project was deleted in the detailed mode: no links to it any more */
+  project_deleted?: boolean;
   /** the subtitle style and video settings bound to this task */
   style_label?: string; style_colors?: string[];
   video?: { auto_export: boolean; video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high' } | null;

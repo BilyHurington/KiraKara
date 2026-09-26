@@ -58,11 +58,20 @@ export function SimpleHome() {
   useEffect(() => {
     if (settings && !styleOpts) setStyleOpts(settings.simple.task_style);
   }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pendingStyle = useRef<TaskStyleOptions | null>(null);
   useEffect(() => {
     if (!styleOpts || !styleDirty.current) return;
-    const t = setTimeout(() => { void saveSettings({ simple: { task_style: styleOpts } }).catch(() => undefined); }, 500);
+    pendingStyle.current = styleOpts;
+    const t = setTimeout(() => {
+      pendingStyle.current = null;
+      void saveSettings({ simple: { task_style: styleOpts } }).catch(() => undefined);
+    }, 500);
     return () => clearTimeout(t);
   }, [styleOpts]);
+  useEffect(() => () => {  // leaving the page (e.g. to the detailed mode): save what is still pending now
+    const p = pendingStyle.current;
+    if (p) void saveSettings({ simple: { task_style: p } }).catch(() => undefined);
+  }, []);
   const changeStyle = (next: TaskStyleOptions) => { styleDirty.current = true; setStyleOpts(next); };
 
   useEffect(() => {
@@ -186,7 +195,7 @@ export function SimpleHome() {
           )}
         </CardBody>
       </Card>
-      {calTask && <CalibrateDialog task={calTask} onClose={() => setCalibrating(null)} />}
+      {calTask && <CalibrateDialog key={calTask.calibration!.line_id} task={calTask} onClose={() => setCalibrating(null)} />}
     </div>
   );
 }
@@ -217,7 +226,7 @@ const STATUS: Record<PipelineTask['status'], { label: string; tone: 'accent' | '
 function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: number; onCalibrate: () => void }) {
   const st = STATUS[t.status];
   const live = t.status === 'running' || t.status === 'queued' || t.status === 'preparing' || t.status === 'waiting';
-  const canOpen = !!t.project_id && t.status !== 'running' && t.status !== 'preparing' && t.status !== 'waiting';
+  const canOpen = !!t.project_id && !t.project_deleted && t.status !== 'running' && t.status !== 'preparing' && t.status !== 'waiting';
   const act = (a: 'cancel' | 'retry' | 'delete') => run(() => taskAction(t.id, a), '操作失败');
   const [confirmDel, setConfirmDel] = useState(false);
   const open = () => t.project_id && openInDetail(t.project_id, t.outputs.video ? 'karaoke' : 'review');
@@ -251,7 +260,8 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
               <Button size="sm" variant="primary" icon={<Download className="size-4" />}>下载视频</Button>
             </a>
           )}
-          {(t.status === 'failed' || t.status === 'cancelled' || t.status === 'interrupted') && (
+          {t.project_deleted && <Badge tone="neutral">项目已删除</Badge>}
+          {!t.project_deleted && (t.status === 'failed' || t.status === 'cancelled' || t.status === 'interrupted') && (
             <Button size="sm" variant="secondary" icon={<RotateCcw className="size-4" />} onClick={() => act('retry')}
               title="从没完成的步骤继续：已经完成的步骤、已有的分轨和对齐结果（包括在详细模式里做的）都会保留">重试</Button>
           )}

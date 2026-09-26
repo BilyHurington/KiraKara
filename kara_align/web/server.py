@@ -186,6 +186,14 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         v.update(extra)
         return v
 
+    def no_jobs(pid: str, doing: str) -> None:
+        """A task must not start work the detailed mode is doing on the same project right now."""
+        busy = [j for j in jm.list(pid) if j.status in ("queued", "running")]
+        if busy:
+            kind = {"align": "对齐", "separate": "人声分离", "burn": "字幕烧录", "ai": "AI 注音",
+                    "calibrate": "自动匹配偏移"}.get(busy[0].kind, busy[0].kind)
+            raise HTTPException(409, f"详细模式正在对这个项目进行{kind}；请等它完成后再{doing}")
+
     def not_busy(pid: str) -> None:
         """Heavy jobs in the detailed mode wait until the simple-mode task on this project is done."""
         t = tq.active_for_project(pid)
@@ -311,11 +319,17 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
     @app.post("/api/tasks/{task_id}/retry")
     def retry_task(task_id: str):
         task_or_404(task_id)
+        t = tq.get(task_id)
+        if t.project_id and not t.project_deleted:
+            no_jobs(t.project_id, "重试")
         return tq.retry(task_id).model_dump(mode="json")
 
     @app.post("/api/tasks/{task_id}/calibration")
     def confirm_task_calibration(task_id: str, body: dict):
         task_or_404(task_id)
+        t = tq.get(task_id)
+        if t.project_id:
+            no_jobs(t.project_id, "确认")
         marked = (body or {}).get("marked_ms")
         if marked is not None and (not isinstance(marked, (int, float)) or marked < 0):
             raise HTTPException(400, "marked_ms 必须是非负的毫秒数")
@@ -373,6 +387,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         if any(j.status in ("queued", "running") for j in jm.list(pid)):
             raise HTTPException(409, "这个项目还有正在进行的操作，请等它完成或取消后再删除")
         ws.delete(pid)
+        tq.forget_project(pid)  # its tasks stay listed, without links to the deleted project
         return {"ok": True}
 
     @app.patch("/api/projects/{pid}")
@@ -526,6 +541,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None) -
         from ..audio.io import AudioError, validate_upload
 
         h = handle(pid)
+        not_busy(pid)  # a task working on the project must not have its audio replaced underneath
         name = Path(file.filename or "audio").name
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / name

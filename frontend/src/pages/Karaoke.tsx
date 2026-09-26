@@ -44,11 +44,24 @@ export function KaraokePage() {
   // autosave (debounced); exports and burn-in always use the saved style, so an edit still waiting
   // is saved at once when the page is left (switching step or mode) and before burning
   const pending = useRef<{ pid: string; style: KaraokeStyle } | null>(null);
+  const inflight = useRef<Promise<unknown> | null>(null);
   const flush = useCallback(async () => {
-    const p = pending.current;
-    if (!p) return;
-    pending.current = null;
-    await api.put(`/api/projects/${p.pid}/karaoke`, p.style);
+    // saves go out one after another: a burn (or the next page) never sees an older style land last
+    while (inflight.current || pending.current) {
+      if (inflight.current) {
+        await inflight.current.catch(() => undefined);
+        continue;
+      }
+      const p = pending.current!;
+      pending.current = null;
+      const req = api.put(`/api/projects/${p.pid}/karaoke`, p.style);
+      inflight.current = req;
+      try {
+        await req;
+      } finally {
+        inflight.current = null;
+      }
+    }
   }, []);
   useEffect(() => {
     if (!style || !dirty.current) return;

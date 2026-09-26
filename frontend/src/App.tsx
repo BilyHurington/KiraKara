@@ -111,7 +111,8 @@ export function TaskBusyBanner() {
   const pid = useApp((s) => s.pid);
   const task = taskOnProject(useSimple((s) => s.tasks), pid);
   if (!task) return null;
-  const doing = task.status === 'waiting' ? '等待确认开头位置' : task.status === 'running' ? task.message || '处理中' : '排队中';
+  const doing = { waiting: '等待确认开头位置', running: task.message || '处理中', preparing: '读取视频和歌词', queued: '排队中' }[
+    task.status as 'waiting' | 'running' | 'preparing' | 'queued'] ?? '处理中';
   return (
     <Callout tone="warn" className="mb-6" title={`极简模式任务「${task.name || task.media_filename}」正在处理这个项目（${doing}）`}
       actions={<Button size="sm" variant="secondary" onClick={() => setUi('simple')}>查看任务队列</Button>}>

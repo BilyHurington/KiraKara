@@ -141,3 +141,47 @@ describe('cleaning up', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ saved_id: '' })));
   });
 });
+
+describe('third review round', () => {
+  it('a project refresh answered after another project was opened is dropped', async () => {
+    seedStore('review');
+    const pv = fixturePV();
+    let answer: (v: Response) => void = () => {};
+    mockApi({ [`GET /api/projects/${PID}`]: () => new Promise<Response>((r) => { answer = r; }) });
+    const { refreshProject } = await import('@/store/app');
+    const pending = refreshProject();
+    useApp.setState({ pid: 'p_other' });  // the user opened another project meanwhile
+    answer(new Response(JSON.stringify(pv), { status: 200 }));
+    await pending;
+    expect(useApp.getState().pid).toBe('p_other');
+  });
+
+  it('a task whose project was deleted shows it and offers no dead links', async () => {
+    const gone = task({ id: 't7', status: 'succeeded', stages: stages(7), progress: 1, message: '项目已删除', project_deleted: true, outputs: {} });
+    useSimple.setState({ ui: 'simple', page: 'home', tasks: [gone], settings: null });
+    mockApi({ 'GET /api/tasks': () => [gone] });
+    const { SimpleHome } = await import('./simple/SimpleHome');
+    renderUI(<SimpleHome />);
+    expect(screen.getByText('项目已删除')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /详细模式/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /下载视频/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull();
+  });
+
+  it('the offset dialog starts from an offset already set in the detailed mode', async () => {
+    const waiting = task({ id: 'tw', status: 'waiting', calibration: {
+      line_id: 'L1', line_text: 'きみと', lrc_ms: 1500, lines: [{ id: 'L1', text: 'きみと', lrc_ms: 1500 }], check_line: null,
+      asset_id: null, duration_ms: 7000, current_ms: 1200 } });
+    mockApi({});
+    const { CalibrateDialog } = await import('./simple/CalibrateDialog');
+    renderUI(<CalibrateDialog task={waiting} onClose={() => {}} />);
+    expect(screen.getByText(/详细模式里已设置的偏移（-300 ms）/)).toBeInTheDocument();
+  });
+
+  it('the banner says a task is still reading its video', () => {
+    seedStore('review');
+    useSimple.setState({ tasks: [task({ status: 'preparing', message: '' })] });
+    renderUI(<TaskBusyBanner />);
+    expect(screen.getByText(/（读取视频和歌词）/)).toBeInTheDocument();
+  });
+});
