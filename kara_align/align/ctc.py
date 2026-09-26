@@ -31,6 +31,11 @@ emission score of a state at frame ``t``:
 Tie-breaking (deterministic, identical in both implementations): among equal
 predecessor scores prefer *stay*, then ``s-1``, then ``s-2``; at the end prefer
 the trailing blank ``S-1`` over the last token ``S-2`` when scores are equal.
+
+Memory: the only ``[T, S]`` array kept is the int8 back-pointer table (a
+10-minute song with ~3000 tokens: ~180 MB); the emission scores of the states
+are gathered frame by frame instead of as a float64 ``[T, S]`` copy (which
+alone needed ~1.4 GB for such a song in plain mode).
 """
 
 from __future__ import annotations
@@ -263,17 +268,24 @@ def ctc_align(
     entry_mat = np.stack([entry[s] for s in entry_states]) if len(entry_states) else None
     bandlim = _band_mask(T, S, band)
 
-    emit = logp[:, z]  # [T, S] (a copy: priors are added in place)
     pri = _check_priors(priors, T, z, blank)
-    if pri[0] is not None:
-        emit[:, 1::2] += pri[0][:, None]
-    if pri[1] is not None:
-        for s_ in np.nonzero(pri[2])[0]:
-            emit[:, s_] += pri[1]
+    tok_states = np.zeros(S, dtype=bool)
+    tok_states[1::2] = True
+
+    def emit(t: int) -> np.ndarray:
+        """Emission score (+ priors) of every state at frame t (one [S] row, not a [T, S] copy)."""
+        e = logp[t, z]
+        if pri[0] is not None:
+            e = e + np.where(tok_states, pri[0][t], 0.0)
+        if pri[1] is not None:
+            e = e + np.where(pri[2], pri[1][t], 0.0)
+        return e
+
     bp = np.zeros((T, S), dtype=np.int8)
     D = np.full(S, NEG_INF)
-    D[0] = emit[0, 0]
-    D[1] = emit[0, 1] + (entry[1][0] if 1 in entry else 0.0)
+    e0 = emit(0)
+    D[0] = e0[0]
+    D[1] = e0[1] + (entry[1][0] if 1 in entry else 0.0)
     if bandlim is not None:
         lo, hi = bandlim
         outside = np.ones(S, dtype=bool)
@@ -296,7 +308,7 @@ def ctc_align(
         choice = np.argmax(cand, axis=0)  # first max wins: stay > s-1 > s-2
         best = cand[choice, np.arange(S)]
         bp[t] = choice
-        D = best + emit[t]
+        D = best + emit(t)
         if bandlim is not None:
             lo, hi = bandlim
             outside = np.ones(S, dtype=bool)

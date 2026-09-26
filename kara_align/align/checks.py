@@ -34,14 +34,16 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
             _flag(u, "short_unit")
             issues.append(Issue(code="short_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
                                 message=f"单元「{u.reading}」只有 {d} ms", data={"duration_ms": d}))
-        elif "token_gap" in u.flags:
-            issues.append(Issue(code="token_gap", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"单元「{u.reading}」的 token 之间有长停顿（共 {d} ms）；"
-                                        "读音可能与演唱不符", data={"duration_ms": d}))
-        elif d > cfg.max_unit_ms:
-            _flag(u, "long_unit")
-            issues.append(Issue(code="long_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
-                                message=f"单元「{u.reading}」持续 {d} ms", data={"duration_ms": d}))
+        else:
+            # both can hold for one unit: a token gap does not hide an overlong unit
+            if "token_gap" in u.flags:
+                issues.append(Issue(code="token_gap", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                                    message=f"单元「{u.reading}」的 token 之间有长停顿（共 {d} ms）；"
+                                            "读音可能与演唱不符", data={"duration_ms": d}))
+            if d > cfg.max_unit_ms:
+                _flag(u, "long_unit")
+                issues.append(Issue(code="long_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                                    message=f"单元「{u.reading}」持续 {d} ms", data={"duration_ms": d}))
     return issues
 
 
@@ -83,8 +85,16 @@ def check_rest(units: list[UnitTiming], activity: Optional[VocalActivity]) -> li
     return issues
 
 
+def alignable(u: UnitTiming) -> bool:
+    """Units without model tokens (``unaligned``: a っ at the end of a line, a character the model
+    cannot spell) can never get a time; they are reported once when tokens are prepared and do not
+    count as missing coverage (no incomplete line, no retries for them)."""
+    return u.status != "unaligned" or u.start_ms is not None
+
+
 def check_coverage(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckConfig) -> tuple[list[Issue], float]:
     issues: list[Issue] = []
+    units = [u for u in units if alignable(u)]
     total = len(units)
     timed = sum(1 for u in units if u.start_ms is not None and u.end_ms is not None)
     cov = timed / total if total else 1.0
@@ -106,7 +116,10 @@ def check_coverage(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckC
     return issues, cov
 
 
-def check_lines(lines: list[LineTiming], cfg: CheckConfig, voices: Optional[dict[str, str]] = None) -> list[Issue]:
+def check_lines(lines: list[LineTiming], cfg: CheckConfig, voices: Optional[dict[str, str]] = None,
+                audio_end_ms: Optional[float] = None) -> list[Issue]:
+    """Line-level checks.  ``audio_end_ms``: where the audio (the emission) ends; a window that
+    ends there has no later lyrics behind its right edge."""
     issues: list[Issue] = []
     last: dict[str, LineTiming] = {}
     for lt in lines:
@@ -123,8 +136,10 @@ def check_lines(lines: list[LineTiming], cfg: CheckConfig, voices: Optional[dict
                                     message="句首贴在解码窗口左边缘",
                                     data={"window_ms": [w0, w1]}))
             # the right edge is next anchor + margin, only a search bound: touching it
-            # means the line ran into audio that belongs to later lines
-            if lt.end_ms >= w1 - cfg.edge_crowd_ms:
+            # means the line ran into audio that belongs to later lines (not when the window
+            # simply ends with the audio: a song cut right after its last note)
+            at_audio_end = audio_end_ms is not None and w1 >= audio_end_ms - 1
+            if lt.end_ms >= w1 - cfg.edge_crowd_ms and not at_audio_end:
                 _flag(lt, "window_edge")
                 issues.append(Issue(code="window_edge", severity="warning", line_id=lt.line_id,
                                     message="句尾贴在解码窗口右边缘",
@@ -183,11 +198,18 @@ def stability_issues(base: dict[str, Optional[int]], alt: dict[str, Optional[int
 
 def run_checks(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckConfig,
                voices: Optional[dict[str, str]] = None,
-               activity: Optional[VocalActivity] = None) -> tuple[list[Issue], float]:
+               activity: Optional[VocalActivity] = None,
+               audio_end_ms: Optional[float] = None) -> tuple[list[Issue], float]:
     cov_issues, cov = check_coverage(units, lines, cfg)
     issues = (check_units(units, cfg) + check_line_gaps(units, cfg) + check_rest(units, activity) + cov_issues
-              + check_lines(lines, cfg, voices) + check_unit_order(units, voices))
+              + check_lines(lines, cfg, voices, audio_end_ms) + check_unit_order(units, voices))
     return issues, cov
+
+
+# codes produced by the checks above (recomputed when unit times change, e.g. adopting a rerun)
+CHECK_CODES = {"illegal_interval", "short_unit", "token_gap", "long_unit", "line_gap", "unit_in_rest",
+               "line_incomplete", "low_coverage", "anchor_deviation", "window_edge", "order_conflict",
+               "line_overlap", "unit_overlap"}
 
 
 # issue codes that a retry could plausibly improve

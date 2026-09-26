@@ -30,12 +30,16 @@ def _auto_times(ut: UnitTiming) -> tuple[Optional[int], Optional[int]]:
     return ut.model_start_ms, ut.model_end_ms
 
 
+_RESOLVED = "manual-resolved:"
+
+
 def apply_final_times(ut: UnitTiming) -> None:
     if ut.manual is not None:
         ut.start_ms, ut.end_ms = ut.manual.start_ms, ut.manual.end_ms
         if ut.start_ms is not None and ut.end_ms is not None and ut.status != "ok":
-            # the original failure reason stays visible in the flags
-            ut.flags.append(f"manual-resolved:{ut.status}")
+            # the original failure stays visible in the flags (and comes back with clear_manual)
+            if not any(f.startswith(_RESOLVED) for f in ut.flags):
+                ut.flags.append(f"{_RESOLVED}{ut.status}")
             ut.status = "ok"
             ut.reason = None
     else:
@@ -67,6 +71,9 @@ def set_lock(result: AlignmentResult, unit_id: str, locked: bool) -> UnitTiming:
     if ut.manual is None:
         if not locked:
             return ut
+        if ut.start_ms is None or ut.end_ms is None:
+            # nothing to confirm: a failed / unaligned unit needs times first
+            raise EditError("该单元没有时间，无法锁定；请先设置开始和结束时间")
         # lock the current (model) times as a manual confirmation
         return set_manual(result, unit_id, ut.start_ms, ut.end_ms, locked=True, note="锁定当前时间")
     edit = ut.manual.model_copy(update={"locked": locked})
@@ -84,8 +91,14 @@ def clear_manual(result: AlignmentResult, unit_id: str) -> UnitTiming:
     if "manual" in ut.flags:
         ut.flags.remove("manual")
     apply_final_times(ut)
-    if ut.start_ms is None and ut.model_start_ms is None and ut.status == "ok":
-        ut.status = "failed"
+    resolved = next((f for f in ut.flags if f.startswith(_RESOLVED)), None)
+    if resolved is not None:
+        ut.flags.remove(resolved)
+    if ut.start_ms is None and ut.status == "ok":
+        # back to what the model gave: no time (the status the manual edit had resolved)
+        status = resolved[len(_RESOLVED):] if resolved else "failed"
+        ut.status = status if status in ("failed", "unaligned", "skipped") else "failed"  # type: ignore[assignment]
+        ut.reason = "人工时间已清除；模型没有给出这个单元的时间"
     _refresh_line(result, ut.line_id)
     return ut
 

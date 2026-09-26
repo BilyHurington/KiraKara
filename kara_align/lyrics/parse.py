@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -32,19 +33,35 @@ DetectedFormat = Literal[
     "lrc", "plain", "json-project", "json-prepared", "json-alignment", "json-reading-patch", "unknown"
 ]
 
-_TIMED_LINE = re.compile(r"^\s*\[\d{1,4}:\d{1,2}(?:[.:]\d{1,3})?\]")
+# a line starting with a time tag (or with an enhanced-LRC word tag, "<mm:ss.xx>")
+_TIMED_LINE = re.compile(r"^\s*(?:\[\d{1,4}:\d{1,2}(?:[.:]\d{1,6})?\]|<\d{1,4}:\d{1,2}(?:[.:]\d{1,6})?>)")
 _KANA = re.compile(r"[぀-ヿㇰ-ㇿｦ-ﾟ]")
 _HAN = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 _LATIN = re.compile(r"[A-Za-z]")
 
-# credit lines: a short label containing a credit keyword, then a colon
-_CREDIT_LABEL = re.compile(r"^\s*([^:：]{1,16}?)\s*[:：]")
-_CREDIT_KEYWORDS = re.compile(
-    r"作词|作曲|编曲|作詞|編曲|词|詞|曲|制作|製作|监制|監製|混音|缩混|混缩|和声|和聲|录音|錄音|母带|吉他|贝斯|貝斯|"
-    r"鼓|弦乐|弦樂|键盘|鍵盤|出品|发行|發行|策划|统筹|配唱|人声|OP|SP|ISRC|"
-    r"lyric|composer|compos|music|arrang|written|produc|mix|master|vocal|guitar|bass|drum|record",
-    re.IGNORECASE,
+# credit lines: a short label made only of credit words, then a colon ("作词 : X", "Mixed by: X").
+# The label must consist of such words entirely, so 「君の曲：…」 or "Mix it up: …" stay lyrics.
+_CREDIT_LABEL = re.compile(r"^\s*([^:：]{1,24}?)\s*[:：]\s*(.*)$")
+_EN = r"(?![A-Za-z])"  # an English credit word ends at a word boundary
+# unambiguous credit words: a label containing one is a credit anywhere in the song
+_CREDIT_STRONG = (
+    r"作编曲|作編曲|作词|作曲|编曲|作詞|編曲|词曲|詞曲|制作人|制作|製作人|製作|监制|監製|混音|缩混|混缩|和声|和聲|"
+    r"录音|錄音|母带|吉他|贝斯|貝斯|弦乐|弦樂|键盘|鍵盤|出品|发行|發行|策划|策劃|统筹|統籌|配唱|人声|人聲|企划|企劃|"
+    r"监督|監督|原唱|伴唱|和音|演奏|"
+    rf"(?:OP|SP|ISRC|lyricists?|lyrics|composers?|composed|composition|arrang\w*|written|writers?|produc\w*|"
+    rf"mix\w+|master\w*|engineer\w*|record\w*|vocals|guitars|drums|keyboards?|strings|programming){_EN}"
 )
+# everyday words that also start lyric lines (「曲」「鼓」, "mix", "drum", "vocal"): a label made
+# only of them is a credit only near the top (before the first sung line) or at 00:00
+_CREDIT_WEAK = rf"词|詞|曲|鼓|歌|唄|(?:mix|vocal|guitar|bass|drum|piano|music|lyric){_EN}"
+# words that only qualify another credit word
+_CREDIT_FILLER = rf"工程师|工程師|助理|师|師|人|者|(?:by|and|assistant|additional|chief|co){_EN}"
+_CREDIT_TOKEN = re.compile(
+    rf"(?P<strong>{_CREDIT_STRONG})|(?P<weak>{_CREDIT_WEAK})|(?P<filler>{_CREDIT_FILLER})"
+    r"|(?P<sep>[\s&/／、,，·・+＋-]+)",
+    re.IGNORECASE)
+# NetEase often starts with a "歌名 - 歌手" line at 00:00
+_TITLE_LINE = re.compile(r"^\S.{0,80}\s[-–—]\s.{1,80}\S$")
 
 
 class LyricsModeError(ValueError):
@@ -63,12 +80,22 @@ class ParseResult:
     snapshot: Optional[SourceSnapshot] = None
 
 
-# byte-order marks and zero-width characters (music platforms sometimes leave them in lyrics)
-_INVISIBLE = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
+# byte-order marks, zero-width / direction marks and soft hyphens (music platforms sometimes
+# leave them in lyrics); Unicode line / paragraph separators are line breaks
+_INVISIBLE = {**dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060\u200e\u200f\u00ad"
+                                        "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"), None),
+              0x2028: "\n", 0x2029: "\n", 0x0085: "\n"}
+# half-width katakana (and its half-width punctuation / voicing marks)
+_HALFWIDTH_KANA = re.compile(r"[\uff61-\uff9f]+")
 
 
 def normalize_text(text: str) -> str:
-    return text.translate(_INVISIBLE).replace("\r\n", "\n").replace("\r", "\n")
+    """Line breaks unified, invisible characters removed, kana in one canonical form:
+    decomposed kana (か + U+3099) composed (NFC) and half-width katakana (ｶﾞﾝﾊﾞﾚ) made
+    full width (NFKC on those runs only), so readings, units and surfaces line up."""
+    text = text.translate(_INVISIBLE).replace("\r\n", "\n").replace("\r", "\n")
+    text = _HALFWIDTH_KANA.sub(lambda m: unicodedata.normalize("NFKC", m.group()), text)
+    return unicodedata.normalize("NFC", text)
 
 
 def detect_format(text: str, filename: Optional[str] = None) -> DetectedFormat:
@@ -110,9 +137,28 @@ def detect_language(texts: list[str]) -> str:
     return "other"
 
 
-def is_credit_line(text: str) -> bool:
+def is_credit_line(text: str, *, at_top: bool = False) -> bool:
+    """A "label: name" credit line (作词 : X, Mixed by: X).
+
+    The label must be made of credit words only.  Labels of everyday words alone (「曲」「词」
+    「鼓」, "Mix", "Drum", "Vocal") also start lyric lines (「曲：…」, "Mix: …"), so they only
+    count ``at_top`` – before the first sung line or at 00:00, where platforms put credits.
+    """
     m = _CREDIT_LABEL.match(text)
-    return bool(m and _CREDIT_KEYWORDS.search(m.group(1)))
+    if not m:
+        return False
+    label = m.group(1).strip()
+    kinds = set()
+    pos = 0
+    while pos < len(label):
+        t = _CREDIT_TOKEN.match(label, pos)
+        if t is None or t.end() == pos:
+            return False
+        kinds.add(t.lastgroup)
+        pos = t.end()
+    if "strong" in kinds:
+        return True
+    return at_top and "weak" in kinds
 
 
 def _meta_from_tags(tags: dict[str, str]) -> LyricsMeta:
@@ -129,41 +175,88 @@ def _meta_from_tags(tags: dict[str, str]) -> LyricsMeta:
     return meta
 
 
-def _make_line(i: int, text: str, source: LineSource, start: Optional[int]) -> Line:
-    if not text:
-        kind, sing = "blank", False
-    elif is_credit_line(text):
-        kind, sing = "meta", False
-    else:
-        kind, sing = "lyric", True
-    return Line(id=f"L{i + 1:04d}", text=text, kind=kind, sing=sing,
-                imported_start_ms=start, source=source)
+def _is_placeholder(text: str) -> bool:
+    """QQ Music writes "//" for a line without translation."""
+    return bool(text) and set(text.strip()) <= {"/"}
+
+
+def _make_lines(items: list[tuple[Optional[int], str, LineSource, Optional[int]]]) -> list[Line]:
+    """Lines from (start, text, source, end); credits / title lines at the top become meta."""
+    lines: list[Line] = []
+    top = True  # no sung line yet
+    for i, (start, text, source, end) in enumerate(items):
+        at_zero = start is not None and start < 1000
+        if not text or _is_placeholder(text):
+            kind, sing = "blank", False
+        elif is_credit_line(text, at_top=top or at_zero):
+            kind, sing = "meta", False
+        elif top and start is not None and start == 0 and _TITLE_LINE.match(text):
+            kind, sing = "meta", False  # "歌名 - 歌手" at 00:00 (NetEase)
+        else:
+            kind, sing = "lyric", True
+            top = False
+        lines.append(Line(id=f"L{i + 1:04d}", text=text, kind=kind, sing=sing,
+                          imported_start_ms=start, imported_end_ms=end, source=source))
+    return lines
+
+
+def _script(text: str) -> str:
+    if _KANA.search(text):
+        return "kana"
+    if _HAN.search(text):
+        return "han"
+    if _LATIN.search(text):
+        return "latin"
+    return "other"
 
 
 def _split_translations(parsed: ParsedLrc) -> dict[tuple[int, int], str]:
     """Bilingual LRC (a Japanese line and its translation under the same time tag, as copied from
     many lyric sites): the line without kana at a shared time is the translation of the other.
     The translation entries are removed from ``parsed``; returns {(raw_index, tag_index) of the
-    lyric line: translation}.  Needs at least two such pairs, so one odd line is left alone."""
+    lyric line: translation}.  Needs at least two such pairs, so one odd line is left alone.
+
+    Once the file is recognised as bilingual, a shared time whose lyric has no kana either (an
+    English line, an all-kanji line such as 永遠) is paired too when the line written in the
+    translation's place (usually second) has no kana and is Chinese or in another script than
+    the lyric.  Two lines with kana are never paired (a duet); a "//" placeholder (QQ Music:
+    no translation for this line) is dropped without becoming a translation."""
     by_time: dict[int, list] = {}
     for e in parsed.entries:
         if e.text:
             by_time.setdefault(e.time_ms, []).append(e)
-    pairs = []
+    pairs, rest = [], []
     for group in by_time.values():
         if len(group) != 2:
             continue
         kana = [bool(_KANA.search(e.text)) for e in group]
         if kana.count(True) != 1:
+            rest.append(group)
             continue
         lyric, trans = (group[0], group[1]) if kana[0] else (group[1], group[0])
         if _HAN.search(trans.text) or _LATIN.search(trans.text):
             pairs.append((lyric, trans))
-    if len(pairs) < 2:
+        elif _is_placeholder(trans.text):
+            pairs.append((lyric, trans))
+    real = [(ly, tr) for ly, tr in pairs if not _is_placeholder(tr.text)]
+    if len(real) < 2:
         return {}
+    # which of the two lines holds the translation in this file (by raw order)
+    second = sum(1 for ly, tr in real if (tr.raw_index, tr.tag_index) > (ly.raw_index, ly.tag_index))
+    trans_second = second * 2 >= len(real)
+    for group in rest:
+        a, b = sorted(group, key=lambda e: (e.raw_index, e.tag_index))
+        lyric, trans = (a, b) if trans_second else (b, a)
+        if _KANA.search(trans.text) or _KANA.search(lyric.text):
+            continue  # two Japanese lines (or kana in the "translation"): left alone
+        if _is_placeholder(trans.text):
+            pairs.append((lyric, trans))
+        elif _script(trans.text) == "han" or _script(trans.text) != _script(lyric.text):
+            pairs.append((lyric, trans))
     drop = {id(t) for _, t in pairs}
     parsed.entries = [e for e in parsed.entries if id(e) not in drop]
-    return {(lyric.raw_index, lyric.tag_index): trans.text for lyric, trans in pairs}
+    return {(lyric.raw_index, lyric.tag_index): trans.text for lyric, trans in pairs
+            if not _is_placeholder(trans.text)}
 
 
 def _attach_translations(lines: list[Line], translations: dict[tuple[int, int], str], warnings: list[str]) -> None:
@@ -180,24 +273,25 @@ def _attach_translations(lines: list[Line], translations: dict[tuple[int, int], 
 
 def _lines_from_lrc(parsed: ParsedLrc, keep_times: bool, origin: str, source_id: str) -> list[Line]:
     """Build line instances in time order; untimed lines keep their raw position."""
-    items: list[tuple[Optional[int], str, LineSource]] = []
+    items: list[tuple[Optional[int], str, LineSource, Optional[int]]] = []
     for e in parsed.entries:
         if not keep_times and not e.text:
             continue
         src = LineSource(origin=origin, source_id=source_id, raw_index=e.raw_index,
                          raw_text=e.raw_text, tag_index=e.tag_index)
-        items.append((e.time_ms if keep_times else None, e.text, src))
+        items.append((e.time_ms if keep_times else None, e.text, src,
+                      e.end_ms if keep_times else None))
     for u in parsed.untimed:
         if not u.text:
             continue
         src = LineSource(origin=origin, source_id=source_id, raw_index=u.raw_index, raw_text=u.text)
         # insert after the last first-tag instance written before it in the raw text
         pos = 0
-        for j, (_, _, s) in enumerate(items):
+        for j, (_, _, s, _) in enumerate(items):
             if s.raw_index is not None and s.raw_index < u.raw_index and s.tag_index == 0:
                 pos = j + 1
-        items.insert(pos, (None, u.text, src))
-    return [_make_line(i, text, src, start) for i, (start, text, src) in enumerate(items)]
+        items.insert(pos, (None, u.text, src, None))
+    return _make_lines(items)
 
 
 def parse_lyrics_text(
@@ -272,10 +366,10 @@ def parse_lyrics_text(
             line = raw.strip()
             if line:
                 items.append((idx, line))
-        doc.lines = [
-            _make_line(i, line, LineSource(origin=origin, source_id=snapshot.id, raw_index=idx, raw_text=raw), None)
-            for i, (idx, line) in enumerate(items)
-        ]
+        doc.lines = _make_lines([
+            (None, line, LineSource(origin=origin, source_id=snapshot.id, raw_index=idx, raw_text=raw), None)
+            for idx, line in items
+        ])
 
     n_meta = sum(1 for ln in doc.lines if ln.kind == "meta")
     if n_meta:

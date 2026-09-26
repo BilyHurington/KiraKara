@@ -222,16 +222,36 @@ def units_from_spec(reading: str, units: Optional[Sequence[str]], lang: str) -> 
     return out
 
 
+# particles written は / へ / を but sung わ / え / お: the mora still maps onto its kana
+_PARTICLE_SOUND = {("は", "わ"), ("へ", "え"), ("を", "お")}
+
+
 def _assign_surfaces(seg: Segment) -> None:
-    """For pure kana segments with 1:1 unit mapping keep per-unit surfaces."""
-    if is_kana_text(seg.surface) and to_hiragana(seg.surface) == "".join(u.reading for u in seg.units):
+    """For pure kana segments with 1:1 unit mapping keep per-unit surfaces.
+
+    A unit per mora whose reading only differs from the written kana by a particle's sound
+    (には → に|わ) or a long-vowel mark keeps its kana too, so the segment stays splittable.
+    """
+    for u in seg.units:
+        u.surface = ""
+    if not is_kana_text(seg.surface) or not seg.units:
+        return
+    if to_hiragana(seg.surface) == "".join(u.reading for u in seg.units):
         pos = 0
         for u in seg.units:
             u.surface = seg.surface[pos:pos + len(u.reading)]
             pos += len(u.reading)
-    else:
-        for u in seg.units:
-            u.surface = ""
+        return
+    morae = split_morae(seg.surface)
+    if len(morae) != len(seg.units) or sum(len(m.text) for m in morae) != len(seg.surface):
+        return
+    if not all(m.text == u.reading or (m.text, u.reading) in _PARTICLE_SOUND or "long" in m.flags
+               for m, u in zip(morae, seg.units)):
+        return
+    pos = 0
+    for m, u in zip(morae, seg.units):
+        u.surface = seg.surface[pos:pos + len(m.text)]
+        pos += len(m.text)
 
 
 def replace_units_keep_ids(seg: Segment, new_units: list[Unit]) -> None:

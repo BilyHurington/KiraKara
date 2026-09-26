@@ -179,6 +179,22 @@ class LyricsDoc(_Base):
             ]
         )
 
+    def detail_revision(self, mode: str = "plain") -> str:
+        """Identity of the other inputs that change an alignment but are in neither revision
+        above: voices, unit flags (sokuon / long …) and segment languages (they change the
+        model spelling), and in LRC mode the anchors' hardness / tolerance and the end marks
+        (``imported_end_ms``, times of blank lines).  Kept apart from the two revisions so
+        results made before it existed are not all marked outdated."""
+        sung = [ln for ln in self.lines if ln.sing and ln.kind == "lyric"]
+        data: list[Any] = [
+            [(ln.id, ln.voice, [(s.lang, [u.flags for u in s.units]) for s in ln.segments]) for ln in sung]]
+        if mode == "lrc":
+            data.append([(ln.id, ln.imported_end_ms,
+                          (ln.anchor.hard, ln.anchor.tolerance_ms) if ln.anchor is not None else None)
+                         for ln in sung])
+            data.append([(ln.id, ln.imported_start_ms) for ln in self.lines if ln.kind == "blank"])
+        return stable_hash(data)
+
 
 # ---------------------------------------------------------------------------
 # Calibration

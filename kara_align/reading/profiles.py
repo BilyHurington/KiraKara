@@ -17,6 +17,10 @@ string per unit so token positions map back to units.
   dropped from the result).
 * 撥音 ん -> ``n``.
 * long mark ー -> the previous unit's final vowel (empty if none).
+* neighbours are only taken from the units passed in one call: the aligner
+  calls the profile once per lyric line, so a line-final っ is empty and a
+  line-initial ー has no vowel (both reported as ``unaligned``), never
+  borrowed from the next / previous line.
 * ``en`` units: lowercase letters (apostrophes dropped).
 * ``zh`` units: tone-less pinyin letters, ü written as ``v``.
 """
@@ -114,7 +118,7 @@ class JaHepburnProfile:
                 base.append(_letters(r))
             elif "sokuon" in fl or to_hiragana(r) == "っ":
                 base.append("\0sokuon")
-            elif "long" in fl or r in ("ー", "〜", "～"):
+            elif "long" in fl or r in ("ー", "〜", "～", "~"):
                 base.append("\0long")
             else:
                 base.append(kana_to_romaji(r))

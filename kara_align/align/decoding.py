@@ -67,13 +67,25 @@ def prepare(
                 issues.append(Issue(code="model_language_mismatch", severity="warning", line_id=lid,
                                     message=f"后端模型未针对语言「{seg.lang}」训练",
                                     data={"lang": seg.lang}))
+            if not seg.units and any(c.isalnum() for c in seg.surface):
+                # e.g. digits (3人) or an unknown word: silently not aligned otherwise
+                issues.append(Issue(code="segment_no_reading", severity="warning", line_id=lid,
+                                    message=f"片段「{seg.surface}」没有读音，不参与对齐；请补充读音（数字需写出读法）",
+                                    data={"segment_id": seg.id, "surface": seg.surface}))
             for u in seg.units:
                 units[u.id] = UnitInfo(u.id, lid, seg.id, u.reading, seg.lang)
                 line_units[lid].append(u.id)
     ids = [u for lid in order for u in line_units[lid]]
     infos = [units[u] for u in ids]
-    texts = profile.unit_texts([i.reading for i in infos], [i.lang for i in infos],
-                               [_flags(doc, i) for i in infos]) if infos else []
+    # one profile call per line: っ / ー take their neighbour within the line only (a line-final っ
+    # has no consonant to double, a line-initial ー no vowel to lengthen; never the next / previous line)
+    texts: list[str] = []
+    for lid in order:
+        li = [units[u] for u in line_units[lid]]
+        if li:
+            flags = {u.id: list(u.flags) for u in lines[lid].units()}
+            texts += profile.unit_texts([i.reading for i in li], [i.lang for i in li],
+                                        [flags.get(i.unit_id, []) for i in li])
     toks = tokenize(ids, list(texts)) if infos else []
     by_id = {t.unit_id: t for t in toks}
     for i, text in zip(infos, texts):
@@ -91,15 +103,6 @@ def prepare(
                                 message=f"单元「{i.reading}」中的字符 {i.unknown} 不在模型词表中",
                                 data={"unknown": i.unknown}))
     return Prepared(lines, order, units, line_units, issues)
-
-
-def _flags(doc: LyricsDoc, info: UnitInfo) -> list[str]:
-    ln = doc.line(info.line_id)
-    for seg in ln.segments:
-        for u in seg.units:
-            if u.id == info.unit_id:
-                return list(u.flags)
-    return []
 
 
 @dataclass

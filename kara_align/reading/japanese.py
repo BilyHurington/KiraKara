@@ -5,7 +5,8 @@ Morae (拍) rules:
 * 拗音 / small vowels merge with the preceding kana (きゃ, しゅ, ふぁ, ヴぁ, てぃ).
 * 促音 ``っ`` is its own mora, flag ``sokuon``.
 * 撥音 ``ん`` is its own mora, flag ``hatsuon``.
-* long-vowel marks ``ー`` / ``〜`` / ``～`` are their own mora, flag ``long``.
+* long-vowel marks ``ー`` / ``〜`` / ``～`` are their own mora, flag ``long``; an ASCII
+  ``~`` right after kana (``ラララ~``) is one too.  All of them read as ``ー``.
 
 Segmentation and rule readings come from MeCab (fugashi + UniDic) when it is
 installed: one segment per word, a kanji word keeps its okurigana (好き, 始まり,
@@ -24,7 +25,10 @@ from typing import Optional
 from ..models import Segment, Unit
 
 SMALL_MERGE = set("ゃゅょぁぃぅぇぉゎ")
+# wave dash 〜 (U+301C) and full-width tilde ～ (U+FF5E) are written for a long vowel as often as ー
 LONG_MARKS = set("ー〜～")
+# the ASCII tilde is only a long vowel after kana (``ラララ~``); elsewhere it is punctuation
+ASCII_TILDE = "~"
 SOKUON = "っ"
 HATSUON = "ん"
 
@@ -36,16 +40,29 @@ class Mora:
 
 
 def to_hiragana(s: str) -> str:
-    """Katakana -> hiragana (ヴ -> ゔ); other characters unchanged."""
-    s = unicodedata.normalize("NFKC", s)
-    out = []
+    """Katakana -> hiragana (ヴ -> ゔ); long-vowel marks -> ``ー``; other characters unchanged.
+
+    〜 / ～ always become ``ー`` (NFKC would fold ～ to an ASCII ``~`` that nothing reads as a
+    long vowel); an ASCII ``~`` does when it follows kana, or when the string is only tildes
+    (a single long-vowel unit such as ``["ら", "~"]``).
+    """
+    s = unicodedata.normalize("NFKC", s.replace("～", "ー").replace("〜", "ー"))
+    only_marks = bool(s) and all(c in "ー" + ASCII_TILDE for c in s)
+    out: list[str] = []
     for ch in s:
         code = ord(ch)
         if 0x30A1 <= code <= 0x30F6:
             out.append(chr(code - 0x60))
+        elif ch == ASCII_TILDE and (only_marks or (out and _kana_code(out[-1]))):
+            out.append("ー")
         else:
             out.append(ch)
     return "".join(out)
+
+
+def _kana_code(ch: str) -> bool:
+    code = ord(ch)
+    return (0x3041 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF) and ch not in _NON_KANA
 
 
 # characters inside the kana Unicode blocks that are punctuation / marks,
@@ -68,7 +85,18 @@ def is_kanji(ch: str) -> bool:
 
 
 def is_kana_text(s: str) -> bool:
-    return bool(s) and all(is_kana(c) for c in s)
+    """Only kana and long-vowel marks (an ASCII ``~`` counts after kana: ``ラララ~``)."""
+    if not s:
+        return False
+    for i, c in enumerate(s):
+        if not (is_kana(c) or (c == ASCII_TILDE and i > 0 and (is_kana(s[i - 1]) or s[i - 1] == ASCII_TILDE))):
+            return False
+    return True
+
+
+def is_long_mark_text(s: str) -> bool:
+    """Only long-vowel marks (ー 〜 ～ ~): a separate "word" that lengthens the one before it."""
+    return bool(s) and all(c in LONG_MARKS or c == ASCII_TILDE for c in s)
 
 
 def split_morae(kana: str) -> list[Mora]:
@@ -82,7 +110,7 @@ def split_morae(kana: str) -> list[Mora]:
             morae.append(Mora(ch, ["sokuon"]))
         elif ch == HATSUON:
             morae.append(Mora(ch, ["hatsuon"]))
-        elif ch in LONG_MARKS:
+        elif ch in LONG_MARKS or ch == ASCII_TILDE:
             morae.append(Mora("ー", ["long"]))
         else:
             morae.append(Mora(ch, []))
@@ -120,7 +148,9 @@ def _kks():
 
 _CLASS_RE = re.compile(
     # kana without the marks in _NON_KANA (゛゜゠・ are punctuation)
-    r"(?P<kana>[\u3041-\u3096\u3099\u309a\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ffー〜～]+)"
+    # (an ASCII ~ continues a kana run: ラララ~)
+    r"(?P<kana>[\u3041-\u3096\u3099\u309a\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ffー〜～]"
+    r"[\u3041-\u3096\u3099\u309a\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ffー〜～~]*)"
     r"|(?P<kanji>[一-鿿㐀-䶿豈-﫿々〆ヶ]+)"
     r"|(?P<latin>[A-Za-zＡ-Ｚａ-ｚ']+)"
     r"|(?P<digit>[0-9０-９]+)"
@@ -232,6 +262,17 @@ _DIGIT_RE = re.compile(r"^[0-9０-９]+$")
 _PARTICLE_SOUND = {"は": "わ", "へ": "え"}
 
 
+def _long_after(segs: list[Segment], run: str) -> bool:
+    """Long-vowel marks written as their own word right after a sung Japanese segment
+    (空～, 空~, MeCab's 補助記号): one ``ー`` unit per mark, lengthening the vowel before."""
+    if not is_long_mark_text(run) or not segs or not segs[-1].units or segs[-1].lang != "ja":
+        return False
+    segs.append(Segment(surface=run, reading="ー" * len(run), lang="ja",
+                        units=[Unit(reading="ー", surface=c, flags=["long"]) for c in run],
+                        reading_source="rule"))
+    return True
+
+
 def _punct(segs: list[Segment], run: str) -> None:
     if segs and not segs[-1].units and segs[-1].reading_source == "none" and not segs[-1].uncertain:
         segs[-1].surface += run  # merge consecutive punctuation / spaces
@@ -258,6 +299,8 @@ def _word_segments(text: str, words: list[tuple[int, int, str, str]]) -> list[Se
             segs.append(Segment(surface=surf, reading=reading, lang="ja", units=reading_units(reading),
                                 reading_source="rule", uncertain=True,
                                 candidates=[alt] if alt != reading and is_kana_text(alt) else []))
+        elif _long_after(segs, surf):
+            pass
         elif is_kana_text(surf):
             units = kana_units(surf)
             sung = split_morae(kana) if is_kana_text(kana) else []
@@ -312,7 +355,7 @@ def _class_segments(text: str) -> list[Segment]:
         elif kind == "digit":
             segs.append(Segment(surface=run, reading=None, lang="ja", units=[], uncertain=True,
                                 reading_source="none", note="数字：读音需要人工或 AI 补充"))
-        else:
+        elif not _long_after(segs, run):
             _punct(segs, run)
     return segs
 

@@ -5,7 +5,10 @@ sung start; the global offset is the median of (sung start − LRC time), which
 one badly aligned line cannot move.  ``agree`` is the share of lines within
 0.7 s of that median: a low value means the LRC was timed on another
 recording.  The separated vocals' first clear onset is returned as a hint.
-Nothing is saved: the user still marks / confirms the first onset.
+Stems are only used while they belong to the current original
+(``service.stems_current``); otherwise the trial runs on the original and no
+vocal onset is given.  Nothing is saved: the user still marks / confirms the
+first onset.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ from .interfaces import CancelToken, Cancelled
 
 
 def _audio_role(h: "S.ProjectHandle") -> str:
-    return "vocals" if h.project.asset("vocals") is not None else "original"
+    # stems of a replaced original would place every line on another recording's timeline
+    return "vocals" if S.stems_current(h.project) else "original"
 
 
 def suggest_calibration(h: "S.ProjectHandle", *, cancel: Optional[CancelToken] = None,
@@ -32,7 +36,7 @@ def suggest_calibration(h: "S.ProjectHandle", *, cancel: Optional[CancelToken] =
     return {
         "shift_ms": est["shift_ms"], "agree": round(est["agree"], 3), "lines_checked": est["lines"],
         "line_starts": est["starts"], "audio_role": _audio_role(h),
-        "vocal_onset_ms": _vocal_onset_ms(h) if h.project.asset("vocals") is not None else None,
+        "vocal_onset_ms": _vocal_onset_ms(h) if S.stems_current(h.project) else None,
     }
 
 
@@ -43,7 +47,10 @@ def _vocal_onset_ms(h: "S.ProjectHandle") -> Optional[int]:
     from .audio.io import load_audio
 
     try:
-        data, sr = load_audio(S.asset_path(h, h.project.asset("vocals")), mono=True)
+        voc = h.project.asset("vocals")
+        data, sr = load_audio(S.asset_path(h, voc), mono=True)
+        # sample 0 of the stem lies at its origin on the original timeline
+        origin_ms = voc.origin_offset_samples * 1000.0 / voc.sample_rate
         act = detect_activity(rms_envelope_db(data[0], sr, hop_ms=10.0), 10.0)
     except Exception:
         return None
@@ -53,7 +60,7 @@ def _vocal_onset_ms(h: "S.ProjectHandle") -> Optional[int]:
     run = int(300 / act.hop_ms)
     for i in range(len(singing) - run):
         if singing[i] and singing[i:i + run].all():
-            return int(round(i * act.hop_ms))
+            return int(round(i * act.hop_ms + origin_ms))
     return None
 
 

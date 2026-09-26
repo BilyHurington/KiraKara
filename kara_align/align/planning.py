@@ -1,7 +1,9 @@
 """Lyric task planning (design §4.4).
 
 Plain mode: one ordered task per voice over the whole emission; no anchors,
-no distribution of lyrics over audio chunks.
+no distribution of lyrics over audio chunks.  A local rerun of some lines
+(``plan_plain_local``) decodes only the stretch between the neighbouring lines'
+times in the previous result, with those neighbours as context.
 
 LRC mode: each reliable anchor starts a group; lines without an anchor are
 aligned jointly with the group they follow, bounded by the neighbouring
@@ -14,7 +16,11 @@ but only commits its *retained* lines.  The next anchor only bounds the
 search; it is not the end of the line.  When the LRC marks where the last
 participating line ends (a timed blank line before an interlude), the window
 also stops ``end_marker_margin`` after that mark, so a line cannot reach into
-a long interlude.  Windows are clipped to the audio.
+a long interlude.  Lines written *before* the first timed line have no anchor
+of their own: their window starts at the audio start, not ``left_margin``
+before the first anchor (they may be sung long before it).  Windows are
+clipped to the audio.  Lines left out of a run (``exclude``: lines after the
+end of the audio) take no part at all – neither as targets nor as context.
 """
 
 from __future__ import annotations
@@ -67,15 +73,52 @@ def _frames(ms_lo: float, ms_hi: float, fm: FrameMap, num_frames: int) -> tuple[
     return s, max(s, e)
 
 
-def plan_plain(doc: LyricsDoc, num_frames: int, line_ids: Optional[list[str]] = None) -> list[Task]:
+def plan_plain(doc: LyricsDoc, num_frames: int, line_ids: Optional[list[str]] = None,
+               exclude: Optional[set[str]] = None) -> list[Task]:
     tasks = []
-    for voice, lines in _voices(doc.sung_lines()).items():
+    exclude = exclude or set()
+    for voice, lines in _voices(ln for ln in doc.sung_lines() if ln.id not in exclude).items():
         ids = [ln.id for ln in lines]
         retained = [i for i in ids if line_ids is None or i in line_ids]
         if not retained:
             continue
         # participating = the whole ordered stream; lyrics are never split by chunk
         tasks.append(Task(f"plain-{voice}", voice, ids, retained, 0, num_frames, [], "plain"))
+    return tasks
+
+
+def plan_plain_local(doc: LyricsDoc, line_ids: list[str], ranges: dict[str, tuple[int, int]], cfg: DecodeConfig,
+                     frame_map: FrameMap, num_frames: int, audio_duration_ms: int,
+                     exclude: Optional[set[str]] = None) -> Optional[list[Task]]:
+    """Plain-mode local rerun: each run of consecutive target lines is decoded between its
+    neighbours' times in the previous result (``ranges``: line_id -> (start, end) ms), with those
+    neighbours as context lines, instead of decoding the whole song again.
+
+    Returns None when a neighbour has no time (then the whole stream must be decoded)."""
+    exclude = exclude or set()
+    wanted = set(line_ids)
+    tasks: list[Task] = []
+    for voice, lines in _voices(ln for ln in doc.sung_lines() if ln.id not in exclude).items():
+        ids = [ln.id for ln in lines]
+        i = 0
+        while i < len(ids):
+            if ids[i] not in wanted:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(ids) and ids[j + 1] in wanted:
+                j += 1
+            prev_id = ids[i - 1] if i > 0 else None
+            next_id = ids[j + 1] if j + 1 < len(ids) else None
+            if (prev_id is not None and prev_id not in ranges) or (next_id is not None and next_id not in ranges):
+                return None
+            lo = ranges[prev_id][0] - cfg.left_margin_ms if prev_id else 0
+            hi = ranges[next_id][1] + cfg.right_margin_ms if next_id else audio_duration_ms
+            lo, hi = max(0, lo), min(audio_duration_ms, max(hi, lo))
+            s, e = _frames(lo, hi, frame_map, num_frames)
+            part = ([prev_id] if prev_id else []) + ids[i:j + 1] + ([next_id] if next_id else [])
+            tasks.append(Task(f"plain-local-{voice}-{i}", voice, part, ids[i:j + 1], s, e, [], "joint"))
+            i = j + 1
     return tasks
 
 
@@ -95,12 +138,14 @@ def plan_lrc(
     line_ids: Optional[list[str]] = None,
     force_joint: Optional[set[str]] = None,
     extra_context: int = 0,
+    exclude: Optional[set[str]] = None,
 ) -> list[Task]:
     starts = effective_line_starts(doc, cal)
     ends = effective_line_ends(doc, cal)
     force_joint = force_joint or set()
+    exclude = exclude or set()
     tasks: list[Task] = []
-    for voice, lines in _voices(doc.sung_lines()).items():
+    for voice, lines in _voices(ln for ln in doc.sung_lines() if ln.id not in exclude).items():
         # 1. groups: an anchored line starts a group; unanchored lines follow it
         groups: list[list[Line]] = []
         for ln in lines:
@@ -151,6 +196,10 @@ def plan_lrc(
                 first_anchor = 0
             nxt = g_anchor(hi_g + 1) if hi_g + 1 < len(groups) else None
             lo_ms = first_anchor - cfg.left_margin_ms
+            if part_lines[0].id not in starts:
+                # lines before the first timed line: nothing bounds them but the audio start
+                # (the soft anchor of the timed line still pulls it to its time)
+                lo_ms = 0
             hi_ms = (nxt + cfg.right_margin_ms) if nxt is not None else audio_duration_ms
             last_end = ends.get(part_lines[-1].id)
             if last_end is not None:
