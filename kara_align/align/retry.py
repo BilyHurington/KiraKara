@@ -87,39 +87,53 @@ def reading_overrides(prep: Prepared, line_id: str, profile: TranslitProfile,
     """Alternative unit/token sequences built from ``segment.candidates``.
 
     Returns (label, {line_id: [(synthetic_unit_id, tokens)]}, {synthetic_id: reading}).
+    The whole line is spelled again with the candidate in place, so っ / ー next to it take
+    their neighbour from the candidate; a candidate equal to the current reading, or one that
+    gives the same tokens as another, is not decoded twice.
     """
     from ..reading.japanese import split_morae  # written by the reading module
 
     line = prep.lines[line_id]
+    base_seq = [(u.id, list(prep.units[u.id].token_ids)) for s2 in line.segments for u in s2.units
+                if u.id in prep.units]
+    seen: set[tuple] = {tuple(tuple(t) for _, t in base_seq)}
     out = []
     for seg in line.segments:
-        for cand in seg.candidates[:max_n]:
-            if seg.confirmed and cand == seg.reading:
+        for cand in dict.fromkeys(seg.candidates):
+            if len(out) >= max_n:
+                return out
+            if not cand or cand == seg.reading or cand == "".join(u.reading for u in seg.units):
                 continue
-            seq: list[tuple[str, list[int]]] = []
+            ids: list[str] = []
+            readings_l: list[str] = []
+            langs: list[str] = []
+            flags: list[list[str]] = []
             readings: dict[str, str] = {}
-            ok = True
             for s2 in line.segments:
                 if s2.id != seg.id:
                     for u in s2.units:
-                        seq.append((u.id, prep.units[u.id].token_ids))
+                        ids.append(u.id)
+                        readings_l.append(u.reading)
+                        langs.append(s2.lang)
+                        flags.append(list(u.flags))
                     continue
-                raw = split_morae(cand)
-                morae = [m if isinstance(m, str) else getattr(m, "text", str(m)) for m in raw]
-                mflags = [[] if isinstance(m, str) else list(getattr(m, "flags", [])) for m in raw]
-                ids = [f"{seg.id}~{k}" for k in range(len(morae))]
-                texts = profile.unit_texts(morae, [seg.lang] * len(morae), mflags)
-                toks = {t.unit_id: t for t in tokenize(ids, list(texts))}
-                for uid, m in zip(ids, morae):
-                    t = toks.get(uid)
-                    if t is None or not t.token_ids:
-                        ok = False
-                    seq.append((uid, list(t.token_ids) if t else []))
-                    readings[uid] = m
-            if ok:
-                out.append((f"reading:{seg.surface}={cand}", {line_id: seq}, readings))
-            if len(out) >= max_n:
-                return out
+                for k, m in enumerate(split_morae(cand)):
+                    uid = f"{seg.id}~{k}"
+                    ids.append(uid)
+                    readings_l.append(m.text)
+                    langs.append(seg.lang)
+                    flags.append(list(m.flags))
+                    readings[uid] = m.text
+            texts = profile.unit_texts(readings_l, langs, flags)
+            toks = {t.unit_id: t for t in tokenize(ids, list(texts))}
+            seq = [(uid, list(toks[uid].token_ids) if uid in toks else []) for uid in ids]
+            if any(not t for uid, t in seq if uid in readings):
+                continue  # the candidate itself cannot be spelled for the model
+            key = tuple(tuple(t) for _, t in seq)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((f"reading:{seg.surface}={cand}", {line_id: seq}, readings))
     return out
 
 

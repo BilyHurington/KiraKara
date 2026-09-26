@@ -13,7 +13,7 @@ from typing import Iterable, Literal, Optional
 
 from ..models import Line, LineSource, LyricsDoc, new_id
 from .lrc import parse_lrc
-from .parse import detect_format, normalize_text
+from .parse import _is_placeholder, detect_format, normalize_text
 
 TrackKind = Literal["translation", "romanization"]
 
@@ -102,9 +102,11 @@ def pair_track(doc: LyricsDoc, track_text: str, *, kind: TrackKind = "translatio
         used_line.add(ln.id)
         used_track.add(ti)
 
-    preview.pairs = [matched[ln.id] for ln in targets if ln.id in matched]
+    # QQ Music writes "//" for a line without translation: it keeps the lines in step (by time
+    # or by order) but is never paired as text
+    preview.pairs = [matched[ln.id] for ln in targets if ln.id in matched and not _is_placeholder(matched[ln.id].text)]
     preview.unmatched_line_ids = [ln.id for ln in targets if ln.id not in used_line]
-    preview.unmatched_texts = [tl for ti, tl in enumerate(track) if ti not in used_track]
+    preview.unmatched_texts = [tl for ti, tl in enumerate(track) if ti not in used_track and not _is_placeholder(tl.text)]
     return preview
 
 

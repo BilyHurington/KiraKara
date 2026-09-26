@@ -53,24 +53,45 @@ def effective_line_ends(doc: LyricsDoc, cal: Calibration) -> dict[str, int]:
     """line_id -> effective end hint for sung lines whose LRC marks an end.
 
     An end is marked either explicitly (``imported_end_ms``) or, as NetEase and
-    most LRC files do before an interlude, by a *timed blank line* right after
-    the lyric.  The hint moves with the line (global shift or manual anchor).
-    It is only approximate: singers often hold the last note past it.
+    most LRC files do before an interlude, by a *timed blank line* after the
+    lyric.  Untimed lines between a timed line and that blank line (the second
+    half of a split line, a line added by hand) belong to the timed line's group
+    and are sung before the mark, so the end is given to the *last* of them; lines
+    that are not sung and carry no time are looked past.  The hint moves with the
+    group's timed line (global shift or manual anchor).  It is only approximate:
+    singers often hold the last note past it.
     """
     starts = effective_line_starts(doc, cal)
     out: dict[str, int] = {}
-    lines = doc.lines
-    for i, ln in enumerate(lines):
-        if ln.id not in starts or ln.imported_start_ms is None:
-            continue
-        end = ln.imported_end_ms
-        if end is None and i + 1 < len(lines):
-            nxt = lines[i + 1]
-            if nxt.kind == "blank" and not nxt.text.strip() and nxt.imported_start_ms is not None:
-                end = nxt.imported_start_ms
-        if end is None or end <= ln.imported_start_ms:
-            continue
-        out[ln.id] = starts[ln.id][0] + (int(end) - int(ln.imported_start_ms))
+    head = None  # last timed sung line whose group is still open
+    last = None  # last sung line of that group (the head or an untimed line after it)
+
+    def at(end: Optional[int]) -> Optional[int]:
+        if head is None or end is None or head.imported_start_ms is None or end <= head.imported_start_ms:
+            return None
+        return starts[head.id][0] + (int(end) - int(head.imported_start_ms))
+
+    for ln in doc.lines:
+        sung = ln.sing and ln.kind == "lyric"
+        if sung and ln.id in starts and ln.imported_start_ms is not None:
+            head = last = ln
+            e = at(ln.imported_end_ms)
+            if e is not None:
+                out[ln.id] = e
+        elif sung and ln.id not in starts:
+            if head is not None and ln.voice == head.voice:
+                last = ln
+                e = at(ln.imported_end_ms)
+                if e is not None:
+                    out[ln.id] = e
+        elif ln.kind == "blank" and not ln.text.strip() and ln.imported_start_ms is not None:
+            if head is not None and last is not None and last.id not in out:
+                e = at(ln.imported_start_ms)
+                if e is not None:
+                    out[last.id] = e
+            head = last = None
+        elif ln.imported_start_ms is not None or (sung and ln.anchor is not None):
+            head = last = None  # a timed line that is not sung (or an anchored one) closes the group
     return out
 
 
@@ -80,8 +101,19 @@ def _snapshot(cal: Calibration) -> dict:
         "confirmed": cal.confirmed,
         "reference_line_id": cal.reference_line_id,
         "marked_ms": cal.marked_ms,
+        "checks": [c.model_dump(mode="json") for c in cal.checks],
         "at": utcnow(),
     }
+
+
+def recheck(cal: Calibration, doc: Optional[LyricsDoc]) -> Calibration:
+    """Residuals of the check marks recomputed for the current shift / anchors (in place).
+    Checks on lines that no longer exist are dropped."""
+    if doc is None:
+        return cal
+    ids = {ln.id for ln in doc.lines}
+    cal.checks = [_recheck(doc, cal, c) for c in cal.checks if c.line_id in ids]
+    return cal
 
 
 def _with_history(cal: Calibration, action: str) -> Calibration:
@@ -107,13 +139,13 @@ def mark_first_onset(cal: Calibration, doc: LyricsDoc, line_id: str, marked_ms: 
     return new
 
 
-def confirm_zero(cal: Calibration) -> Calibration:
+def confirm_zero(cal: Calibration, doc: Optional[LyricsDoc] = None) -> Calibration:
     new = _with_history(cal, "confirm_zero")
     new.user_shift_ms = 0
     new.reference_line_id = None
     new.marked_ms = None
     new.confirmed = True
-    return new
+    return recheck(new, doc)
 
 
 def set_user_shift(cal: Calibration, shift_ms: int, doc: Optional[LyricsDoc] = None) -> Calibration:
@@ -126,7 +158,7 @@ def set_user_shift(cal: Calibration, shift_ms: int, doc: Optional[LyricsDoc] = N
     return new
 
 
-def undo(cal: Calibration) -> Calibration:
+def undo(cal: Calibration, doc: Optional[LyricsDoc] = None) -> Calibration:
     if not cal.history:
         return cal
     new = cal.model_copy(deep=True)
@@ -135,11 +167,16 @@ def undo(cal: Calibration) -> Calibration:
     new.confirmed = snap["confirmed"]
     new.reference_line_id = snap["reference_line_id"]
     new.marked_ms = snap["marked_ms"]
-    return new
+    if "checks" in snap:  # older history entries did not record the checks
+        new.checks = [CalibrationCheck.model_validate(c) for c in snap["checks"]]
+    return recheck(new, doc)
 
 
 def _recheck(doc: LyricsDoc, cal: Calibration, c: CalibrationCheck) -> CalibrationCheck:
-    eff = effective_ms(doc, cal, doc.line(c.line_id))
+    try:
+        eff = effective_ms(doc, cal, doc.line(c.line_id))
+    except KeyError:
+        eff = None
     return CalibrationCheck(line_id=c.line_id, marked_ms=c.marked_ms,
                             residual_ms=0 if eff is None else c.marked_ms - eff)
 
@@ -156,15 +193,19 @@ def add_check(
     eff = effective_ms(doc, cal, line)
     if eff is None:
         raise ValueError(f"行 {line_id} 没有可用于检查的时间")
-    new = cal.model_copy(deep=True)
+    new = _with_history(cal, "check")  # undo removes the check again
     new.checks = [c for c in new.checks if c.line_id != line_id]
     new.checks.append(CalibrationCheck(line_id=line_id, marked_ms=int(marked_ms), residual_ms=int(marked_ms) - eff))
     return new, check_issues(new, threshold_ms)
 
 
-def check_issues(cal: Calibration, threshold_ms: int = MISMATCH_THRESHOLD_MS) -> list[Issue]:
+def check_issues(cal: Calibration, threshold_ms: int = MISMATCH_THRESHOLD_MS,
+                 doc: Optional[LyricsDoc] = None) -> list[Issue]:
+    """Mismatch warnings for the check marks; with ``doc`` the residuals are recomputed for the
+    current shift and line anchors instead of trusting the stored values."""
     issues = []
-    for c in cal.checks:
+    checks = recheck(cal.model_copy(deep=True), doc).checks if doc is not None else cal.checks
+    for c in checks:
         if abs(c.residual_ms) > threshold_ms:
             issues.append(Issue(
                 code="calibration_mismatch", severity="warning", line_id=c.line_id,

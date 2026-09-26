@@ -232,6 +232,10 @@ def staleness(p: Project, r: AlignmentResult) -> Optional[str]:
         reasons.append("歌词文本已修改")
     elif s.lyrics_reading_revision != p.lyrics.reading_revision():
         reasons.append("读音或发音单元已修改")
+    elif r.stats.get("detail_revision") and s.mode == p.mode \
+            and r.stats["detail_revision"] != p.lyrics.detail_revision(p.mode):
+        # recorded since round 5; older results are only compared by the revisions above
+        reasons.append("声部、发音标记、片段语言、锚点容差或结束标记已修改")
     if p.mode == "lrc" and s.mode == "lrc" and s.calibration_hash != current_calibration_hash(p):
         reasons.append("校准或锚点已修改")
     asset = next((a for a in p.audio if a.id == s.audio_asset_id), None)
@@ -269,7 +273,7 @@ def project_view(h: ProjectHandle) -> dict:
         eff = effective_line_starts(p.lyrics, p.calibration)
         cal_issues: list[Issue] = []
         if p.mode == "lrc":
-            cal_issues = validate_anchors(p.lyrics, p.calibration, duration) + check_issues(p.calibration)
+            cal_issues = validate_anchors(p.lyrics, p.calibration, duration) + check_issues(p.calibration, doc=p.lyrics)
         mode_notice = None
         if p.mode == "plain" and any(ln.imported_start_ms is not None for ln in p.lyrics.lines):
             mode_notice = "普通模式：歌词中的 LRC 时间不会作为锚点使用"
@@ -486,17 +490,68 @@ def apply_lyrics(h: ProjectHandle, preview_id: str, *, prepare: bool = True) -> 
         if res.snapshot is not None:
             p.sources.append(res.snapshot)
         extra = getattr(res, "extra_tracks", None) or {}
+        old_doc = p.lyrics
         p.lyrics = doc
         messages: list[str] = []
         if prepare:
             messages += prepare_readings_locked(p)
-        # calibration refers to the old lines: keep the shift, drop references that no longer exist
-        ids = {ln.id for ln in doc.lines}
-        if p.calibration.reference_line_id not in ids:
-            p.calibration.reference_line_id = None
-        p.calibration.checks = [c for c in p.calibration.checks if c.line_id in ids]
+        messages += _calibration_for_new_lyrics(p, old_doc)
         h.save()
         return messages + [f"可配对的附加歌词轨: {', '.join(extra)}"] if extra else messages
+
+
+def _timed_signature(doc: LyricsDoc) -> list[tuple]:
+    return [(ln.text, ln.imported_start_ms) for ln in doc.lines if ln.imported_start_ms is not None]
+
+
+def _calibration_for_new_lyrics(p: Project, old: LyricsDoc) -> list[str]:
+    """The calibration was made for the old lyrics' times.  Line ids are positional (L0001 …),
+    so a line only keeps meaning the same thing when its text *and* imported time are unchanged.
+
+    * identical timed lines (and [offset]): nothing changes;
+    * otherwise the calibration is no longer confirmed; the reference mark and check marks stay
+      only on lines that are still the same; the shift is kept when the reference line is still
+      the same or most timed lines are unchanged (e.g. one typo fixed), else reset to 0
+      (a different LRC); the old state stays in the history (undo).
+    """
+    from .align import calibration as C
+
+    cal = p.calibration
+    new = p.lyrics
+    if _timed_signature(old) == _timed_signature(new) and old.embedded_shift_ms == new.embedded_shift_ms:
+        C.recheck(cal, new)
+        return []
+    if cal.user_shift_ms == 0 and not cal.confirmed and not cal.checks and cal.reference_line_id is None:
+        return []
+
+    def same(line_id: Optional[str]) -> bool:
+        if line_id is None:
+            return False
+        try:
+            a, b = old.line(line_id), new.line(line_id)
+        except KeyError:
+            return False
+        return (a.text, a.imported_start_ms) == (b.text, b.imported_start_ms)
+
+    old_sig = _timed_signature(old)
+    new_sig = _timed_signature(new)
+    kept = sum(1 for x in new_sig if x in set(old_sig))
+    similar = bool(new_sig) and kept / len(new_sig) >= 0.8 and old.embedded_shift_ms == new.embedded_shift_ms
+    newcal = C._with_history(cal, "lyrics_changed")
+    newcal.confirmed = False
+    msgs = []
+    if not same(cal.reference_line_id):
+        newcal.reference_line_id = None
+        newcal.marked_ms = None
+    if cal.user_shift_ms and not (same(cal.reference_line_id) or similar):
+        newcal.user_shift_ms = 0
+        msgs.append(f"歌词已更换：原来的整体偏移（{cal.user_shift_ms:+d} ms）属于旧歌词，已重置为 0；请重新校准首音"
+                    "（可撤销）")
+    elif cal.confirmed:
+        msgs.append("歌词已更换：请重新确认首音校准")
+    newcal.checks = [c for c in cal.checks if same(c.line_id)]
+    p.calibration = C.recheck(newcal, new)
+    return msgs
 
 
 def prepare_readings_locked(p: Project, overwrite_rule: bool = True) -> list[str]:
@@ -620,15 +675,21 @@ def parse_from_song(h: ProjectHandle, platform: str, song_id: str, *, mode: Opti
 
 
 def update_line(h: ProjectHandle, line_id: str, **fields: Any) -> None:
+    from .lyrics.parse import normalize_text
     from .reading.prepare import prepare_line
 
     with h.lock:
         ln = _line(h, line_id)
+        if fields.get("text") is not None:
+            # same canonical kana as imported text (composed, full width); one line only
+            fields["text"] = normalize_text(str(fields["text"])).replace("\n", " ").strip()
         text_changed = "text" in fields and fields["text"] is not None and fields["text"] != ln.text
         for k in ("text", "sing", "kind", "translation", "voice"):
             if k in fields and fields[k] is not None:
                 setattr(ln, k, fields[k])
-        if text_changed:
+        if text_changed or (ln.kind == "lyric" and ln.sing and not ln.units()):
+            # a line switched back to a sung lyric (or edited) is prepared now, in the project:
+            # an alignment must never refer to units the project does not have
             prepare_line(ln, h.project.lyrics.language)
         h.save()
 
@@ -717,7 +778,10 @@ def ai_validate(h: ProjectHandle, text: str) -> dict:
         if rt is not None:
             rt.response_raw = text[:500_000]
             rt.status = "validated"
-            rt.report = report.to_dict()
+            # the prompt's per-line reading hashes stay: a later validation of the same snapshot
+            # must still see readings changed since the prompt
+            rt.report = {**{k: v for k, v in rt.report.items() if k in ("line_hashes", "line_texts")},
+                         "validation": report.to_dict()}
         report_id = new_id("rep")
         h.previews[report_id] = (report, rt.id if rt else None)
         h.save()
@@ -1323,13 +1387,13 @@ def calibration_op(h: ProjectHandle, op: str, **kw: Any) -> None:
         elif op == "shift":
             p.calibration = C.set_user_shift(p.calibration, int(kw["user_shift_ms"]), p.lyrics)
         elif op == "confirm-zero":
-            p.calibration = C.confirm_zero(p.calibration)
+            p.calibration = C.confirm_zero(p.calibration, p.lyrics)
         elif op == "check":
             _line(h, kw["line_id"])
             # issues are recomputed for every view, only the calibration is stored
             p.calibration, _issues = C.add_check(p.calibration, p.lyrics, kw["line_id"], int(kw["marked_ms"]))
         elif op == "undo":
-            p.calibration = C.undo(p.calibration)
+            p.calibration = C.undo(p.calibration, p.lyrics)
         else:
             raise ServiceError(f"未知校准操作 {op}")
         h.save()
@@ -1370,6 +1434,13 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
         last_progress["value"] = max(last_progress["value"], frac)
         user_progress(last_progress["value"], msg)
     with h.lock:
+        if any(not ln.units() for ln in h.project.lyrics.sung_lines()):
+            # readings are prepared in the project itself (not only in the snapshot): the result
+            # must refer to units the project has, or it would be outdated at once
+            from .reading.prepare import prepare_doc
+
+            prepare_doc(h.project.lyrics, overwrite_rule=False)
+            h.save()
         snap: Project = copy.deepcopy(h.project)
     cfg = snap.config
     if config:
@@ -1398,12 +1469,6 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
             raise LrcTimesError("锚点需要修正: " + "; ".join(i.message for i in errors[:5]))
         if skip_line_ids and len(skip_line_ids) >= len(snap.lyrics.sung_lines()):
             raise LrcTimesError("所有歌词行的时间都在音频结束之后：歌词和音频可能不是同一首歌或同一版本")
-    missing_units = [ln.id for ln in snap.lyrics.sung_lines() if not ln.units()]
-    if missing_units:
-        from .reading.prepare import prepare_doc
-
-        prepare_doc(snap.lyrics, overwrite_rule=False)
-
     original = snap.asset("original")
     if original is None:
         raise ServiceError("请先上传原曲")
@@ -1462,7 +1527,16 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
 
             asset = assets[role]
             data, asr = load_audio(asset_path(h, asset), mono=True)
-            envelopes[role] = (rms_envelope_db(data[0], asr, hop_ms=10.0), 10.0)
+            hop = 10.0
+            env = rms_envelope_db(data[0], asr, hop_ms=hop)
+            # index i must mean i*hop ms on the *original* timeline: a track whose sample 0 lies
+            # later (origin offset) is padded with silence in front, an earlier one cut
+            shift = int(round(asset.origin_offset_samples * 1000.0 / asset.sample_rate / hop))
+            if shift > 0:
+                env = np.concatenate([np.full(shift, float(env.min()) if env.size else -120.0, dtype=env.dtype), env])
+            elif shift < 0:
+                env = env[-shift:]
+            envelopes[role] = (env, hop)
         return envelopes[role]
 
     # acoustic scores for the chosen input first, so progress stays monotonic
@@ -1475,6 +1549,7 @@ def run_align(h: ProjectHandle, *, line_ids: Optional[list[str]] = None, audio_r
         audio_assets={r: a for r, a in assets.items() if a is not None}, audio_duration_ms=original.duration_ms,
         energy_for=energy_for, previous=previous, line_ids=line_ids,
         skip_line_ids=[x for x in skip_line_ids if line_ids is None or x in line_ids],
+        original_sha256=original.sha256,
     )
 
     def run_progress(frac: float, msg: str = "") -> None:
@@ -1540,8 +1615,11 @@ def adopt_lines(h: ProjectHandle, result_id: str, line_ids: list[str], *, from_r
                 target.units[i] = newu
                 adopted += 1
         src_lines = {}
+        src_issues: list[Issue] = []
         if from_result_id:
-            src_lines = {lt.line_id: lt for lt in get_result(h, from_result_id).lines}
+            src = get_result(h, from_result_id)
+            src_lines = {lt.line_id: lt for lt in src.lines}
+            src_issues = [i for i in src.issues if i.line_id in set(line_ids)]
         for i, lt in enumerate(target.lines):
             if lt.line_id in line_ids:
                 if lt.line_id in src_lines:
@@ -1552,9 +1630,63 @@ def adopt_lines(h: ProjectHandle, result_id: str, line_ids: list[str], *, from_r
                 target.lines[i].start_ms = min(st) if st else None
                 target.lines[i].end_ms = max(en) if en else None
                 target.lines[i].candidate = label
+                if target.lines[i].anchor_ms is not None and target.lines[i].start_ms is not None:
+                    target.lines[i].anchor_residual_ms = target.lines[i].start_ms - target.lines[i].anchor_ms
+        _recheck_adopted(h.project, target, list(line_ids), src_issues)
         target.stats["adoptions"] = target.stats.get("adoptions", 0) + adopted
         h.save()
         return target
+
+
+def _recheck_adopted(p: Project, target: AlignmentResult, line_ids: list[str], src_issues: list[Issue]) -> None:
+    """Issues of adopted lines describe the adopted times: the checks are run again for them
+    (and for the line after each, whose overlap / order with them may have changed); evidence
+    the checks cannot recompute here (stability, singing in a rest, …) comes from the source."""
+    from .align import checks as chk
+
+    ids = set(line_ids)
+    order = [lt.line_id for lt in target.lines]
+    after = {order[k + 1] for k, lid in enumerate(order[:-1]) if lid in ids}
+    keep = []
+    for i in target.issues:
+        if i.line_id in ids and (i.code in chk.CHECK_CODES or i.code in ("unstable_boundary", "decode_failed",
+                                                                         "boundary_conflict", "tail_unresolved")):
+            continue
+        if i.line_id in after and i.code in ("order_conflict", "line_overlap"):
+            continue
+        keep.append(i)
+    keep += [i for i in src_issues if i.code in ("unstable_boundary", "unit_in_rest", "boundary_conflict",
+                                                 "tail_unresolved")]
+    cfg = target.config.checks
+    units = [u for u in target.units if u.line_id in ids]
+    for u in units:
+        u.flags = [f for f in u.flags if f not in ("short_unit", "long_unit", "illegal_interval", "line_gap",
+                                                  "unit_overlap")]
+    line_flags = ("incomplete", "anchor_deviation", "window_edge", "order_conflict", "line_overlap")
+    lines_by_id = {lt.line_id: lt for lt in target.lines}
+    for lid in ids:
+        if lid in lines_by_id:
+            lines_by_id[lid].flags = [f for f in lines_by_id[lid].flags if f not in line_flags]
+    voices = {ln.id: ln.voice for ln in p.lyrics.lines}
+    cov_issues, _ = chk.check_coverage(units, [lines_by_id[x] for x in line_ids if x in lines_by_id], cfg)
+    new = (chk.check_units(units, cfg) + chk.check_line_gaps(units, cfg) + cov_issues
+           + chk.check_unit_order(units, voices))
+    # line checks look at neighbours too: run them on copies, take over what concerns these lines
+    copies = [lt.model_copy(deep=True) for lt in target.lines]
+    for c in copies:
+        c.flags = [f for f in c.flags if f not in line_flags]
+    orig = p.asset("original")
+    line_issues = chk.check_lines(copies, cfg, voices, orig.duration_ms if orig else None)
+    by_copy = {c.line_id: c for c in copies}
+    for lid in ids | after:
+        lt, c = lines_by_id.get(lid), by_copy.get(lid)
+        if lt is None or c is None:
+            continue
+        take = line_flags[1:] if lid in ids else ("order_conflict", "line_overlap")
+        lt.flags = [f for f in lt.flags if f not in take] + [f for f in c.flags if f in take and f not in lt.flags]
+    new += [i for i in line_issues if i.line_id in ids or (i.line_id in after and i.code in ("order_conflict",
+                                                                                             "line_overlap"))]
+    target.issues = keep + [i for i in new if i.code != "low_coverage"]
 
 
 # ---------------------------------------------------------------------------

@@ -188,19 +188,22 @@ class Wav2Vec2CTCBackend:
         rf = receptive_field(kernels, strides)
         sr = e["sample_rate"]
 
+        model = [e["model"]]  # the model this run uses (the CPU copy after an MPS failure)
+
         def forward(seg: np.ndarray) -> np.ndarray:
             with torch.inference_mode():
                 inp = torch.from_numpy(np.ascontiguousarray(seg)).unsqueeze(0)
                 try:
-                    logits = e["model"](inp.to(self.device)).logits
+                    logits = model[0](inp.to(self.device)).logits
                 except (RuntimeError, NotImplementedError) as exc:
                     if self.device != "mps":
                         raise
                     self.notes.append(f"MPS 运行失败（{type(exc).__name__}），已改用 CPU")
                     self.device = "cpu"
+                    # the CPU model has its own cache entry; the shared MPS entry is left as it was
                     self._entry = load_model(self.model_id, self.revision, "cpu")
-                    e["model"] = self._entry["model"]
-                    logits = e["model"](inp).logits
+                    model[0] = self._entry["model"]
+                    logits = model[0](inp).logits
                 return torch.log_softmax(logits[0].float(), dim=-1).cpu().numpy()
 
         logp = chunked_forward(

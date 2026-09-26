@@ -1,7 +1,9 @@
 """On-disk cache of acoustic emissions (design §6, "声学分数" layer).
 
 Key = actual analysed audio (sha256 + role + origin) + model/revision/profile
-+ resampling and chunking configuration.  Lyrics, anchors, mode and decode
++ resampling and chunking configuration.  Weights loaded from a local folder
+have no revision: the key then includes the size and modification time of the
+model files, so replacing the weights in place does not reuse old scores.  Lyrics, anchors, mode and decode
 parameters are deliberately *not* part of the key: changing them reuses the
 emission.  Only complete results are stored (``put(..., complete=True)``);
 writes are atomic (tmp file + rename).  logp is stored as float32 (no lossy
@@ -27,11 +29,29 @@ from ..timebase import FrameMap
 CACHE_FORMAT = 1
 
 
+def local_model_stamp(model_id: Optional[str]) -> Optional[list]:
+    """(name, size, mtime) of the files of a model given as a local path, else None."""
+    if not model_id:
+        return None
+    try:
+        path = Path(model_id).expanduser()
+        if not path.exists():
+            return None
+        files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.is_file())
+        return [(str(p.relative_to(path)) if p != path else p.name, p.stat().st_size, int(p.stat().st_mtime))
+                for p in files[:200]]
+    except OSError:
+        return None
+
+
 def emission_cache_key(audio_sha256: str, role: str, origin_samples: int, backend_info: BackendInfo,
                        chunk_s: float, context_s: float, resample_desc: str) -> str:
     extra = dict(backend_info.extra or {})
     extra.pop("notes", None)
     extra.pop("device", None)  # device choice does not change the intended result
+    stamp = local_model_stamp(backend_info.model_id) if not backend_info.model_revision else None
+    if stamp is not None:
+        extra["local_model_files"] = stamp
     return stable_hash({
         "fmt": CACHE_FORMAT,
         "audio": audio_sha256,

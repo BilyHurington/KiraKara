@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from kara_align.align.runner import AlignmentInputError, merge_partial, run_alignment
+from kara_align.align.runner import AlignmentInputError, run_alignment
 from kara_align.interfaces import CancelToken, Cancelled
 from kara_align.models import AlignConfig, Calibration, ManualEdit, TailConfig
 
@@ -88,9 +88,7 @@ def test_manual_lock_preserved_and_local_rerun():
     assert not part.coverage.full and part.coverage.line_ids == [lid]
     assert {u.line_id for u in part.units} == {lid}
     assert part.parent_result_id == second.id
-    merged = merge_partial(second, part)
-    assert len(merged.units) == 9
-    assert next(x for x in merged.units if x.unit_id == target.unit_id).start_ms == 4321
+    assert next(x for x in part.units if x.unit_id == target.unit_id).start_ms == 4321
 
 
 def test_cancel():

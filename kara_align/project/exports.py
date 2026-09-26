@@ -52,6 +52,20 @@ def _lines_payload(doc: LyricsDoc) -> list[dict]:
     return [ln.model_dump(mode="json") for ln in doc.lines]
 
 
+def _result_warnings(project: Project, result: AlignmentResult) -> list[str]:
+    """What every export made from a result has to say: outdated, partial, lines left out."""
+    warnings = []
+    if result.stale:
+        warnings.append(f"该结果已过期：{result.stale_reason or '输入已修改'}")
+    if not result.coverage.full:
+        warnings.append("该结果仅覆盖部分歌词（见 coverage）")
+    after = next((i for i in result.issues if i.code == "lines_after_audio"), None)
+    if after is not None:
+        n = len(after.data.get("line_ids") or [])
+        warnings.append(f"{n} 行歌词的时间在音频结束之后，没有对齐，未包含在导出中")
+    return warnings
+
+
 def export_alignment(project: Project, result: AlignmentResult) -> ExportOutput:
     payload = result.model_dump(mode="json")
     payload["lyrics"] = {
@@ -60,11 +74,7 @@ def export_alignment(project: Project, result: AlignmentResult) -> ExportOutput:
         "lines": _lines_payload(project.lyrics),
     }
     payload["audio"] = [a.model_dump(mode="json", exclude={"path"}) for a in project.audio]
-    warnings = []
-    if result.stale:
-        warnings.append(f"该结果已过期：{result.stale_reason or '输入已修改'}")
-    if not result.coverage.full:
-        warnings.append("该结果仅覆盖部分歌词（见 coverage）")
+    warnings = _result_warnings(project, result)
     return ExportOutput("alignment.json", "application/json",
                         json.dumps(payload, ensure_ascii=False, indent=2), warnings)
 
@@ -108,7 +118,8 @@ def export_csv(project: Project, result: AlignmentResult) -> ExportOutput:
                     _blank(ut.start_ms), _blank(ut.end_ms), ut.status, ut.reason or "",
                     _blank(ut.model_start_ms), _blank(ut.model_end_ms),
                     "1" if ut.locked else "", ut.tail.method if ut.tail else "", ";".join(ut.flags)])
-    warnings = ["CSV 不包含锚点、候选、问题列表与模型信息；完整信息请使用 alignment.json"]
+    warnings = (["CSV 不包含锚点、候选、问题列表与模型信息；完整信息请使用 alignment.json"]
+                + _result_warnings(project, result))
     return ExportOutput("alignment.csv", "text/csv", buf.getvalue(), warnings)
 
 
@@ -135,7 +146,7 @@ def export_lrc_line(project: Project, result: AlignmentResult) -> ExportOutput:
     """Line LRC aggregated from the model alignment (first aligned unit start)."""
     by_line = _line_units(result)
     out = _meta_tags(project.lyrics)
-    warnings = ["行级 LRC 无法表达单元时间、终点、读音映射与失败原因"]
+    warnings = ["行级 LRC 无法表达单元时间、终点、读音映射与失败原因"] + _result_warnings(project, result)
     missing = []
     for ln in project.lyrics.lines:
         if ln.id not in by_line:
@@ -147,8 +158,6 @@ def export_lrc_line(project: Project, result: AlignmentResult) -> ExportOutput:
         out.append(f"[{fmt_lrc_ts(min(starts))}]{ln.text}")
     if missing:
         warnings.append(f"{len(missing)} 行没有可用时间，已从 LRC 中省略（详见 alignment.json）")
-    if not result.coverage.full:
-        warnings.append("结果只覆盖部分歌词，LRC 仅包含已覆盖的行")
     return ExportOutput("aligned-line.lrc", "text/plain", "\n".join(out) + "\n", warnings)
 
 
@@ -160,7 +169,8 @@ def export_lrc_unit(project: Project, result: AlignmentResult) -> ExportOutput:
     """
     timings = {u.unit_id: u for u in result.units}
     out = _meta_tags(project.lyrics)
-    warnings = ["增强 LRC 以片段为单位合并多拍汉字读音；无法表达读音、间隙与失败原因"]
+    warnings = (["增强 LRC 以片段为单位合并多拍汉字读音；无法表达读音、间隙与失败原因"]
+                + _result_warnings(project, result))
     gaps = 0
     for ln in project.lyrics.lines:
         if not any(u.id in timings for u in ln.units()):
@@ -207,28 +217,37 @@ def export_lrc_unit(project: Project, result: AlignmentResult) -> ExportOutput:
 def export_lrc_calibrated(project: Project) -> ExportOutput:
     """LRC with calibrated effective line starts; embedded [offset] is removed.
 
-    Re-importing this file therefore never shifts the times again.
+    Re-importing this file therefore never shifts the times again.  Every timed line of the
+    imported LRC is written with its calibrated time – also lyric lines excluded from singing,
+    credits and the timed blank lines that mark where a line ends before an interlude – and
+    untimed lines are kept without a tag, so the file re-imports to the same lines.
     """
-    from ..align.calibration import effective_line_starts
+    from ..align.calibration import effective_ms
 
     doc = project.lyrics
-    starts = effective_line_starts(doc, project.calibration)
+    cal = project.calibration
     out = _meta_tags(doc)
     warnings = ["仅校准了原始行锚点（整体平移），不含模型对齐结果；已清除 [offset]"]
-    if not project.calibration.confirmed:
+    if not cal.confirmed:
         warnings.append("校准尚未确认")
-    skipped = 0
+    untimed = dropped = 0
     for ln in doc.lines:
-        if ln.id not in starts:
-            if ln.kind == "lyric":
-                skipped += 1
+        ms = effective_ms(doc, cal, ln)
+        if ms is None:
+            if ln.text.strip():
+                out.append(ln.text)
+                untimed += 1
             continue
-        ms, _kind = starts[ln.id]
         if ms < 0:
-            raise ValueError(f"行 {ln.id} 的校准时间为负，请先修正校准")
+            if ln.kind == "lyric" and ln.sing:
+                raise ValueError(f"行 {ln.id} 的校准时间为负，请先修正校准")
+            dropped += 1  # a credit / end mark before the audio start
+            continue
         out.append(f"[{fmt_lrc_ts(ms)}]{ln.text}")
-    if skipped:
-        warnings.append(f"{skipped} 行没有时间锚点，已省略")
+    if untimed:
+        warnings.append(f"{untimed} 行没有时间，按原样写出（不带时间标签）")
+    if dropped:
+        warnings.append(f"{dropped} 个作者信息 / 空行标记校准后早于音频开头，已省略")
     return ExportOutput("calibrated.lrc", "text/plain", "\n".join(out) + "\n", warnings)
 
 
