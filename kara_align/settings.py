@@ -14,7 +14,7 @@ import threading
 from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from .karaoke.styles import warm_style as simple_default_style
 from .models import KaraokeStyle, _Base
@@ -25,16 +25,31 @@ log = logging.getLogger(__name__)
 # an environment variable holding a key: never an arbitrary one (PATH, HOME, other secrets …)
 API_KEY_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*(KEY|TOKEN)$"
 
-AiProvider = Literal["none", "claude", "codex", "openai"]
+# "manual": the prompt is copied into any web chat and the reply pasted back (no key, nothing to install)
+AiProvider = Literal["manual", "claude", "codex", "openai"]
 
 
 class AiSettings(_Base):
-    provider: AiProvider = "none"
+    # AI readings on / off (off: rule readings only; the detailed mode's copy / paste round trip is
+    # always there); used by the simple mode's tasks and the detailed mode's one-click button
+    enabled: bool = False
+    provider: AiProvider = "manual"
     model: str = ""  # empty: the CLI's own default; required for the API
     base_url: str = "https://api.openai.com/v1"
     api_key: str = ""  # stored locally only; GET returns has_api_key instead
     api_key_env: str = "OPENAI_API_KEY"  # used when no key is stored
     timeout_s: int = Field(default=600, ge=30, le=3600)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_none(cls, data: Any) -> Any:
+        """Settings from before the switch: provider "none" meant off (and is the manual round trip now)."""
+        if isinstance(data, dict):
+            if data.get("provider") == "none":
+                data = {**data, "provider": "manual", "enabled": False}
+            elif "enabled" not in data and data.get("provider") in ("claude", "codex", "openai"):
+                data = {**data, "enabled": True}
+        return data
 
     @field_validator("base_url")
     @classmethod
@@ -75,7 +90,6 @@ class TaskStyleOptions(_Base):
 
 class SimpleSettings(_Base):
     default_mode: Literal["plain", "lrc"] = "lrc"
-    ai_readings: bool = True  # use the AI provider (when one is set) to check readings
     separate: bool = True
     separation_preset: str = "melband-roformer"
     separation_device: Literal["auto", "cpu"] = "auto"
@@ -107,6 +121,17 @@ class AppSettings(_Base):
     version: int = 1
     ai: AiSettings = Field(default_factory=AiSettings)
     simple: SimpleSettings = Field(default_factory=SimpleSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _old_switch(cls, data: Any) -> Any:
+        """The simple mode's own "AI readings" switch (before ai.enabled) turned it off for tasks."""
+        if isinstance(data, dict) and isinstance(data.get("ai"), dict) and isinstance(data.get("simple"), dict):
+            ai, simple = data["ai"], data["simple"]
+            if "enabled" not in ai and simple.get("ai_readings") is False:
+                data = {**data, "ai": {**ai, "enabled": False,
+                                       "provider": "manual" if ai.get("provider") == "none" else ai.get("provider", "manual")}}
+        return data
 
 
 _lock = threading.Lock()

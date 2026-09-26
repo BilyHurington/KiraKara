@@ -111,6 +111,7 @@ class TaskProcessing(_Base):
     """How the task is processed, fixed when it is added (AI readings, vocal separation)."""
 
     ai_provider: Optional[str] = None  # None: tasks from before this was recorded (today's setting)
+    # (ai_readings: AI readings on — the settings' ai.enabled when the task was added)
     ai_model: str = ""
     ai_readings: bool = True
     separate: bool = True
@@ -155,6 +156,9 @@ class PipelineTask(_Base):
     # LRC offset to confirm: the suggestion shown to the user (see stage_calibrate)
     calibration: Optional[dict[str, Any]] = None
     calibration_confirmed: bool = False
+    # AI readings by hand (provider "manual"): the prompt to copy is the project's roundtrip
+    # {roundtrip_id, snapshot_id, lines, chars}; see submit_readings
+    readings_request: Optional[dict[str, Any]] = None
     # subtitle style and video settings, fixed when the task is added (queued tasks never pick up
     # later changes to the settings); None on tasks from before this existed
     karaoke: Optional[KaraokeStyle] = None
@@ -409,7 +413,7 @@ class TaskQueue:
                          stages=task_stages(cfg.simple.calibration),
                          karaoke=karaoke, video=video, style_label=label, style_colors=colors,
                          processing=TaskProcessing(ai_provider=cfg.ai.provider, ai_model=cfg.ai.model,
-                                                   ai_readings=cfg.simple.ai_readings, separate=cfg.simple.separate,
+                                                   ai_readings=cfg.ai.enabled, separate=cfg.simple.separate,
                                                    separation_preset=cfg.simple.separation_preset,
                                                    separation_device=cfg.simple.separation_device,
                                                    calibration=cfg.simple.calibration))
@@ -509,7 +513,8 @@ class TaskQueue:
         self._require_owner()
         t = self.get(task_id)
         with self._lock:  # a cancel must not slip in between the check and the change
-            if t.status != "waiting" or not t.calibration or not t.project_id:
+            if t.status != "waiting" or not t.calibration or not t.project_id \
+                    or t.stage("calibrate").status != "waiting":
                 raise S.ServiceError("这个任务现在不需要确认偏移")
             h = self.ws.get(t.project_id)
             st = t.stage("calibrate")
@@ -537,11 +542,72 @@ class TaskQueue:
             if plain or not stale:
                 st.status, st.progress = "done", 1.0
                 t.calibration_confirmed = True
-                t.status, t.message = "queued", "等待继续"
-                self._wake.notify_all()
+                prep = self._continue(t)
         self._save()
         if not plain and stale:
             raise S.ServiceError("歌词在详细模式中改过：已重新选出要确认的第一句，请重新标记后确认")
+        if prep:
+            self._submit_prep(t)
+        return t
+
+    def _continue(self, t: PipelineTask) -> bool:
+        """After the user answered (under the lock): back to the preparation lane when a quick stage is
+        next (the readings prompt by hand), else into the queue.  Returns whether to submit it."""
+        prep = _first_open_stage(t) in prep_keys(t)
+        t.status, t.message = ("preparing", "继续准备") if prep else ("queued", "等待继续")
+        if not prep:
+            self._wake.notify_all()
+        return prep
+
+    def readings_prompt(self, task_id: str) -> dict:
+        """The prompt to copy into a web chat (AI readings by hand)."""
+        t = self.get(task_id)
+        req = t.readings_request
+        if not req or not t.project_id:
+            raise S.ServiceError("这个任务没有等待粘贴的 AI 注音")
+        h = self.ws.get(t.project_id)
+        rt = next((x for x in h.project.ai_roundtrips if x.id == req.get("roundtrip_id")), None)
+        if rt is None:
+            raise S.ServiceError("提示词已不在项目里（项目可能在详细模式中改过），请重试这个任务")
+        return {"prompt": rt.prompt, "lines": req.get("lines"), "snapshot_id": req.get("snapshot_id")}
+
+    def submit_readings(self, task_id: str, *, text: Optional[str] = None, skip: bool = False) -> PipelineTask:
+        """The web chat's reply for a task waiting for AI readings by hand (or: go on with the rule
+        readings).  A reply with no usable line is refused and the task keeps waiting."""
+        self._require_owner()
+        t = self.get(task_id)
+        with self._lock:
+            if t.status != "waiting" or not t.readings_request or not t.project_id \
+                    or t.stage("readings").status != "waiting":
+                raise S.ServiceError("这个任务现在不需要粘贴 AI 注音结果")
+            h = self.ws.get(t.project_id)
+            st = t.stage("readings")
+            if skip:
+                st.status, st.message = "skipped", "已跳过（使用规则读音）"
+            else:
+                if not (text or "").strip():
+                    raise S.ServiceError("请粘贴 AI 的回复")
+                val = S.ai_validate(h, text or "")
+                rep = val["report"]
+                ok = [x for x in rep.get("lines", []) if x.get("status") == "ok"]
+                if not ok:
+                    h.previews.pop(val["report_id"], None)
+                    why = (rep.get("errors") or [r for x in rep.get("lines", []) for r in x.get("reasons", [])] or ["没有可用的行"])
+                    raise S.ServiceError("回复里没有可以采用的行：" + "；".join(why[:3]))
+                try:
+                    summary = S.ai_apply(h, val["report_id"], None)
+                finally:
+                    h.previews.pop(val["report_id"], None)
+                bad = len(rep.get("lines", [])) - len(ok)
+                if bad:
+                    _warn(t, f"AI 注音有 {bad} 行未采用（保留规则读音）")
+                applied = summary.get("applied", []) if isinstance(summary, dict) else []
+                st.status, st.message = "done", f"更新 {len(applied)} 行（网页聊天）"
+            st.progress = 1.0
+            prep = self._continue(t)
+        self._save()
+        if prep:
+            self._submit_prep(t)
         return t
 
     def remove(self, task_id: str) -> None:
@@ -673,22 +739,36 @@ def _first_open_stage(t: PipelineTask) -> Optional[str]:
 
 
 def prep_keys(t: PipelineTask) -> tuple[str, ...]:
-    """The quick stages at the start of this task (run as soon as it is added)."""
+    """The quick stages at the start of this task (run as soon as it is added).  AI readings by hand
+    are one of them: the prompt is ready at once and the user answers right after adding, not when
+    the queue gets to the task."""
+    quick = set(PREP_STAGES)
+    if manual_readings(t):
+        quick.add("readings")
     keys: list[str] = []
     for s in t.stages:
-        if s.key not in PREP_STAGES:
+        if s.key not in quick:
             break
         keys.append(s.key)
     return tuple(keys)
+
+
+def manual_readings(t: PipelineTask) -> bool:
+    pr = t.processing
+    return bool(pr and pr.ai_readings and pr.ai_provider == "manual")
 
 
 def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Optional[tuple[str, ...]] = None) -> None:
     cfg = app_settings.load()
     if task.processing is not None:  # the choices made when the task was added, not today's settings
         pr = task.processing
-        cfg.simple = cfg.simple.model_copy(update=pr.model_dump(exclude={"ai_provider", "ai_model"}))
+        cfg.simple = cfg.simple.model_copy(update=pr.model_dump(exclude={"ai_provider", "ai_model", "ai_readings"}))
         if pr.ai_provider is not None:  # keys / URLs stay today's (never copied into the task)
-            cfg.ai = cfg.ai.model_copy(update={"provider": pr.ai_provider, "model": pr.ai_model})
+            off = pr.ai_provider == "none"  # (tasks from before the switch: "none" was off)
+            cfg.ai = cfg.ai.model_copy(update={"provider": "manual" if off else pr.ai_provider, "model": pr.ai_model,
+                                               "enabled": pr.ai_readings and not off})
+        else:  # older still: today's provider, the task's own switch
+            cfg.ai = cfg.ai.model_copy(update={"enabled": cfg.ai.enabled and pr.ai_readings})
     last_save = [0.0]
 
     def save(force: bool = False) -> None:
@@ -869,9 +949,16 @@ def pair_translation(h: "S.ProjectHandle", text: Optional[str]) -> int:
 
 
 def stage_readings(q, task, cfg, cancel, progress):
-    if not cfg.simple.ai_readings or cfg.ai.provider == "none":
+    if not cfg.ai.enabled:
         return "skipped"
     h = _handle(q, task)
+    if cfg.ai.provider == "manual":
+        # the prompt goes to a web chat by hand: wait for the reply (submit_readings)
+        if task.readings_request is None:
+            out = S.ai_prompt(h, None)
+            task.readings_request = {"roundtrip_id": out["roundtrip_id"], "snapshot_id": out["snapshot_id"],
+                                     "lines": len(h.project.lyrics.sung_lines()), "chars": len(out["prompt"])}
+        raise WaitForUser("等待粘贴 AI 注音结果")
     try:
         out = S.ai_auto(h, None, cfg=cfg.ai, cancel=cancel, progress=progress)
         try:

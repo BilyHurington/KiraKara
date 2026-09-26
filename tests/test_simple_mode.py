@@ -128,8 +128,11 @@ def test_cli_missing_timeout_and_cancel(tmp_path, monkeypatch):
     with pytest.raises(Cancelled):
         llm.ask(AS.AiSettings(provider="claude"), "x", cancel=tok)
     assert time.time() - t0 < 5
-    with pytest.raises(llm.LlmError, match="没有设置 AI"):
-        llm.ask(AS.AiSettings(provider="none"), "x")
+    with pytest.raises(llm.LlmError, match="手动网页聊天往返"):
+        llm.ask(AS.AiSettings(provider="manual"), "x")
+    # settings from before the switch: "none" was off
+    old = AS.AiSettings.model_validate({"provider": "none"})
+    assert (old.enabled, old.provider) == (False, "manual")
 
 
 class _Api(BaseHTTPRequestHandler):
@@ -557,7 +560,8 @@ def test_retry_keeps_work_already_done_and_confirm_survives_edited_lyrics(tmp_pa
             ln.imported_start_ms = 1000 + 2000 * i
         h.save()
     w = P.PipelineTask(name="W", status="waiting", project_id=t.project_id, calibration={"line_id": "L_gone"},
-                       stages=[P.Stage(key=k, label=k) for k, _, _ in P.STAGES])
+                       stages=[P.Stage(key=k, label=k, status="waiting" if k == "calibrate" else "pending")
+                               for k, _, _ in P.STAGES])
     q.tasks.append(w)
     with pytest.raises(S.ServiceError, match="重新标记"):
         q.confirm_calibration(w.id, marked_ms=1000)
@@ -639,7 +643,7 @@ def test_retry_drops_warnings_of_the_stages_it_redoes_and_deleted_projects(tmp_p
     q = client.app.state.tasks
     t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nあるいた\nそら\n",
                        mode="plain", name="A").id)
-    assert t.status == "succeeded" and t.processing.ai_provider == "none"
+    assert t.status == "succeeded" and t.processing.ai_provider == "manual" and not t.processing.ai_readings
     # a warning raised by separation, then the task failed there: a retry re-runs it and drops the note
     t.current_stage = "separate"
     P._warn(t, "人声分离失败，使用原曲对齐：x")
@@ -858,3 +862,69 @@ def test_old_tasks_keep_the_manual_offset_and_their_stage_order():
     for s in auto.stages[:4]:
         s.status = "done"
     assert P._first_open_stage(auto) == "calibrate" and "calibrate" not in P.prep_keys(auto)
+
+
+# ------------------------------------------------------------------ AI readings by hand (web chat)
+
+
+def _patch_from_prompt(q, h, prompt_snapshot):
+    from kara_align.reading.ai import FMT_READING_PATCH
+
+    lines = [{"id": ln.id, "text": ln.text, "segments": [
+        {"surface": s.surface, "reading": s.reading or "", **({"units": [u.reading for u in s.units]} if s.units else {})}
+        for s in ln.segments]} for ln in h.project.lyrics.sung_lines()]
+    return json.dumps({"format": FMT_READING_PATCH, "version": 1, "snapshot": prompt_snapshot, "lines": lines},
+                      ensure_ascii=False)
+
+
+def test_ai_readings_by_hand_wait_right_after_adding(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"ai": {"enabled": True, "provider": "manual"},
+               "simple": {"separate": False, "auto_export": False, "calibration": "manual"}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=LRC, mode="lrc", name="A")
+    assert P.manual_readings(t) and P.prep_keys(t) == ("import", "lyrics", "calibrate", "readings")
+    t = _wait(q, t.id)
+    assert t.status == "waiting" and t.stage("calibrate").status == "waiting"
+    with pytest.raises(S.ServiceError):  # not the readings' turn yet
+        q.submit_readings(t.id, skip=True)
+    q.confirm_calibration(t.id, marked_ms=1000)
+    t = _wait(q, t.id)  # straight on to the readings (the preparation lane, not the queue)
+    assert t.status == "waiting" and t.stage("readings").status == "waiting" and t.readings_request["lines"] == 3
+    with pytest.raises(S.ServiceError):  # the offset is done
+        q.confirm_calibration(t.id, marked_ms=1000)
+    pr = q.readings_prompt(t.id)
+    assert "きみと" in pr["prompt"] and pr["snapshot_id"]
+    with pytest.raises(S.ServiceError):  # not JSON: refused, still waiting
+        q.submit_readings(t.id, text="好的，这是结果")
+    assert q.get(t.id).status == "waiting"
+    h = q.ws.get(t.project_id)
+    q.submit_readings(t.id, text=_patch_from_prompt(q, h, pr["snapshot_id"]))
+    t = _wait(q, t.id)
+    assert t.status == "succeeded", (t.error, t.detail)
+    assert t.stage("readings").status == "done" and "网页聊天" in t.stage("readings").message
+    q.shutdown()
+
+
+def test_ai_readings_by_hand_can_be_skipped_and_the_switch_turns_them_off(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from kara_align.web.server import create_app
+
+    _scripted_import(monkeypatch)
+    AS.update({"ai": {"enabled": True, "provider": "manual"}, "simple": {"separate": False, "auto_export": False}})
+    client = TestClient(create_app(tmp_path / "projects"))
+    q = client.app.state.tasks
+    t = _wait(q, q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics="きみと\nそら\n", mode="plain").id)
+    assert t.status == "waiting" and t.stage("readings").status == "waiting"
+    assert "prompt" not in client.get("/api/tasks").json()[0]["readings_request"]  # the list stays light
+    assert "きみと" in client.get(f"/api/tasks/{t.id}/readings/prompt").json()["prompt"]
+    r = client.post(f"/api/tasks/{t.id}/readings", json={"text": "{}"})
+    assert r.status_code == 400
+    assert client.post(f"/api/tasks/{t.id}/readings", json={"skip": True}).status_code == 200
+    t = _wait(q, t.id)
+    assert t.status == "succeeded" and t.stage("readings").status == "skipped"
+    # switched off: no readings step, no waiting
+    AS.update({"ai": {"enabled": False}})
+    t = _wait(q, q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics="きみと\n", mode="plain").id)
+    assert t.status == "succeeded" and t.stage("readings").status == "skipped" and not P.manual_readings(t)

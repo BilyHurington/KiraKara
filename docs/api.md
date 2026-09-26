@@ -101,7 +101,7 @@ to 0 with a message (undo: `calibration/undo`). QQ Music's `//` placeholder line
 | PUT | `/api/projects/{pid}/lines/{line_id}/segments/{segment_id}` | `{reading, units?: [str], confirm: bool}` | `ProjectView` |
 | POST | `/api/projects/{pid}/ai/prompt` | `{line_ids?: [str]}` | `{prompt, snapshot_id, roundtrip_id}` |
 | POST | `/api/projects/{pid}/ai/validate` | `{text}` (raw chat reply or JSON) | `{report_id, report: PatchReport}` |
-| POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = the `/ai/validate` response + `meta {provider, attempts: [{provider, model, elapsed_s, cost_usd}], cost_usd}`; nothing applied). 400 when no AI is set up |
+| POST | `/api/projects/{pid}/ai/auto` | `{line_ids?}` | `Job` (kind `ai`; output = the `/ai/validate` response + `meta {provider, attempts: [{provider, model, elapsed_s, cost_usd}], cost_usd}`; nothing applied). 400 when the provider is `manual` (use `/ai/prompt` + `/ai/validate`) |
 | POST | `/api/projects/{pid}/ai/apply` | `{report_id, line_ids?: [str]}` | `ProjectView` + `summary`. 409 when a line of the report no longer exists (lines merged / split since the validation) |
 
 `PatchReport` = `{ok: bool, snapshot, roundtrip_id, errors: [str], warnings: [str], missing_line_ids: [str], lines: [{line_id, status: "ok"|"stale_text"|"stale_reading"|"unknown_line"|"locked_skipped"|"invalid"|"duplicate", reasons: [str], segments: [..], diff: [{surface, old_reading, new_reading, old_units: [str], new_units: [str], changed, locked}]}]}`.
@@ -212,7 +212,7 @@ unknown values → default). See `docs/karaoke.md`.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/settings` | – | `AppSettings` (`ai.api_key` is never returned; `ai.has_api_key`, `ai.env_key_present` instead) |
+| GET | `/api/settings` | – | `AppSettings` (`ai.api_key` is never returned; `ai.has_api_key`, `ai.env_key_present` instead). `ai.enabled`: AI readings on / off (simple-mode tasks); `ai.provider`: `manual` (copy the prompt into any web chat and paste the reply) \| `claude` \| `codex` \| `openai`. Settings from before the switch are read as: `provider: "none"` → off + `manual`; a CLI / API provider → on, unless the old `simple.ai_readings` was false |
 | PUT | `/api/settings` | partial `{ai?, simple?}` (nested merge); `ai.api_key` replaces the key only when non-empty, `ai.clear_api_key: true` removes it, `simple.reset_karaoke: true` resets the simple mode's style to the built-in 暖阳 | `AppSettings`; 400 `设置无效：…` for an invalid value |
 | GET | `/api/ai/providers?refresh=0` | – | `[{id: "claude"\|"codex"\|"openai", label, available, version, detail}]` |
 | POST | `/api/ai/test` | optional overrides of the AI settings | `{ok, reply?, model?, elapsed_s?, cost_usd?, error?}` |
@@ -236,6 +236,8 @@ unknown values → default). See `docs/karaoke.md`.
 | POST | `/api/tasks/{id}/cancel` | – | `PipelineTask` |
 | POST | `/api/tasks/{id}/retry` | – | `PipelineTask` (continues from the stage that did not finish) |
 | POST | `/api/tasks/{id}/calibration` | `{marked_ms}` (first sung onset of `calibration.line_id`) or `{plain: true}` | `PipelineTask` (only while `waiting`; the task continues) |
+| GET | `/api/tasks/{id}/readings/prompt` | – | `{prompt, lines, snapshot_id}` (AI readings by hand: the prompt to copy into a web chat; 400 when the task has none) |
+| POST | `/api/tasks/{id}/readings` | `{text}` (the chat's reply) or `{skip: true}` | `PipelineTask` (only while the `readings` stage waits; the reply is checked like `/ai/validate` and the lines that pass are applied; 400 with the reasons when no line is usable — the task keeps waiting; 409 while a detailed-mode job runs on the project) |
 | DELETE | `/api/tasks/{id}` | – | `{ok}` (the project stays) |
 
 Adding a task from a script (e.g. with audio downloaded elsewhere): no browser `Origin` header is needed, only a local `Host`.
@@ -247,9 +249,9 @@ curl -F file=@song.mp3 -F background=@cover.jpg -F lyrics='https://music.163.com
 
 `PipelineTask` = `{id, created, finished, name, mode, media_filename, background_filename, lyrics_kind: "link"|"text", lyrics_input, status, project_id, project_deleted, progress, message, error, warnings: [str], current_stage, stages: [{key, label, status, progress, message, failed_soft}], outputs: {video?: {filename, url}}, calibration, calibration_confirmed, video: TaskVideo, processing: TaskProcessing, style_label, style_colors: [str], style_applied, name_auto}` (+ `karaoke: KaraokeStyle`, `detail` (traceback) and `warning_stage` in the responses of the POST endpoints, not in the list).
 
-- `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export` in the order they run (tasks with `processing.calibration: "auto"` run `calibrate` — labelled 检测偏移 — after `separate`), stage status `pending|running|waiting|done|skipped|failed`.
+- `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export` in the order they run (tasks whose AI readings go through a web chat by hand — `processing.ai_provider: "manual"` — run `readings` in the preparation lane and wait there with `readings_request: {roundtrip_id, snapshot_id, lines, chars}`; tasks with `processing.calibration: "auto"` run `calibrate` — labelled 检测偏移 — after `separate`), stage status `pending|running|waiting|done|skipped|failed`.
 - `calibration` (LRC mode, while `waiting`): `{line_id, line_text, lrc_ms, lines: [{id, text, lrc_ms}], check_line, asset_id, duration_ms, lines_after_audio, lines_total}`; the list adds `current_ms` (the project's current offset applied to `lrc_ms`, when one was set in the detailed mode, else `null`); after a confirmation it holds `confirmed_ms`. Automatic tasks that were not sure enough add `auto: {shift_ms, tight, lines, tight_lines, drift_ms, reason, confident}` (only `{reason}` when no estimate could be made); an automatic task that was sure goes on without waiting.
-- `video` = `{auto_export, video_audio, vocal_keep_pct, quality}`, `processing` = `{ai_provider, ai_model, ai_readings, separate, separation_preset, separation_device, calibration: "manual"|"auto"}` (`calibration` from `simple.calibration`), both fixed when the task is added. `style_label` / `style_colors` describe the task's subtitle style for the list.
+- `video` = `{auto_export, video_audio, vocal_keep_pct, quality}`, `processing` = `{ai_provider, ai_model, ai_readings (= `ai.enabled` when added), separate, separation_preset, separation_device, calibration: "manual"|"auto"}` (`calibration` from `simple.calibration`), both fixed when the task is added. `style_label` / `style_colors` describe the task's subtitle style for the list.
 - `project_deleted: true`: the project was deleted in the detailed mode; the task stays listed without links and cannot be retried.
 - When `tasks.json` cannot be written (disk full …) the running task gets a warning.
 

@@ -263,7 +263,8 @@ function AutoAi({ scope, setScope, total, uncertainIds }: {
     ) : null;
   }
   const ai = settings.ai;
-  const configured = ai.provider !== 'none';
+  // one click needs an AI that can be sent the prompt (a CLI or an API); "by hand" is the steps below
+  const configured = ai.enabled && ai.provider !== 'manual';
   // what the last reply cost (from the finished job, also after leaving the page)
   const out = job?.status === 'succeeded' ? job.output as { report_id: string; report: Report; meta?: { attempts: { elapsed_s: number; model: string }[]; cost_usd: number | null } } | null : null;
   const m = out?.meta;
@@ -291,9 +292,14 @@ function AutoAi({ scope, setScope, total, uncertainIds }: {
         <Button size="xs" variant="ghost" icon={editing ? <X className="size-3.5" /> : <Settings2 className="size-3.5" />}
           onClick={() => setEditing(!editing)}>{editing ? '收起' : configured ? '更改' : '设置'}</Button>
       </div>
-      {(editing || !configured) && (
+      {!configured && !editing && (
+        <p className="mt-2 text-xs text-muted">
+          {ai.enabled ? '当前设置为手动（网页聊天）：用下面的第 1–3 步复制提示词、粘贴回复。' : 'AI 注音已关闭；下面的第 1–3 步仍可手动网页聊天往返。'}
+          要一键注音，点“设置”选择本机已登录的 Claude Code / Codex 命令，或 OpenAI 兼容 API（对所有项目通用）。
+        </p>
+      )}
+      {editing && (
         <div className="mt-3 rounded-lg bg-surface p-3">
-          {!configured && <p className="mb-3 text-xs text-muted">选择一个 AI：本机已登录的 Claude Code / Codex 命令，或 OpenAI 兼容 API。设置对所有项目通用。</p>}
           <AiSettingsForm compact />
         </div>
       )}

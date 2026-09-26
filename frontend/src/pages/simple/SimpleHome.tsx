@@ -3,7 +3,7 @@
 // 并自动记住，下一首从同样的选择开始。
 
 import {
-  AlertTriangle, ArrowRight, Check, CircleDashed, Crosshair, Download, Film, Hand, Image as ImageIcon, Link2, ListMusic,
+  AlertTriangle, ArrowRight, Check, CircleDashed, ClipboardPaste, Crosshair, Download, Film, Hand, Image as ImageIcon, Link2, ListMusic,
   Loader2, Music2, Play, RotateCcw, Settings2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,7 +13,7 @@ import { run, toast, useApp } from '@/store/app';
 import { usePageDraft } from '@/store/drafts';
 import {
   addTask, forgetOwnTask, getTaskStyleDraft, hasActiveTasks, markOwnTask, openInDetail, saveSettings, saveTaskStyle, setSimplePage, taskAction,
-  useSimple,
+  useSimple, waitingFor,
 } from '@/store/simple';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, ConfirmButton, DropZone, EmptyState, Input, Progress, Segmented, Textarea,
@@ -21,9 +21,10 @@ import {
 import { DownloadLink } from '@/components/DownloadButton';
 import { AUDIO_ACCEPT, BACKGROUND_ACCEPT, MEDIA_ACCEPT } from '@/pages/input/AudioCard';
 import { CalibrateDialog } from './CalibrateDialog';
+import { ReadingsDialog } from './ReadingsDialog';
 import { TaskStyleStep } from './TaskStyleStep';
 
-const PROVIDER_LABEL = { none: '', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
+const PROVIDER_LABEL = { manual: '手动（网页聊天）', claude: 'Claude Code', codex: 'Codex', openai: 'API' } as const;
 
 // the picture source of the form (video / audio + background) is remembered in this browser
 const SOURCE_KEY = 'kara.simple.source';
@@ -134,7 +135,9 @@ export function SimpleHome() {
       setCalibrating(ready.id);
     }
   }, [tasks, calibrating, own]);
-  const calTask = tasks.find((t) => t.id === calibrating && t.status === 'waiting' && t.calibration);
+  // the dialog for what the task waits for: where the first line starts, or the AI readings by hand
+  const calTask = tasks.find((t) => t.id === calibrating && waitingFor(t) === 'calibrate' && t.calibration);
+  const readTask = tasks.find((t) => t.id === calibrating && waitingFor(t) === 'readings' && t.readings_request);
 
   const chooseMode = (m: Mode) => {
     setMode(m);
@@ -169,7 +172,7 @@ export function SimpleHome() {
           : null;
 
   const s = settings?.simple;
-  const ai = settings?.ai.provider && settings.ai.provider !== 'none' && s?.ai_readings ? PROVIDER_LABEL[settings.ai.provider] : null;
+  const ai = settings?.ai.enabled ? PROVIDER_LABEL[settings.ai.provider] ?? settings.ai.provider : null;
   const summary = s ? [
     ai ? `AI 注音：${ai}` : 'AI 注音：关',
     `人声分离：${s.separate ? '开' : '关'}`,
@@ -295,6 +298,7 @@ export function SimpleHome() {
         </CardBody>
       </Card>
       {calTask && <CalibrateDialog key={calTask.calibration!.line_id} task={calTask} onClose={() => setCalibrating(null)} />}
+      {readTask && <ReadingsDialog key={readTask.id} task={readTask} onClose={() => setCalibrating(null)} />}
     </div>
   );
 }
@@ -377,11 +381,18 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
         </div>
       </div>
 
-      {t.status === 'waiting' && t.calibration && (
+      {waitingFor(t) === 'calibrate' && t.calibration && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-warn-soft px-3 py-2.5">
           <Hand className="size-4 text-warn" />
           <span className="min-w-0 flex-1 text-[13px]">需要你确认第一句「{t.calibration.line_text}」从哪里开始唱，之后全部自动完成</span>
           <Button size="sm" variant="primary" icon={<Crosshair className="size-4" />} onClick={onCalibrate}>确认开头位置</Button>
+        </div>
+      )}
+      {waitingFor(t) === 'readings' && t.readings_request && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-warn-soft px-3 py-2.5">
+          <Hand className="size-4 text-warn" />
+          <span className="min-w-0 flex-1 text-[13px]">需要你把 AI 注音的提示词发给 AI 聊天网页，并把回复粘贴回来（也可以跳过），之后全部自动完成</span>
+          <Button size="sm" variant="primary" icon={<ClipboardPaste className="size-4" />} onClick={onCalibrate}>粘贴 AI 注音结果</Button>
         </div>
       )}
       {t.status === 'queued' && !t.stages.some((s) => s.status === 'done') ? (

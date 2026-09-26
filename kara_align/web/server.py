@@ -415,6 +415,27 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
                                    plain=bool((body or {}).get("plain")))
         return t.model_dump(mode="json")
 
+    @app.get("/api/tasks/{task_id}/readings/prompt")
+    def task_readings_prompt(task_id: str):
+        """AI readings by hand: the prompt to copy into a web chat."""
+        task_or_404(task_id)
+        return tq.readings_prompt(task_id)
+
+    @app.post("/api/tasks/{task_id}/readings")
+    def submit_task_readings(task_id: str, body: dict):
+        """AI readings by hand: {text} = the chat's reply (checked like a pasted reply; applied lines
+        that pass), or {skip: true} = go on with the rule readings.  400 when no line is usable."""
+        task_or_404(task_id)
+        t = tq.get(task_id)
+        if t.project_id and not t.project_deleted:
+            no_jobs(t.project_id, "提交 AI 注音")
+        text = (body or {}).get("text")
+        if text is not None and not isinstance(text, str):
+            raise HTTPException(400, "text 必须是字符串")
+        if text:
+            _check_text(text)
+        return tq.submit_readings(task_id, text=text, skip=bool((body or {}).get("skip"))).model_dump(mode="json")
+
     @app.delete("/api/tasks/{task_id}")
     def delete_task(task_id: str):
         task_or_404(task_id)
@@ -612,8 +633,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         h = handle(pid)
         not_busy(pid)
         cfg = app_settings.load().ai
-        if cfg.provider == "none":
-            raise HTTPException(400, "还没有设置 AI：请在“设置”中选择 Claude Code、Codex 或 API")
+        if cfg.provider == "manual":
+            raise HTTPException(400, "当前设置为手动网页聊天往返：请用下面的“复制提示词 → 粘贴回复”；"
+                                     "要一键注音请在设置中选择 Claude Code、Codex 或 API")
 
         def run(job: Job):
             return S.ai_auto(h, body.line_ids, cfg=cfg, cancel=job.cancel_token, progress=progress_setter(job))

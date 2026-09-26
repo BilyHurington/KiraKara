@@ -86,8 +86,9 @@ def detect_all(refresh: bool = False) -> list[dict]:
 
 def ask(cfg: AiSettings, prompt: str, *, cancel: Optional[CancelToken] = None,
         on_wait: Optional[Callable[[float], None]] = None) -> LlmReply:
-    if cfg.provider == "none":
-        raise LlmError("没有设置 AI：请在设置中选择 Claude Code、Codex 或 API")
+    if cfg.provider in ("manual", "none"):
+        raise LlmError("当前是手动网页聊天往返：请复制提示词到 AI 聊天网页，再粘贴回复；"
+                       "要自动发送请在设置中选择 Claude Code、Codex 或 API")
     t0 = time.time()
     if cfg.provider == "claude":
         r = _claude(cfg, prompt, cancel, on_wait)

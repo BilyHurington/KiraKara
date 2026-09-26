@@ -28,7 +28,7 @@ export function EnhancePage() {
   const info = useApp((s) => s.info);
   const sepJob = useJob('separate');
   const aiJob = useJob('ai');
-  const aiProvider = useSimple((s) => s.settings?.ai.provider ?? 'none');
+  const aiOneClick = useSimple((s) => !!s.settings?.ai.enabled && s.settings.ai.provider !== 'manual');
   const [tab, setTabState] = useState<Task>(loadEnhanceTab);
   const setTab = (t: Task) => {
     setTabState(t);
@@ -69,7 +69,7 @@ export function EnhancePage() {
       } : lastRt ? {
         status: `上次${RT_STATUS[lastRt.status] ?? lastRt.status} · ${fmtRelative(lastRt.applied_at ?? lastRt.created)}`,
         tone: (lastRt.status === 'applied' ? 'ok' : 'accent') as Tone,
-      } : { status: aiProvider !== 'none' ? '未使用 · 可一键交给 AI' : '未使用', tone: 'neutral' as Tone }),
+      } : { status: aiOneClick ? '未使用 · 可一键交给 AI' : '未使用', tone: 'neutral' as Tone }),
     },
     {
       id: 'separation', icon: <Scissors className="size-4" />, title: '人声分离',

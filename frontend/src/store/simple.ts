@@ -193,6 +193,24 @@ export async function addTask(file: File, lyrics: string, mode: string, name: st
 
 export async function confirmCalibration(id: string, body: { marked_ms?: number; plain?: boolean }) {
   await api.post(`/api/tasks/${id}/calibration`, body);
+  // AI readings by hand come right after: open that dialog by itself too
+  const t = get().tasks.find((x) => x.id === id);
+  if (t && manualReadings(t)) markOwnTask(id);
+  await loadTasks();
+}
+
+/** A task whose AI readings go through a web chat by hand. */
+export const manualReadings = (t: PipelineTask) => !!(t.processing?.ai_readings && t.processing.ai_provider === 'manual');
+
+/** The stage a waiting task waits in ('calibrate' / 'readings'). */
+export const waitingFor = (t: PipelineTask) => (t.status === 'waiting' ? t.stages.find((s) => s.status === 'waiting')?.key ?? null : null);
+
+export async function readingsPrompt(id: string) {
+  return api.get<{ prompt: string; lines: number; snapshot_id: string }>(`/api/tasks/${id}/readings/prompt`);
+}
+
+export async function submitReadings(id: string, body: { text?: string; skip?: boolean }) {
+  await api.post(`/api/tasks/${id}/readings`, body);
   await loadTasks();
 }
 

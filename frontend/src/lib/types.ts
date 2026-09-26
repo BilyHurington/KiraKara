@@ -362,16 +362,19 @@ export interface ExportInline { filename: string; media_type: string; content: s
 
 // ------------------------------------------------------------------ app settings / simple mode
 
-export type AiProviderId = 'none' | 'claude' | 'codex' | 'openai';
+/** 'manual': the prompt is copied into any web chat and the reply pasted back */
+export type AiProviderId = 'manual' | 'claude' | 'codex' | 'openai';
 
 export interface AppSettings {
   version: number;
   ai: {
+    /** AI readings on / off (tasks and the one-click button) */
+    enabled: boolean;
     provider: AiProviderId; model: string; base_url: string; api_key_env: string; timeout_s: number;
     has_api_key: boolean; env_key_present: boolean;
   };
   simple: {
-    default_mode: Mode; ai_readings: boolean; separate: boolean; separation_preset: string;
+    default_mode: Mode; separate: boolean; separation_preset: string;
     separation_device: 'auto' | 'cpu'; karaoke: KaraokeStyle; auto_export: boolean;
     /** LRC offset of new tasks: mark the first line by hand, or detect it after separation */
     calibration: 'manual' | 'auto';
@@ -437,6 +440,9 @@ export interface PipelineTask {
   stages: PipelineStage[]; progress: number; message: string; error: string | null; detail: string | null;
   warnings: string[]; outputs: { video?: { filename: string; url: string } };
   calibration?: CalibrationRequest | null; calibration_confirmed?: boolean;
+  /** AI readings by hand: waiting for the web chat's reply (the prompt: GET /api/tasks/{id}/readings/prompt) */
+  readings_request?: { roundtrip_id: string; snapshot_id: string; lines: number; chars: number } | null;
+  processing?: { ai_provider: string | null; ai_readings: boolean; separate: boolean } | null;
   /** the project was deleted in the detailed mode: no links to it any more */
   project_deleted?: boolean;
   /** the subtitle style and video settings bound to this task */

@@ -17,9 +17,9 @@ const STYLE: KaraokeStyle = defaultStyle();
 
 const SETTINGS: AppSettings = {
   version: 1,
-  ai: { provider: 'none', model: '', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', timeout_s: 600, has_api_key: false, env_key_present: false },
+  ai: { enabled: false, provider: 'manual', model: '', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', timeout_s: 600, has_api_key: false, env_key_present: false },
   simple: {
-    default_mode: 'lrc', ai_readings: true, separate: true, separation_preset: 'melband-roformer', separation_device: 'auto', calibration: 'manual',
+    default_mode: 'lrc', separate: true, separation_preset: 'melband-roformer', separation_device: 'auto', calibration: 'manual',
     karaoke: STYLE, auto_export: true, video_audio: 'original',
     vocal_keep_pct: 20, quality: 'standard',
     task_style: { source: 'default', template: 'glow', color: '#FF8A1E', secondary: '', saved_id: '', translation: null, song_info: null, ruby: 'style', video_audio: null },
@@ -169,6 +169,11 @@ describe('simple mode settings', () => {
       },
     });
     renderUI(<SimpleSettings />);
+    // off: no choices; switched on, the four ways to reach an AI
+    expect(screen.queryByRole('radio', { name: /Claude Code/ })).toBeNull();
+    await userEvent.click(screen.getByRole('switch', { name: '使用 AI 注音' }));
+    await waitFor(() => expect(useSimple.getState().settings!.ai.enabled).toBe(true));
+    expect(screen.getByRole('radio', { name: /手动（网页聊天）/ })).toHaveAttribute('aria-checked', 'true');
     const claude = await screen.findByRole('radio', { name: /Claude Code/ });
     expect(within(claude).getByText('已安装')).toBeInTheDocument();
     expect(within(screen.getByRole('radio', { name: /Codex/ })).getByText('未找到')).toBeInTheDocument();
@@ -294,7 +299,7 @@ describe('one-click AI readings in the detailed mode', () => {
     const { seedStore } = await import('@/test/helpers');
     const { AiRoundtripCard } = await import('@/pages/enhance/AiRoundtrip');
     const pv = seedStore('enhance');
-    useSimple.setState({ settings: { ...structuredClone(SETTINGS), ai: { ...SETTINGS.ai, provider: 'claude', model: 'sonnet' } }, providers: [] });
+    useSimple.setState({ settings: { ...structuredClone(SETTINGS), ai: { ...SETTINGS.ai, enabled: true, provider: 'claude', model: 'sonnet' } }, providers: [] });
     const line = pv.project.lyrics.lines.find((l) => l.sing)!;
     const report = { ok: true, snapshot: 'snap-1', roundtrip_id: 'rt', errors: [], warnings: [], missing_line_ids: [],
       lines: [{ line_id: line.id, status: 'ok', reasons: [], segments: [], diff: [{ surface: '君', old_reading: 'くん', new_reading: 'きみ', old_units: ['く', 'ん'], new_units: ['き', 'み'], changed: true, locked: false }] }] };
@@ -361,13 +366,60 @@ describe('the new-task form', () => {
   });
 });
 
+describe('AI readings by hand (web chat)', () => {
+  const waitingReadings = () => task({ id: 'tr', status: 'waiting', project_id: 'p', mode: 'plain',
+    readings_request: { roundtrip_id: 'rt1', snapshot_id: 'snap', lines: 12, chars: 3000 },
+    stages: stages(2).map((s) => (s.key === 'readings' ? { ...s, status: 'waiting' as const } : s)) });
+
+  it('copies the prompt, refuses an unusable reply and sends a usable one', async () => {
+    seed();
+    useSimple.setState({ tasks: [waitingReadings()] });
+    let accept = false;
+    const api = mockApi({
+      'GET /api/tasks/tr/readings/prompt': () => ({ prompt: '你是日语歌词注音助手……', lines: 12, snapshot_id: 'snap' }),
+      'GET /api/tasks': () => useSimple.getState().tasks,
+      'POST /api/tasks/tr/readings': () => (accept ? { ...waitingReadings(), status: 'queued' }
+        : new Response(JSON.stringify({ detail: '无法解析 AI 结果: 没有找到 JSON' }), { status: 400 })),
+    });
+    renderUI(<SimpleHome />);
+    expect(await screen.findByText(/需要你把 AI 注音的提示词发给 AI 聊天网页/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /粘贴 AI 注音结果/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('textbox', { name: '提示词' })).toHaveValue('你是日语歌词注音助手……');
+    expect(within(dialog).getByRole('button', { name: '提交并继续' })).toBeDisabled();
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'AI 的回复' }), { target: { value: '好的' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: '提交并继续' }));
+    expect(await within(dialog).findByText(/没有找到 JSON/)).toBeInTheDocument();  // the dialog stays
+    accept = true;
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'AI 的回复' }), { target: { value: '```json\n{}\n```' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: '提交并继续' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.find('POST', '/api/tasks/tr/readings').at(-1)!.body).toEqual({ text: '```json\n{}\n```' });
+  });
+
+  it('can be skipped', async () => {
+    seed();
+    useSimple.setState({ tasks: [waitingReadings()] });
+    const api = mockApi({
+      'GET /api/tasks/tr/readings/prompt': () => ({ prompt: 'p', lines: 12, snapshot_id: 'snap' }),
+      'GET /api/tasks': () => useSimple.getState().tasks,
+      'POST /api/tasks/tr/readings': () => ({ ...waitingReadings(), status: 'queued' }),
+    });
+    renderUI(<SimpleHome />);
+    await userEvent.click(await screen.findByRole('button', { name: /粘贴 AI 注音结果/ }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /跳过/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks/tr/readings')).toHaveLength(1));
+    expect(api.find('POST', '/api/tasks/tr/readings')[0].body).toEqual({ skip: true });
+  });
+});
+
 describe('confirming the start before the task continues', () => {
   const cal = {
     line_id: 'L1', line_text: 'きみと', lrc_ms: 1500, lines: [{ id: 'L1', text: 'きみと', lrc_ms: 1500 }, { id: 'L2', text: 'あるいた', lrc_ms: 3500 }],
     check_line: { id: 'L2', text: 'あるいた', lrc_ms: 3500 }, asset_id: 'a1', duration_ms: 60000,
   };
   const waiting = () => task({ id: 'tw', status: 'waiting', project_id: 'p', calibration: cal,
-    stages: stages(2).map((s, i) => (i === 2 ? { ...s, status: 'waiting' as const } : s)) });
+    stages: stages(2).map((s) => (s.key === 'calibrate' ? { ...s, status: 'waiting' as const } : s)) });
 
   it('opens by itself for the task just added, and the marked position is sent', async () => {
     seed();

@@ -49,9 +49,6 @@ export function SimpleSettings() {
         <CardHeader icon={<Bot className="size-4" />} title="AI 注音" description="用 AI 检查每个字的读音（例如「今君」读 いま きみ，「真新」读 まっさら）。读音越准，对齐越准。" />
         <CardBody className="space-y-4">
           <AiSettingsForm />
-          {settings.ai.provider !== 'none' && (
-            <Switch checked={s.ai_readings} onChange={(v) => save({ ai_readings: v })} label="制作时自动用 AI 注音" />
-          )}
         </CardBody>
       </Card>
 

@@ -1,7 +1,8 @@
-// AI provider settings (shared by the settings page and the AI tab):
-// Claude Code / Codex CLI, or an OpenAI-compatible API.  Saved immediately.
+// AI reading settings (shared by the settings page and the AI tab): on / off, then how the prompt
+// gets to an AI — by hand through any web chat, Claude Code / Codex CLI, or an OpenAI-compatible API.
+// Saved immediately.
 
-import { Bot, CheckCircle2, KeyRound, PlugZap, RefreshCw, TerminalSquare, XCircle } from 'lucide-react';
+import { Bot, CheckCircle2, KeyRound, MessagesSquare, PlugZap, RefreshCw, TerminalSquare, XCircle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
@@ -9,10 +10,10 @@ import { isEnter } from '@/lib/keys';
 import type { AiProviderId, AppSettings } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { loadProviders, saveSettings, settingsSaved, useSimple } from '@/store/simple';
-import { arrowNav, Badge, Button, Field, Input } from '@/components/ui';
+import { arrowNav, Badge, Button, Field, Input, Switch } from '@/components/ui';
 
 const CHOICES: { id: AiProviderId; label: string; hint: string; icon: ReactNode }[] = [
-  { id: 'none', label: '不使用', hint: '只用规则读音；也可以手动网页聊天往返', icon: <XCircle className="size-4" /> },
+  { id: 'manual', label: '手动（网页聊天）', hint: '复制提示词到任意 AI 聊天网页，再粘贴回复；不用安装，也不用 API Key', icon: <MessagesSquare className="size-4" /> },
   { id: 'claude', label: 'Claude Code', hint: '本机 claude 命令（需已登录）', icon: <TerminalSquare className="size-4" /> },
   { id: 'codex', label: 'Codex', hint: '本机 codex 命令（需已登录）', icon: <TerminalSquare className="size-4" /> },
   { id: 'openai', label: 'OpenAI 兼容 API', hint: '任意 /chat/completions 接口', icon: <PlugZap className="size-4" /> },
@@ -32,7 +33,7 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
   const ai = settings.ai;
   const save = (patch: Partial<AppSettings['ai']> & { api_key?: string; clear_api_key?: boolean }) =>
     run(async () => { await saveSettings({ ai: patch }); setTest(null); }, '保存设置失败');
-  const avail = (id: AiProviderId) => (id === 'none' || id === 'openai' ? null : providers?.find((p) => p.id === id));
+  const avail = (id: AiProviderId) => (id === 'manual' || id === 'openai' ? null : providers?.find((p) => p.id === id));
 
   const runTest = () => run(async () => {
     setTesting(true);
@@ -52,6 +53,14 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
 
   return (
     <div className="space-y-4">
+      <Switch checked={ai.enabled} onChange={(v) => void save({ enabled: v })} label="使用 AI 注音" />
+      {!ai.enabled && (
+        <p className="flex items-start gap-1.5 text-xs text-muted">
+          <XCircle className="mt-0.5 size-3.5 shrink-0" />
+          关闭时只用规则读音（详细模式“读音”页仍可随时手动网页聊天往返）。
+        </p>
+      )}
+      {ai.enabled && <>
       <div role="radiogroup" aria-label="AI 提供方" onKeyDown={(e) => arrowNav(e)} className={cn('grid gap-2', compact ? 'sm:grid-cols-4' : 'sm:grid-cols-2')}>
         {CHOICES.map((c) => {
           const on = ai.provider === c.id;
@@ -73,7 +82,13 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
         })}
       </div>
 
-      {ai.provider !== 'none' && (
+      {ai.provider === 'manual' && (
+        <p className="text-xs text-muted">
+          极简模式：添加任务后会弹出提示词，复制到 AI 聊天网页发送，再把回复粘贴回来，任务就继续自动完成（也可以跳过）。
+          详细模式：在“读音”页用“复制提示词 → 粘贴回复”。
+        </p>
+      )}
+      {ai.provider !== 'manual' && (
         <div className="space-y-3">
           {ai.provider === 'openai' ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -133,6 +148,7 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
           </p>
         </div>
       )}
+      </>}
     </div>
   );
 }
