@@ -13,7 +13,7 @@ from typing import Literal, Optional
 
 from pydantic import Field
 
-from .karaoke.styles import default_style as simple_default_style
+from .karaoke.styles import warm_style as simple_default_style
 from .models import KaraokeStyle, _Base
 from .project.store import atomic_write_text, home_dir
 
@@ -33,17 +33,17 @@ class TaskStyleOptions(_Base):
     """The subtitle choices of one simple-mode task (step 4); the last ones used are kept in the
     settings, so the next task starts from them."""
 
-    # "default": the style edited in the settings page (what tasks used before this form existed)
-    source: Literal["template", "saved", "default"] = "default"
+    # defaults: the glow template in orange + yellow, translation and title card on, hiragana over kanji
+    # ("default" = the style edited in the settings page)
+    source: Literal["template", "saved", "default"] = "template"
     template: Literal["plain", "glow"] = "glow"
     color: str = "#FF8A1E"  # main theme colour
-    secondary: str = ""  # second theme colour; "" = one colour
+    secondary: str = "#F5C400"  # second theme colour; "" = one colour
     saved_id: str = ""  # a saved style (source == "saved")
-    translation: Optional[bool] = None  # shown when the lyrics have one; None = as the style says
-    song_info: Optional[bool] = None  # title card at the start; None = as the style says
-    ruby: Literal["style", "hiragana", "katakana", "romaji", "off"] = "style"
-    ruby_target: Optional[Literal["kanji", "all"]] = None  # None = as the style says
-    font_size: Optional[int] = Field(default=None, ge=24, le=200)  # lyric size at 1920 wide; None = the style's
+    translation: Optional[bool] = True  # shown when the lyrics have one; None = as the style says
+    song_info: Optional[bool] = True  # title card at the start; None = as the style says
+    ruby: Literal["style", "hiragana", "katakana", "romaji", "off"] = "hiragana"
+    ruby_target: Optional[Literal["kanji", "all"]] = "kanji"  # None = as the style says
     video_audio: Optional[Literal["original", "mix", "none"]] = None  # None = the settings' choice
     vocal_keep_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)  # "mix": None = the settings' level
 

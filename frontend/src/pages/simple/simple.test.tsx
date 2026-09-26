@@ -85,13 +85,7 @@ describe('simple mode home', () => {
     await userEvent.click(screen.getByRole('button', { name: /加一个辅色/ }));
     await userEvent.click(screen.getByRole('button', { name: '辅色 #ED35B3' }));
     await userEvent.click(screen.getByRole('switch', { name: '开头显示歌曲信息' }));
-    // lyric size for this song (relative to a 1920-wide frame)
-    expect(screen.getByText(/以 1920 宽的画面为准/)).toBeInTheDocument();
-    const size = screen.getByRole('textbox', { name: '歌词字号（输入数值）' });
-    expect(size).toHaveValue('88');
-    await userEvent.click(size);
-    await new Promise((r) => setTimeout(r, 30));
-    await userEvent.keyboard('72{Enter}');
+    expect(screen.queryByRole('textbox', { name: '歌词字号（输入数值）' })).toBeNull();  // size lives in the style, not here
     // ruby: one of none / hiragana / katakana / romaji, then whether only kanji get it
     await userEvent.click(screen.getByRole('radio', { name: '罗马音' }));
     await userEvent.click(screen.getByRole('switch', { name: '仅汉字' }));
@@ -109,7 +103,7 @@ describe('simple mode home', () => {
     await waitFor(() => expect(api.find('POST', '/api/karaoke/theme').at(-1)?.body).toEqual({ template: 'glow', color: '#2F80ED', secondary: '#ED35B3' }));
     expect(screen.getByRole('img', { name: '字幕示意' })).toBeInTheDocument();
     const want = { source: 'template', template: 'glow', color: '#2F80ED', secondary: '#ED35B3', saved_id: '', translation: null, song_info: true,
-      ruby: 'romaji', ruby_target: 'kanji', video_audio: 'mix', vocal_keep_pct: 35, font_size: 72 };
+      ruby: 'romaji', ruby_target: 'kanji', video_audio: 'mix', vocal_keep_pct: 35 };
     // remembered right away (the next song starts from the same choices)
     await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body).toEqual({ simple: { task_style: want } }), { timeout: 2000 });
     await userEvent.click(start);

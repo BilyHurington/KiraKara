@@ -1,7 +1,8 @@
 import * as Popover from '@radix-ui/react-popover';
-import { Activity, Download, Redo2, Undo2, X } from 'lucide-react';
+import { Activity, Download, Moon, Redo2, Sparkles, Sun, Undo2, X } from 'lucide-react';
 import { cn } from '@/lib/format';
-import { cancelJob, ppath, run, STEPS, useApp } from '@/store/app';
+import { cancelJob, ppath, run, setTheme, STEPS, useApp } from '@/store/app';
+import { setUi } from '@/store/simple';
 import { redo, undo } from '@/store/edits';
 import { Badge, Button, IconButton, Kbd, Progress, Tip } from '@/components/ui';
 
@@ -12,6 +13,7 @@ export function Topbar() {
   const nRedo = useApp((s) => s.redo.length);
   const stepLabel = STEPS.find((s) => s.id === step)?.label;
   const staleCount = pv?.view.results.filter((r) => r.stale).length ?? 0;
+  const theme = useApp((s) => s.theme);
 
   return (
     <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md md:px-6">
@@ -44,6 +46,16 @@ export function Topbar() {
             </a>
           </Tip>
         )}
+        <span className="mx-1 h-5 w-px bg-line" />
+        {/* same place as the simple mode's “详细模式” switch */}
+        <button onClick={() => setUi('simple')} title="切换到极简模式：放入视频和歌词，一键生成卡拉OK视频；任务队列也在那里"
+          className="focus-ring flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-muted transition hover:bg-surface-2 hover:text-fg">
+          <Sparkles className="size-4 text-accent" /><span className="hidden sm:inline">极简模式</span>
+        </button>
+        <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="切换主题" title={theme === 'dark' ? '浅色模式' : '深色模式'}
+          className="focus-ring grid size-8 place-items-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-fg">
+          {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </button>
       </div>
     </header>
   );
