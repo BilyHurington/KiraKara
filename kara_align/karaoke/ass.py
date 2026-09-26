@@ -377,25 +377,24 @@ def visible_spans(ll: LaidLine, style: KaraokeStyle) -> list[tuple[int, int]]:
 
 
 def alternate_insets(laid: list[LaidLine], geom: list[tuple], indent: float, avail: float) -> list[float]:
-    """How far each left / right row sits in from its margin (the alternating layout's indent).
+    """How far the left / right rows sit in from their margins (the alternating layout's indent).
 
-    A line is moved back toward its edge as far as its length needs; and while a left and a right
-    row are on screen together they keep the staircase: the upper (left) one starts and ends no
-    further right than the lower (right) one.  For such a pair that means
-    ``inset_left + inset_right <= avail − the longer line's extent``; each gets half of that room."""
-    out = []
+    One indent for the whole song, so every left row starts at the same x and every right row ends
+    at the same x.  It is the style's indent, reduced once as far as the lyrics need: every line
+    must fit (a long line needs a smaller indent), and a left and a right row shown together keep
+    the staircase — the upper (left) one starts and ends no further right than the lower (right)
+    one, i.e. ``2 · indent <= avail − the longer line's extent``."""
     ext = [g[1] + g[2] + g[3] for g in geom]
-    for i, (ll, g) in enumerate(zip(laid, geom)):
-        if g[5] == "center":
-            out.append(0.0)
-            continue
-        cap = min(indent, max(0.0, avail - ext[i]))  # a long line slides back toward its edge
-        for j, (other, h) in enumerate(zip(laid, geom)):
-            if h[5] in ("center", g[5]) or other.show_to <= ll.show_from or other.show_from >= ll.show_to:
+    side = [i for i, g in enumerate(geom) if g[5] != "center"]
+    inset = indent
+    for i in side:
+        inset = min(inset, max(0.0, avail - ext[i]))  # the line itself must fit
+        for j in side:
+            if geom[j][5] == geom[i][5] or laid[j].show_to <= laid[i].show_from or laid[j].show_from >= laid[i].show_to:
                 continue
-            cap = min(cap, max(0.0, avail - max(ext[i], ext[j])) / 2)
-        out.append(cap)
-    return out
+            inset = min(inset, max(0.0, avail - max(ext[i], ext[j])) / 2)
+    inset = max(0.0, inset)
+    return [0.0 if g[5] == "center" else inset for g in geom]
 
 
 def _sung_within(ll: LaidLine, a: float, b: float) -> tuple[float, float]:

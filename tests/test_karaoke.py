@@ -714,7 +714,7 @@ def test_saved_styles_file_problems_lose_nothing(tmp_path):
     assert [x["name"] for x in raw] == ["我的", "未来"] and raw[1] == future
 
 
-def test_alternating_rows_keep_the_staircase_for_long_lines():
+def test_alternating_rows_share_one_indent_that_keeps_the_staircase():
     from types import SimpleNamespace as NS
 
     from kara_align.karaoke.ass import alternate_insets
@@ -734,6 +734,10 @@ def test_alternating_rows_keep_the_staircase_for_long_lines():
     # the upper (left) line shown with the lower (right) one never reaches past it on either side
     assert left_x1 <= right_x1 and left_x0 <= right_x0
     assert ins[0] == ins[1] == 70  # the room (1440 − 1300) shared equally
-    assert ins[2] == indent and ins[3] == 0.0  # alone on screen: the full indent; centred rows have none
+    # one indent for the whole song: a short line shown alone later uses the same one (all left rows
+    # start at the same x, all right rows end at the same x); centred rows have none
+    assert ins[2] == 70 and ins[3] == 0.0
+    short = [NS(show_from=0, show_to=5000), NS(show_from=3000, show_to=9000)]
+    assert alternate_insets(short, [g(600, "left"), g(700, "right")], indent, avail) == [indent, indent]
     # a line longer than the room goes all the way to its edge
     assert alternate_insets([laid[0], laid[1]], [g(1500, "left"), g(400, "right")], indent, avail) == [0.0, 0.0]
