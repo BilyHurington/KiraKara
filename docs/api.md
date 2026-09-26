@@ -146,7 +146,7 @@ Every `url` returned for an exported file (mix, video, burn, task video, this li
 | POST | `/api/projects/{pid}/calibration/confirm-zero` | – | `ProjectView` |
 | POST | `/api/projects/{pid}/calibration/check` | `{line_id, marked_ms}` | `ProjectView` (check residual in `calibration.checks`, warnings in `view.calibration_issues`) |
 | POST | `/api/projects/{pid}/calibration/undo` | – | `ProjectView` |
-| POST | `/api/projects/{pid}/calibration/suggest` | – | `Job` (kind `calibrate`; output `{shift_ms, agree, lines_checked, line_starts, vocal_onset_ms, audio_role}`; nothing is saved). Uses the vocals only when the stems are current |
+| POST | `/api/projects/{pid}/calibration/suggest` | – | `Job` (kind `calibrate`; output `{shift_ms, agree, tight, lines_checked, confident, reason, drift_ms, line_starts, vocal_onset_ms, audio_role}`; nothing is saved). `agree` / `tight`: share of lines within 0.7 s / 0.3 s of `shift_ms`; `confident` false with a `reason` when the estimate should not be used without listening (see `kara_align/auto_calibrate.py`). Uses the vocals only when the stems are current |
 
 ## Alignment and results
 
@@ -237,9 +237,9 @@ unknown values → default). See `docs/karaoke.md`.
 
 `PipelineTask` = `{id, created, finished, name, mode, media_filename, lyrics_kind: "link"|"text", lyrics_input, status, project_id, project_deleted, progress, message, error, warnings: [str], current_stage, stages: [{key, label, status, progress, message, failed_soft}], outputs: {video?: {filename, url}}, calibration, calibration_confirmed, video: TaskVideo, processing: TaskProcessing, style_label, style_colors: [str], style_applied, name_auto}` (+ `karaoke: KaraokeStyle`, `detail` (traceback) and `warning_stage` in the responses of the POST endpoints, not in the list).
 
-- `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export`, stage status `pending|running|waiting|done|skipped|failed`.
-- `calibration` (LRC mode, while `waiting`): `{line_id, line_text, lrc_ms, lines: [{id, text, lrc_ms}], check_line, asset_id, duration_ms, lines_after_audio, lines_total}`; the list adds `current_ms` (the project's current offset applied to `lrc_ms`, when one was set in the detailed mode, else `null`); after a confirmation it holds `confirmed_ms`.
-- `video` = `{auto_export, video_audio, vocal_keep_pct, quality}`, `processing` = `{ai_provider, ai_model, ai_readings, separate, separation_preset, separation_device}`, both fixed when the task is added. `style_label` / `style_colors` describe the task's subtitle style for the list.
+- `status`: `preparing|queued|running|waiting|succeeded|failed|cancelled|interrupted`; stage keys `import, lyrics, calibrate, readings, separate, align, export` in the order they run (tasks with `processing.calibration: "auto"` run `calibrate` — labelled 检测偏移 — after `separate`), stage status `pending|running|waiting|done|skipped|failed`.
+- `calibration` (LRC mode, while `waiting`): `{line_id, line_text, lrc_ms, lines: [{id, text, lrc_ms}], check_line, asset_id, duration_ms, lines_after_audio, lines_total}`; the list adds `current_ms` (the project's current offset applied to `lrc_ms`, when one was set in the detailed mode, else `null`); after a confirmation it holds `confirmed_ms`. Automatic tasks that were not sure enough add `auto: {shift_ms, tight, lines, tight_lines, drift_ms, reason, confident}` (only `{reason}` when no estimate could be made); an automatic task that was sure goes on without waiting.
+- `video` = `{auto_export, video_audio, vocal_keep_pct, quality}`, `processing` = `{ai_provider, ai_model, ai_readings, separate, separation_preset, separation_device, calibration: "manual"|"auto"}` (`calibration` from `simple.calibration`), both fixed when the task is added. `style_label` / `style_colors` describe the task's subtitle style for the list.
 - `project_deleted: true`: the project was deleted in the detailed mode; the task stays listed without links and cannot be retried.
 - When `tasks.json` cannot be written (disk full …) the running task gets a warning.
 

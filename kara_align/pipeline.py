@@ -81,6 +81,7 @@ STAGES: list[tuple[str, str, float]] = [  # key, label, share of the progress ba
     ("export", "生成视频", 0.20),
 ]
 PREP_STAGES = ("import", "lyrics", "calibrate")  # quick; run as soon as the task is added
+AUTO_CALIBRATE_LABEL = "检测偏移"
 SKIPPED_ON_ERROR = "skipped:error"  # a stage outcome: optional step skipped because it went wrong
 _LABEL = {k: label for k, label, _ in STAGES}
 _WEIGHT = {k: w for k, _, w in STAGES}
@@ -115,6 +116,20 @@ class TaskProcessing(_Base):
     separate: bool = True
     separation_preset: str = "melband-roformer"
     separation_device: Literal["auto", "cpu"] = "auto"
+    # LRC offset: "manual" = the user marks the first line right after adding; "auto" = detected from a
+    # trial alignment after separation (asks only when unsure)
+    calibration: Literal["manual", "auto"] = "manual"
+
+
+def task_stages(calibration: str) -> list[Stage]:
+    """A new task's stages, in the order they run: the automatic offset needs the separated vocals,
+    so it comes after separation instead of right after the lyrics."""
+    order = [(k, label) for k, label, _ in STAGES]
+    if calibration == "auto":
+        cal = next(x for x in order if x[0] == "calibrate")
+        order.remove(cal)
+        order.insert(next(i for i, x in enumerate(order) if x[0] == "align"), ("calibrate", AUTO_CALIBRATE_LABEL))
+    return [Stage(key=k, label=label) for k, label in order]
 
 
 class PipelineTask(_Base):
@@ -272,7 +287,7 @@ class TaskQueue:
         if self.passive:  # the other process's tasks, as they are (they may be running there right now)
             return tasks
         for t in tasks:
-            if t.status == "running" and _first_open_stage(t) not in PREP_STAGES:  # stopped while it ran
+            if t.status == "running" and _first_open_stage(t) not in prep_keys(t):  # stopped while it ran
                 t.status = "interrupted"
                 t.message = "应用重启时中断，可以重试"
                 for s in t.stages:
@@ -370,12 +385,13 @@ class TaskQueue:
             safe = "media"
         t = PipelineTask(name=name.strip(), mode=mode, media_filename=safe,  # type: ignore[arg-type]
                          lyrics_kind="link" if is_music_link(lyrics) else "text", lyrics_input=lyrics,
-                         stages=[Stage(key=k, label=label) for k, label, _ in STAGES],
+                         stages=task_stages(cfg.simple.calibration),
                          karaoke=karaoke, video=video, style_label=label, style_colors=colors,
                          processing=TaskProcessing(ai_provider=cfg.ai.provider, ai_model=cfg.ai.model,
                                                    ai_readings=cfg.simple.ai_readings, separate=cfg.simple.separate,
                                                    separation_preset=cfg.simple.separation_preset,
-                                                   separation_device=cfg.simple.separation_device))
+                                                   separation_device=cfg.simple.separation_device,
+                                                   calibration=cfg.simple.calibration))
         if style is not None:  # the next task starts from these choices
             app_settings.update({"simple": {"task_style": opts.model_dump(mode="json")}})
         if not t.name and t.lyrics_kind == "text":
@@ -417,7 +433,7 @@ class TaskQueue:
             if task.status != "preparing" or not any(x is task for x in self.tasks) or self._stop:
                 return
             self._cancel[task.id] = token
-        self._run(task, token, PREP_STAGES, done_status="queued")
+        self._run(task, token, prep_keys(task), done_status="queued")
         with self._lock:
             self._wake.notify_all()
 
@@ -455,7 +471,7 @@ class TaskQueue:
             again = {s.key for s in t.stages if s.status == "pending"}
             t.warnings = [w for w in t.warnings if t.warning_stage.get(w) not in again]
             t.warning_stage = {w: k for w, k in t.warning_stage.items() if w in t.warnings}
-            prep = _first_open_stage(t) in PREP_STAGES
+            prep = _first_open_stage(t) in prep_keys(t)
             t.status = "preparing" if prep else "queued"
             t.error, t.detail, t.message, t.finished = None, None, "等待开始", None
             self._wake.notify_all()
@@ -632,6 +648,16 @@ def _first_open_stage(t: PipelineTask) -> Optional[str]:
     return next((s.key for s in t.stages if s.status not in ("done", "skipped")), None)
 
 
+def prep_keys(t: PipelineTask) -> tuple[str, ...]:
+    """The quick stages at the start of this task (run as soon as it is added)."""
+    keys: list[str] = []
+    for s in t.stages:
+        if s.key not in PREP_STAGES:
+            break
+        keys.append(s.key)
+    return tuple(keys)
+
+
 def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Optional[tuple[str, ...]] = None) -> None:
     cfg = app_settings.load()
     if task.processing is not None:  # the choices made when the task was added, not today's settings
@@ -651,10 +677,12 @@ def run_task(q: TaskQueue, task: PipelineTask, cancel: CancelToken, keys: Option
         done = sum(_WEIGHT[s.key] * (1.0 if s.status in ("done", "skipped") else s.progress) for s in task.stages)
         task.progress = round(min(0.999, done / sum(_WEIGHT.values())), 4)
 
-    for key, _label, _w in STAGES:
-        st = task.stage(key)
-        if st.status in ("done", "skipped") or (keys is not None and key not in keys):
+    for st in list(task.stages):  # the task's own order (see task_stages)
+        key = st.key
+        if st.status in ("done", "skipped"):
             continue
+        if keys is not None and key not in keys:
+            break  # (the preparation stops at the first stage that is not its own)
         cancel.check()
         st.status, st.progress, st.message = "running", 0.0, ""
         task.message = st.label
@@ -870,7 +898,8 @@ def _audio_role(h) -> str:
 
 
 def stage_calibrate(q, task, cfg, cancel, progress):
-    """LRC mode: wait for the user to mark where the first timed line is sung."""
+    """LRC mode: the global offset of the LRC times.  "manual": wait for the user to mark where the
+    first timed line is sung.  "auto": detect it from a trial alignment; ask only when unsure."""
     h = _handle(q, task)
     if h.project.mode != "lrc":
         return "skipped"
@@ -883,7 +912,39 @@ def stage_calibrate(q, task, cfg, cancel, progress):
         S.update_settings(h, mode="plain")
         task.mode = "plain"
         return "改用普通模式"
+    if task.processing is not None and task.processing.calibration == "auto":  # (the task's stage order)
+        cal = h.project.calibration
+        if cal.confirmed:  # set in the detailed mode meanwhile: that one counts
+            task.calibration_confirmed = True
+            return f"偏移 {cal.user_shift_ms:+d} ms（详细模式中已设置）"
+        done = _auto_calibrate(task, h, cancel, progress)
+        if done is not None:
+            return done
+        raise WaitForUser("自动检测没有把握，请确认开头位置")
     raise WaitForUser("等待确认开头位置")
+
+
+def _auto_calibrate(task: PipelineTask, h: "S.ProjectHandle", cancel: CancelToken, progress) -> Optional[str]:
+    """Detect the offset (auto_calibrate); applied when confident.  Otherwise the estimate (if any)
+    and the reason go with the confirmation request, and None is returned."""
+    from .auto_calibrate import estimate_lrc_shift
+
+    assert task.calibration is not None
+    try:
+        est = run_heavy(lambda: estimate_lrc_shift(h, cancel=cancel, progress=lambda f, m="": progress(f * 0.95, m)),
+                        lambda m: progress(0.0, m), cancel, holder=_holder(task, "偏移检测"))
+    except S.ServiceError as e:
+        task.calibration["auto"] = {"reason": str(e)}
+        return None
+    auto = {"shift_ms": est["shift_ms"], "tight": round(est["tight"], 3), "lines": est["lines"],
+            "tight_lines": est["tight_lines"], "drift_ms": est["drift_ms"], "reason": est["reason"],
+            "confident": est["confident"]}
+    task.calibration["auto"] = auto
+    if not est["confident"]:
+        return None
+    S.calibration_op(h, "shift", user_shift_ms=est["shift_ms"])
+    task.calibration_confirmed = True
+    return f"自动 · 偏移 {est['shift_ms']:+d} ms（{est['tight_lines']}/{est['lines']} 行一致）"
 
 
 def calibration_request(h: "S.ProjectHandle") -> dict:

@@ -1,6 +1,6 @@
 // 设置页：极简模式的一键流程用到的全部选项。每项修改立即保存到本机。
 
-import { Bot, Film, Scissors, Subtitles } from 'lucide-react';
+import { Bot, Crosshair, Film, Scissors, Subtitles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, FontFamily, KaraokeStyle } from '@/lib/types';
@@ -78,6 +78,24 @@ export function SimpleSettings() {
                   options={[{ value: 'auto', label: '自动（GPU / MPS）' }, { value: 'cpu', label: '仅 CPU' }]} />
               </Group>
             </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader icon={<Crosshair className="size-4" />} title="歌词开头对齐" description="视频的声音经常和 LRC 歌词里的时间差一段（片头、不同版本）。每个 LRC 任务需要先找出这段偏移。" />
+        <CardBody className="space-y-3">
+          <Group label="偏移怎么确定">
+            <Segmented<Simple['calibration']> label="偏移怎么确定" value={s.calibration} onChange={(v) => save({ calibration: v })}
+              options={[{ value: 'manual', label: '手动标记第一句' }, { value: 'auto', label: '自动检测' }]} />
+          </Group>
+          <p className="text-xs text-muted">
+            {s.calibration === 'manual'
+              ? '添加任务后马上请你在波形上标出第一句开始唱的位置，最准。'
+              : '人声分离后先试对齐整首歌，用大多数歌词行一致的偏移，不需要原曲音频。没把握时（行数太少、只有部分行对得上、视频是别的速度或剪辑过）仍会请你确认，标记会放在检测到的位置。'}
+          </p>
+          {s.calibration === 'auto' && !s.separate && (
+            <Callout tone="warn">没有分离人声时，自动检测在原曲上进行，伴奏会让它更容易没把握。</Callout>
           )}
         </CardBody>
       </Card>

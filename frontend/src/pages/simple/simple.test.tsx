@@ -19,7 +19,7 @@ const SETTINGS: AppSettings = {
   version: 1,
   ai: { provider: 'none', model: '', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', timeout_s: 600, has_api_key: false, env_key_present: false },
   simple: {
-    default_mode: 'lrc', ai_readings: true, separate: true, separation_preset: 'melband-roformer', separation_device: 'auto',
+    default_mode: 'lrc', ai_readings: true, separate: true, separation_preset: 'melband-roformer', separation_device: 'auto', calibration: 'manual',
     karaoke: STYLE, auto_export: true, video_audio: 'original',
     vocal_keep_pct: 20, quality: 'standard',
     task_style: { source: 'default', template: 'glow', color: '#FF8A1E', secondary: '', saved_id: '', translation: null, song_info: null, ruby: 'style', video_audio: null },
@@ -347,6 +347,26 @@ describe('confirming the start before the task continues', () => {
     expect(api.find('POST', '/api/tasks/tw/calibration')[0].body).toEqual({ marked_ms: 1400 });  // −100 ms nudge
   });
 
+  it('after an unsure automatic detection the marker starts at its estimate and says why', async () => {
+    seed();
+    const unsure = () => ({ ...waiting(), calibration: { ...cal, auto: { shift_ms: -420, tight: 0.5, lines: 8, tight_lines: 4, reason: '只有 4/8 行对得上同一个偏移，歌词可能是别的版本', confident: false } } });
+    useSimple.setState({ tasks: [unsure()] });
+    const api = mockApi({
+      'GET /api/tasks': () => [unsure()],
+      'POST /api/tasks/tw/calibration': () => ({ ...unsure(), status: 'queued' }),
+      'GET /api/projects/p/audio/a1/peaks': () => ({ per_second: 100, mins: [], maxs: [] }),
+    });
+    renderUI(<SimpleHome />);
+    await userEvent.click(await screen.findByRole('button', { name: /确认开头位置/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('自动检测没有把握')).toBeInTheDocument();
+    expect(within(dialog).getByText(/只有 4\/8 行对得上/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('textbox', { name: '标记时间' })).toHaveValue('0:01.080');
+    await userEvent.click(within(dialog).getByRole('button', { name: /确认并继续/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks/tw/calibration')).toHaveLength(1));
+    expect(api.find('POST', '/api/tasks/tw/calibration')[0].body).toEqual({ marked_ms: 1080 });
+  });
+
   it('a waiting task shows the button; plain mode is one click', async () => {
     seed();
     useSimple.setState({ tasks: [waiting()] });
@@ -382,7 +402,7 @@ describe('detailed calibration page', () => {
     const api = mockApi({
       [`POST /api/projects/${pv.project.id}/calibration/suggest`]: () => ({ id: 'jc', kind: 'calibrate', project_id: pv.project.id, status: 'running', progress: 0, message: '', error: null, created: 'z', finished: null, output: null }),
       'GET /api/jobs/jc': () => ({ id: 'jc', kind: 'calibrate', project_id: pv.project.id, status: 'succeeded', progress: 1, message: '完成', error: null, created: 'z', finished: 'z',
-        output: { shift_ms: -180, agree: 0.92, lines_checked: 48, audio_role: 'vocals', vocal_onset_ms: 12000, line_starts: {} } }),
+        output: { shift_ms: -180, agree: 0.95, tight: 0.92, confident: true, reason: '', lines_checked: 48, audio_role: 'vocals', vocal_onset_ms: 12000, line_starts: {} } }),
       [`POST /api/projects/${pv.project.id}/calibration/shift`]: () => pv,
     });
     renderUI(<CalibratePage />);
@@ -391,7 +411,7 @@ describe('detailed calibration page', () => {
     await userEvent.click(screen.getByRole('button', { name: /从有效句首前 2 秒播放/ }));
     expect(play).toHaveBeenLastCalledWith(Math.max(0, eff - 2000));
     await userEvent.click(screen.getByRole('button', { name: /自动匹配/ }));
-    expect(await screen.findByText('44/48 行一致', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('44/48 行一致（±0.3 秒）', {}, { timeout: 3000 })).toBeInTheDocument();
     expect(api.find('POST', '/calibration/shift')).toHaveLength(0);  // nothing changes by itself
     await userEvent.click(screen.getByRole('button', { name: /试听建议位置/ }));
     expect(play).toHaveBeenLastCalledWith(Math.max(0, base - 180));

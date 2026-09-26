@@ -773,3 +773,88 @@ def test_old_sideways_video_size_is_corrected_and_deleted_projects_stay_deleted(
     with pytest.raises(S.ServiceError):
         h2.save()  # a late save does not bring the folder back
     assert not h2.dir.exists()
+
+
+# ------------------------------------------------------------------ automatic offset
+
+
+def test_offset_fit_follows_most_lines_and_says_when_unsure():
+    from kara_align.auto_calibrate import fit_offset
+
+    times = [10_000 + 15_000 * i for i in range(12)]
+    ok = fit_offset([(t, -800 + (i % 3) * 60) for i, t in enumerate(times)])
+    assert ok["confident"] and abs(ok["shift_ms"] + 740) <= 60 and ok["tight_lines"] == 12
+    # a few lines the trial got wrong (a repeated chorus, an ad-lib) do not move it
+    wrong = [(t, -800 if i not in (2, 7, 8) else 9_000) for i, t in enumerate(times)]
+    fit = fit_offset(wrong)
+    assert fit["confident"] and fit["shift_ms"] == -800 and fit["tight_lines"] == 9
+    # scattered: another version of the song
+    assert not fit_offset([(t, (i * 7919) % 6000) for i, t in enumerate(times)])["confident"]
+    # a steady drift: another tempo — one offset cannot fit it
+    drift = fit_offset([(t, int(t * 0.004)) for t in times])
+    assert not drift["confident"] and "速度" in drift["reason"]
+    # only the second half agrees
+    half = fit_offset([(t, 500 if i >= 6 else -4000 * i) for i, t in enumerate(times)])
+    assert not half["confident"]
+    few = fit_offset([(1000, -500), (3000, -500), (5000, -500)])
+    assert not few["confident"] and "太少" in few["reason"] and few["shift_ms"] == -500
+
+
+SCRIPT5 = [
+    ("ki", 1000, 1200), ("mi", 1200, 1400), ("to", 1400, 1700),
+    ("a", 2200, 2400), ("ru", 2400, 2600), ("i", 2600, 2700), ("ta", 2700, 2900),
+    ("so", 3400, 3600), ("ra", 3600, 3900),
+    ("u", 4400, 4600), ("mi", 4600, 4900),
+    ("ya", 5400, 5600), ("ma", 5600, 5900),
+]
+LRC5 = "[00:01.50]きみと\n[00:02.70]あるいた\n[00:03.90]そら\n[00:04.90]うみ\n[00:05.90]やま\n"
+
+
+def test_automatic_offset_runs_after_separation_without_asking(tmp_path, monkeypatch):
+    monkeypatch.setattr(ScriptedBackend, "default_script", SCRIPT5)
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False, "calibration": "auto"}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=LRC5, mode="lrc", name="A")
+    assert [s.key for s in t.stages] == ["import", "lyrics", "readings", "separate", "calibrate", "align", "export"]
+    assert t.stage("calibrate").label == "检测偏移" and P.prep_keys(t) == ("import", "lyrics")
+    t = _wait(q, t.id)
+    assert t.status == "succeeded", (t.error, t.detail)
+    assert t.stage("calibrate").message == "自动 · 偏移 -500 ms（5/5 行一致）"
+    cal = q.ws.get(t.project_id).project.calibration
+    assert cal.user_shift_ms == -500 and cal.confirmed
+    q.shutdown()
+
+
+def test_automatic_offset_asks_when_unsure_and_starts_from_its_estimate(tmp_path, monkeypatch):
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False, "calibration": "auto"}})
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = q.add(media=_wav(tmp_path / "a.wav"), filename="a.wav", lyrics=LRC, mode="lrc", name="A")
+    t = _wait(q, t.id)
+    assert t.status == "waiting", (t.error, t.detail)  # three timed lines: too few to trust
+    st = {s.key: s.status for s in t.stages}
+    assert st["separate"] == "skipped" and st["calibrate"] == "waiting" and st["align"] == "pending"
+    auto = t.calibration["auto"]
+    assert auto["shift_ms"] == -500 and not auto["confident"] and "太少" in auto["reason"]
+    # a restart while it waits: still waiting
+    q.shutdown()
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    assert q.get(t.id).status == "waiting"
+    q.confirm_calibration(t.id, marked_ms=1000)
+    t = _wait(q, t.id)
+    assert t.status == "succeeded", (t.error, t.detail)
+    assert t.stage("calibrate").message == "偏移 -500 ms（已确认）"
+    assert q.ws.get(t.project_id).project.calibration.user_shift_ms == -500
+    q.shutdown()
+
+
+def test_old_tasks_keep_the_manual_offset_and_their_stage_order():
+    t = P.PipelineTask.model_validate({"stages": [s.model_dump() for s in P.task_stages("manual")],
+                                       "processing": {"ai_readings": True}})
+    assert t.processing.calibration == "manual" and P.prep_keys(t) == ("import", "lyrics", "calibrate")
+    # an automatic task stopped during the detection is not prepared again (it runs after separation)
+    auto = P.PipelineTask(stages=P.task_stages("auto"))
+    for s in auto.stages[:4]:
+        s.status = "done"
+    assert P._first_open_stage(auto) == "calibrate" and "calibrate" not in P.prep_keys(auto)

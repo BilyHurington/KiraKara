@@ -135,7 +135,10 @@ function Calibration() {
   };
 
   // automatic suggestion: a trial alignment on the (separated) vocals
-  type Suggestion = { shift_ms: number; agree: number; lines_checked: number; audio_role: string; vocal_onset_ms: number | null };
+  type Suggestion = {
+    shift_ms: number; agree: number; tight: number; lines_checked: number; confident: boolean; reason: string;
+    audio_role: string; vocal_onset_ms: number | null;
+  };
   // the suggestion comes from the latest finished job, so it is still there after leaving the page
   const sugJob = useJob('calibrate');
   useEffect(() => { void resumeJobs(project.id); }, [project.id]);
@@ -229,21 +232,23 @@ function Calibration() {
                     自动匹配
                   </Button>
                   {suggesting ? <span className="text-xs text-muted">{sugJob!.message || '试对齐中…'}</span> : !sug && (
-                    <span className="text-xs text-muted">先按普通模式试对齐一次，取各行偏移的中位数作为建议（有人声分轨时更准）；不会自动保存</span>
+                    <span className="text-xs text-muted">先按普通模式试对齐一次，取大多数行一致的偏移作为建议（有人声分轨时更准）；不会自动保存</span>
                   )}
                   {sug && (
                     <>
                       <span className="text-[13px]">建议全局平移 <b className="tabular font-mono">{fmtSigned(sug.shift_ms)}</b></span>
-                      <Badge tone={sug.agree >= 0.7 ? 'ok' : sug.agree >= 0.5 ? 'warn' : 'danger'}>
-                        {Math.round(sug.agree * sug.lines_checked)}/{sug.lines_checked} 行一致
+                      <Badge tone={sug.confident ? 'ok' : sug.tight >= 0.5 ? 'warn' : 'danger'}>
+                        {Math.round(sug.tight * sug.lines_checked)}/{sug.lines_checked} 行一致（±0.3 秒）
                       </Badge>
                       <Button size="xs" variant="outline" icon={<Play className="size-3.5" />} disabled={baseOf(line) === null} onClick={playSuggested}>试听建议位置</Button>
                       <Button size="xs" variant="primary" onClick={() => setShift(sug.shift_ms)}>应用建议</Button>
                     </>
                   )}
                 </div>
-                {sug && sug.agree < 0.5 && (
-                  <Callout tone="warn" className="mt-3">只有不到一半的行与建议一致：歌词可能来自另一个版本（例如现场版），建议改用普通模式或逐行添加锚点。</Callout>
+                {sug && !sug.confident && (
+                  <Callout tone="warn" className="mt-3">
+                    建议不太可靠：{sug.reason}。请试听确认，或改用普通模式 / 逐行添加锚点。
+                  </Callout>
                 )}
               </div>
 

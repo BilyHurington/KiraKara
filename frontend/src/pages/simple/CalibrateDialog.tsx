@@ -19,8 +19,10 @@ const SPANS = [6000, 12000, 24000];
 export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose: () => void }) {
   const c = task.calibration!;
   const pid = task.project_id!;
-  // start from what is already known: a confirmed mark, an offset set in the detailed mode, or the LRC time
-  const start = c.confirmed_ms ?? c.current_ms ?? c.lrc_ms;
+  // start from what is already known: a confirmed mark, an offset set in the detailed mode, the
+  // automatic detection's estimate, or the LRC time
+  const detected = c.auto?.shift_ms != null ? c.lrc_ms + c.auto.shift_ms : null;
+  const start = c.confirmed_ms ?? c.current_ms ?? detected ?? c.lrc_ms;
   const [marker, setMarker] = useState(start);
   const [span, setSpan] = useState(SPANS[1]);
   const [view0, setView0] = useState(Math.max(0, start - SPANS[1] * 0.35));
@@ -206,6 +208,14 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
           <Callout tone="warn" title={`有 ${c.lines_after_audio} 行歌词的时间在音频结束之后`}>
             视频可能是剪短的版本（例如 TV 版），而歌词是完整版。这些行不会对齐、也不会出现在字幕里；其余的行照常处理。
             如果整首都对不上，请检查视频和歌词是不是同一首歌、同一个版本。
+          </Callout>
+        )}
+        {c.auto && (
+          <Callout tone="warn" title="自动检测没有把握">
+            {c.auto.reason}。
+            {detected != null && c.current_ms == null && c.confirmed_ms == null
+              ? <>标记放在了检测到的位置（偏移 {fmtSigned(c.auto.shift_ms!)}），听一下第一句是不是从这里开始。</>
+              : <>请标出第一句开始唱的位置。</>}
           </Callout>
         )}
         {c.current_ms != null && c.confirmed_ms == null && (

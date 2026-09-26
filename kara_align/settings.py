@@ -79,6 +79,9 @@ class SimpleSettings(_Base):
     separate: bool = True
     separation_preset: str = "melband-roformer"
     separation_device: Literal["auto", "cpu"] = "auto"
+    # LRC offset of new tasks: "manual" = mark the first line when adding; "auto" = detected after
+    # separation, asked only when unsure (pipeline.stage_calibrate)
+    calibration: Literal["manual", "auto"] = "manual"
 
     @field_validator("separation_preset")
     @classmethod

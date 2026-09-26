@@ -358,6 +358,8 @@ export interface AppSettings {
   simple: {
     default_mode: Mode; ai_readings: boolean; separate: boolean; separation_preset: string;
     separation_device: 'auto' | 'cpu'; karaoke: KaraokeStyle; auto_export: boolean;
+    /** LRC offset of new tasks: mark the first line by hand, or detect it after separation */
+    calibration: 'manual' | 'auto';
     video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high';
     /** last choices of the new-task form (step 4) */
     task_style: TaskStyleOptions;
@@ -408,6 +410,8 @@ export interface CalibrationRequest {
   current_ms?: number | null;
   /** timed lines starting after the end of the audio (a shortened video): left out of the subtitles */
   lines_after_audio?: number; lines_total?: number;
+  /** the automatic detection (tasks set to "auto"), when it was not sure enough to go on by itself */
+  auto?: { shift_ms?: number; tight?: number; lines?: number; tight_lines?: number; drift_ms?: number; reason: string; confident?: boolean } | null;
 }
 
 export interface PipelineTask {
