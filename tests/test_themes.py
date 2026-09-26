@@ -80,5 +80,7 @@ def test_style_remembers_its_template_and_the_editor_can_apply_one(tmp_path):
                                                  "base": base.model_dump(mode="json")}).json()["style"]
     assert (r["text"]["size"], r["layout"]["lines"], r["theme"]["template"]) == (70, 1, "plain")
     assert r["text"]["color_sung"] == palette("#2F80ED")["sung"]
-    assert client.post("/api/karaoke/theme", json={"template": "plain", "color": "#2F80ED",
-                                                    "base": {"text": {"size": "big"}}}).status_code == 400
+    # a base style with a value that does not fit is read like a stored style: that value's default
+    r = client.post("/api/karaoke/theme", json={"template": "plain", "color": "#2F80ED",
+                                                 "base": {"text": {"size": "big"}}})
+    assert r.status_code == 200 and r.json()["style"]["text"]["size"] == KaraokeStyle().text.size

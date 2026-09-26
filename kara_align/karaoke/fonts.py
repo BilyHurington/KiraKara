@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -129,12 +131,18 @@ def default_family() -> str:
     return next(iter(sorted(names)), "Sans")
 
 
+def fc_escape(family: str) -> str:
+    """A family name as a literal in a fontconfig pattern ("-" starts the size, ":" a property,
+    "," separates families; "\\" escapes)."""
+    return re.sub(r"([\\\-:,=])", r"\\\1", family)
+
+
 @functools.lru_cache(maxsize=64)
 def resolve(family: str, bold: bool) -> tuple[str, int]:
     """Font file + face index libass will use for ``family`` (fontconfig match)."""
     family = family or default_family()
     if _fc("fc-match"):
-        pattern = f"{family}:weight={'bold' if bold else 'regular'}"
+        pattern = f"{fc_escape(family)}:weight={'bold' if bold else 'regular'}"
         out = subprocess.run(["fc-match", "-f", "%{file}|%{index}", pattern], capture_output=True, text=True)
         if out.returncode == 0 and "|" in out.stdout:
             file, idx = out.stdout.rsplit("|", 1)
@@ -146,15 +154,85 @@ def resolve(family: str, bold: bool) -> tuple[str, int]:
     return best.path, best.index
 
 
-class Measurer:
-    """Advance widths of text as libass will lay it out, in pixels."""
+@functools.lru_cache(maxsize=32)
+def _charmap(path: str, index: int) -> frozenset[int]:
+    from fontTools.ttLib import TTFont
 
-    def __init__(self, family: str, bold: bool, size: float):
+    try:
+        return frozenset((TTFont(path, fontNumber=index, lazy=True).getBestCmap() or {}).keys())
+    except Exception:
+        return frozenset()
+
+
+def _is_han(cp: int) -> bool:
+    return 0x3400 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x3FFFF or 0x3000 <= cp <= 0x303F
+
+
+@functools.lru_cache(maxsize=1)
+def _mac_han_fallback() -> Optional[str]:
+    """macOS: libass there asks CoreText for a missing glyph, which answers PingFang for Chinese
+    characters; that font is hidden from fontconfig, so it is looked up by file."""
+    if sys.platform != "darwin":
+        return None
+    import glob
+
+    for pat in ("/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/AssetsV2/com_apple_MobileAsset_Font*/*/AssetData/PingFang.ttc"):
+        found = sorted(glob.glob(pat))
+        if found:
+            return found[0]
+    return None
+
+
+@functools.lru_cache(maxsize=4)
+def _pingfang_sc(path: str, bold: bool) -> Optional[int]:
+    from fontTools.ttLib import TTCollection
+
+    try:
+        fonts = TTCollection(path, lazy=True).fonts
+        best = None
+        for i, f in enumerate(fonts):
+            if (f["name"].getBestFamilyName() or "") == "PingFang SC":
+                w = f["OS/2"].usWeightClass
+                if best is None or abs(w - (600 if bold else 400)) < best[0]:
+                    best = (abs(w - (600 if bold else 400)), i)
+        return best[1] if best else None
+    except Exception:
+        return None
+
+
+@functools.lru_cache(maxsize=1024)
+def _fc_fallback(family: str, bold: bool, cp: int) -> Optional[tuple[str, int]]:
+    """The font fontconfig offers for a character ``family`` lacks (what libass uses with fontconfig)."""
+    if not _fc("fc-match"):
+        return None
+    pattern = f"{fc_escape(family)}:charset={cp:x}:weight={'bold' if bold else 'regular'}"
+    out = subprocess.run(["fc-match", "-f", "%{file}|%{index}", pattern], capture_output=True, text=True)
+    if out.returncode != 0 or "|" not in out.stdout:
+        return None
+    file, idx = out.stdout.rsplit("|", 1)
+    if "lastresort" in Path(file).name.lower():  # placeholder glyphs for everything: not a real fallback
+        return None
+    return file, _first_int(idx or "0")
+
+
+class Measurer:
+    """Advance widths of text as libass will lay it out, in pixels.
+
+    Characters the font has no glyph for are drawn by libass with a fallback font (at the same
+    ASS size, i.e. with that font's own em scale); they are measured with the font libass is
+    likely to pick: on macOS PingFang for Chinese characters (CoreText), otherwise the font
+    fontconfig matches for the family with that character.  Text is measured as it will be
+    written (escape_text: backslashes and braces full-width)."""
+
+    def __init__(self, family: str, bold: bool, size: float, *, _face: Optional[tuple[str, int]] = None):
         from fontTools.ttLib import TTFont
         from PIL import ImageFont
 
         self.family = family or default_family()
-        path, index = resolve(self.family, bold)
+        self.bold = bold
+        path, index = _face or resolve(self.family, bold)
+        self._face = (path, index)
         tt = TTFont(path, fontNumber=index, lazy=True)
         upem = tt["head"].unitsPerEm
         os2 = tt["OS/2"] if "OS/2" in tt else None
@@ -166,8 +244,50 @@ class Measurer:
         self.size = size
         self._font = ImageFont.truetype(path, size=max(1, round(size * self.em_scale * 4)), index=index)
         self._k = 1 / 4  # measure at 4x for sub-pixel accuracy
+        self._fallbacks: dict[tuple[str, int], "Measurer"] = {}
+
+    def _fallback(self, ch: str) -> Optional["Measurer"]:
+        cp = ord(ch)
+        for m in self._fallbacks.values():  # a font already used for this text's script first
+            if cp in _charmap(*m._face):
+                return m
+        cands: list[tuple[str, int]] = []
+        mac = _mac_han_fallback() if _is_han(cp) else None
+        if mac is not None:
+            idx = _pingfang_sc(mac, self.bold)
+            if idx is not None:
+                cands.append((mac, idx))
+        fc = _fc_fallback(self.family, self.bold, cp)
+        if fc is not None:
+            cands.append(fc)
+        for face in cands:
+            if face != self._face and cp in _charmap(*face):
+                try:
+                    m = Measurer(self.family, self.bold, self.size, _face=face)
+                except Exception:
+                    continue
+                self._fallbacks[face] = m
+                return m
+        return None
 
     def width(self, text: str) -> float:
         if not text:
             return 0.0
-        return self._font.getlength(text) * self._k
+        from .ass import escape_text
+
+        text = escape_text(text)
+        have = _charmap(*self._face)
+        if not have or all(ord(c) in have or c.isspace() for c in text):
+            return self._font.getlength(text) * self._k
+        # runs of characters the font has / lacks; a lacking run is measured with its fallback font
+        total, run, run_font = 0.0, "", self
+        for c in text:
+            font = self if (ord(c) in have or c.isspace()) else (self._fallback(c) or self)
+            if font is not run_font and run:
+                total += run_font._font.getlength(run) * run_font._k
+                run = ""
+            run_font = font
+            run += c
+        if run:
+            total += run_font._font.getlength(run) * run_font._k
+        return total

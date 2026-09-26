@@ -8,6 +8,7 @@ the audio starts ``video.audio_offset_s`` after the (normalized) video start.
 from __future__ import annotations
 
 import functools
+import json
 import shutil
 import subprocess
 import tempfile
@@ -42,6 +43,55 @@ def _subtitles_filter(ass_name: str) -> str:
     return f"subtitles={ass_name}"
 
 
+def even_size(size: tuple[int, int]) -> tuple[int, int]:
+    """A frame size the H.264 / yuv420p encoders accept (both sides even)."""
+    w, h = size
+    return max(2, int(w) // 2 * 2), max(2, int(h) // 2 * 2)
+
+
+@functools.lru_cache(maxsize=16)
+def _probe_frame(path: str, mtime_ns: int, length: int) -> Optional[tuple[int, int]]:
+    from ..audio.io import ffprobe_path
+
+    probe = ffprobe_path()
+    if not probe:
+        return None
+    r = subprocess.run([probe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data=rotation",
+                        "-of", "json", path], capture_output=True, text=True)
+    try:
+        st = json.loads(r.stdout or "{}")["streams"][0]
+        w, h = int(st["width"]), int(st["height"])
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None
+    num, _, den = str(st.get("sample_aspect_ratio") or "1:1").partition(":")
+    try:
+        sar = float(num) / float(den) if float(num) > 0 and float(den) > 0 else 1.0
+    except ValueError:
+        sar = 1.0
+    rot = 0.0
+    for v in [(st.get("tags") or {}).get("rotate")] + [sd.get("rotation") for sd in st.get("side_data_list") or []]:
+        try:
+            rot = float(v) if v is not None else rot
+        except (TypeError, ValueError):
+            pass
+    w = round(w * sar)  # square pixels: the width as displayed
+    if int(round(abs(rot))) % 180 == 90:  # ffmpeg turns it upright while decoding
+        w, h = h, w
+    return max(2, w), max(2, h)
+
+
+def frame_size(video: Path, fallback: tuple[int, int]) -> tuple[int, int]:
+    """The size ``video`` is shown at: its sample aspect ratio applied (square pixels) and turned
+    upright.  Subtitles are laid out for this size (PlayRes) and the video is scaled to it before
+    they are drawn, so text is never stretched by non-square pixels."""
+    try:
+        st = Path(video).stat()
+        return _probe_frame(str(video), st.st_mtime_ns, st.st_size) or fallback
+    except OSError:
+        return fallback
+
+
 def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional[Path] = None,
                 audio_offset_s: float = 0.0) -> bytes:
     """One frame at audio time ``t_ms``: the video frame there, or black."""
@@ -69,14 +119,17 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
          video: Optional[Path] = None, audio: Optional[Path] = None, audio_offset_s: float = 0.0,
          use_video_audio: bool = False, quality: str = "standard", cancel=None,
          progress: Optional[Callable[[float, str], None]] = None) -> Path:
-    """Render subtitles into a video (the source video, or black at ``size``).
+    """Render subtitles into a video (the source video, or black) of ``size``.
 
+    ``size`` is the frame the subtitles were laid out for (their PlayRes, see frame_size());
+    the source video is scaled to it (square pixels) and both sides are made even, as the
+    yuv420p encoders require (odd sizes would fail).
     ``audio``: a file to use as the soundtrack (placed at ``audio_offset_s``);
     ``use_video_audio``: keep the source video's first audio stream instead.
     """
     from ..interfaces import Cancelled
 
-    w, h = size
+    w, h = even_size(size)
     dur = max(0.1, duration_ms / 1000.0)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,7 +141,7 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
         cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", "-progress", "pipe:1", "-nostats"]
         if video is not None:
             cmd += ["-i", str(video)]
-            vf = _subtitles_filter("k.ass")
+            vf = f"scale={w}:{h},setsar=1,{_subtitles_filter('k.ass')}"
         else:
             cmd += ["-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r=30:d={dur + audio_offset_s:.3f}"]
             vf = _subtitles_filter("k.ass")

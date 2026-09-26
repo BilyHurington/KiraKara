@@ -200,9 +200,12 @@ def theme_style(template: str, color: str, base: KaraokeStyle, secondary: str | 
     """``base`` (layout, timing, ruby …) with the template's colours and effects."""
     if template not in TEMPLATES:
         raise ValueError(f"没有这个模版：{template}")
+    # as #RRGGBB (a style's colours are validated as such; "#f80" is accepted here)
+    color = rgb_to_hex(hex_to_rgb(color))
+    secondary = rgb_to_hex(hex_to_rgb(secondary)) if secondary else None
     p = palette(color, secondary)
     st = base.model_copy(deep=True)
-    st.theme = KaraokeTheme(template=template, color=color.upper(), secondary=(secondary or "").upper())
+    st.theme = KaraokeTheme(template=template, color=color, secondary=secondary or "")
     t = st.text
     t.color_unsung, t.color_sung, t.outline_color, t.shadow_color = p["unsung"], p["sung"], p["outline"], p["shadow"]
     st.ruby.follow_colors = True

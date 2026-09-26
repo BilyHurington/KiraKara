@@ -6,21 +6,24 @@ style picks, unless the project has its own text (``Project.song_info_text``,
 one line each, the first is the title).  The card slides in beside a thin accent
 bar in the lyrics' sung colour, uses the lyrics' font, outline and glow, and
 fades out after ``duration_ms`` — or before the first lyric / translation that
-would share the top edge.
+would share the top edge (after 2 s at least), and always before anything that
+would be drawn where the card is (then without the 2 s; a card that would not
+last a second is left out).
 """
 
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..models import KaraokeStyle, Project
 from .fonts import Measurer
 
 LABELS = {"title": "歌名", "artist": "歌手", "album": "专辑", "lyricist": "作词", "composer": "作曲", "arranger": "编曲"}
-_CREDIT = {"lyricist": re.compile(r"作词|作詞|^词$|^詞$|lyric|written", re.I),
+# a label may name several roles ("作词/作曲", "词曲", "Lyrics & Music"): each one is filled
+_CREDIT = {"lyricist": re.compile(r"作词|作詞|^[词詞]|lyric|written", re.I),
            "arranger": re.compile(r"编曲|編曲|arrang", re.I),
-           "composer": re.compile(r"作曲|^曲$|compos|music", re.I)}
+           "composer": re.compile(r"作曲|^曲$|[词詞]曲|compos|music", re.I)}
 _LABEL = re.compile(r"^\s*([^:：]{1,16}?)\s*[:：]\s*(.+?)\s*$")
 
 L_INFO_GLOW, L_INFO = 8, 9
@@ -40,7 +43,6 @@ def song_fields(project: Project) -> dict[str, str]:
         for key, pat in _CREDIT.items():
             if pat.search(m.group(1).strip()) and not out.get(key):
                 out[key] = m.group(2)
-                break
     return {k: v.strip() for k, v in out.items() if v and v.strip()}
 
 
@@ -62,9 +64,13 @@ def info_lines(project: Project, style: KaraokeStyle) -> list[str]:
 
 
 def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float, family: str,
-                time_offset_ms: float, busy_from_ms: Optional[float]) -> list[str]:
+                time_offset_ms: float, busy_from_ms: Optional[float], *,
+                boxes: Sequence[tuple[float, float, float, float, float, float]] = (),
+                warnings: Optional[list[str]] = None) -> list[str]:
     """Dialogue lines of the card (style ``KInfo``); ``busy_from_ms`` is when a lyric or
-    translation first shows at the top edge (the card is gone by then)."""
+    translation first shows at the top edge (the card is gone by then, but stays 2 s);
+    ``boxes``: (from, to, x0, y0, x1, y1) of what else is drawn — the card is gone before
+    any of it shows where the card is."""
     info, txt, glow = style.info, style.text, style.glow
     lines = info_lines(project, style)
     if not info.enabled or not lines:
@@ -75,7 +81,6 @@ def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float,
         t1 = max(t0 + 2000, busy_from_ms - 200)
     t0 = max(0.0, t0)
 
-    right = info.position == "top-right"
     title_size = info.size * k
     sub_size = max(18 * k, title_size * 0.56)
     margin = info.margin * k
@@ -85,16 +90,50 @@ def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float,
     color = _bgr(info.color or txt.color_unsung)
     accent = _bgr(info.accent or txt.color_sung)
     outline_c = _bgr(txt.outline_color)
+
+    # where each line goes (\an7 / \an9: the line box's top at y, its height the font size)
+    placed = []
+    y = bottom = margin
+    for i, text in enumerate(lines):
+        size = title_size if i == 0 else sub_size
+        bold = txt.bold if i == 0 else False
+        width = Measurer(family, bold, size).width(text)
+        placed.append((text, size, bold, width, y))
+        bottom = y + size
+        y += size * (1.18 if i == 0 else 1.32)
+    block_h = bottom - margin  # the accent bar is as tall as the text
+    # the card's area (sliding in, outline and glow included) must stay clear of everything else
+    pad = (txt.outline + (glow.size + glow.blur if glow.enabled else 0)) * k + 8 * k
+    reach = bar_w + gap + min(max_w, max(w for *_, w, _ in placed)) + 28 * k
+
+    def clear_until(right: bool) -> float:
+        """When something else shows where the card would be (in that corner), less 0.2 s."""
+        cx0, cx1 = (W - margin - reach - pad, W - margin + pad) if right else (margin - pad, margin + reach + pad)
+        cy0, cy1 = margin - pad, margin + block_h + pad
+        end = t1
+        for b0, b1, bx0, by0, bx1, by1 in boxes:
+            if b1 > t0 and b0 - 200 < end and bx0 < cx1 and cx0 < bx1 and by0 < cy1 and cy0 < by1:
+                end = b0 - 200
+        return end
+
+    right = info.position == "top-right"
+    end = clear_until(right)
+    if end - t0 < 1000:  # no room in its corner: the other one, else no card
+        other = clear_until(not right)
+        if other - t0 < 1000:
+            if warnings is not None:
+                warnings.append("开头的歌词 / 翻译会显示在歌曲信息的位置，歌曲信息没有显示（可调整它的开始时间）")
+            return []
+        right, end = not right, other
+        if warnings is not None:
+            warnings.append("开头的歌词 / 翻译会显示在歌曲信息的位置，歌曲信息改到了另一侧")
+    t1 = end
     slide = 28 * k * (1 if right else -1)
     x_text = (W - margin - bar_w - gap) if right else (margin + bar_w + gap)
     an = 9 if right else 7
 
     events: list[str] = []
-    y = margin
-    for i, text in enumerate(lines):
-        size = title_size if i == 0 else sub_size
-        bold = txt.bold if i == 0 else False
-        width = Measurer(family, bold, size).width(text)
+    for i, (text, size, bold, width, y) in enumerate(placed):
         sx = f"\\fscx{max_w / width * 100:.1f}" if width > max_w else ""
         a = t0 + 90 * i  # lines come in one after another
         move = f"\\move({x_text + slide:.1f},{y:.1f},{x_text:.1f},{y:.1f},0,450)"
@@ -109,8 +148,6 @@ def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float,
         events.append(_dialogue(L_INFO, a, t1, f"{base}\\1c{color}{sub_alpha}\\3c{outline_c}"
                                 f"\\bord{txt.outline * k * (0.7 if i == 0 else 0.55):.2f}"
                                 f"\\shad{txt.shadow * k * 0.6:.2f}", body))
-        y += size * (1.18 if i == 0 else 1.32)
-    block_h = y - margin
     bar_x = (W - margin - bar_w) if right else margin
     rect = f"m 0 0 l {bar_w:.1f} 0 l {bar_w:.1f} {block_h:.1f} l 0 {block_h:.1f}"
     events.append(_dialogue(L_INFO, t0, t1, f"\\an7\\pos({bar_x:.1f},{margin:.1f})\\bord0\\shad{txt.shadow * k * 0.4:.2f}"
@@ -130,8 +167,9 @@ def _dialogue(layer: int, t0: float, t1: float, tags: str, body: str) -> str:
 
 
 def _bgr(hex_rgb: str) -> str:
-    h = hex_rgb.lstrip("#")
-    return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
+    from .ass import bgr_tag
+
+    return bgr_tag(hex_rgb)
 
 
 def _escape(text: str) -> str:

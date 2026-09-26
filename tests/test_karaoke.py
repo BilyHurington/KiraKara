@@ -579,14 +579,17 @@ def test_ruby_sweep_follows_the_lyric(tmp_path):
     assert len(main) == 2 * n_chunks and not any("\\k" in l for l in main)
     assert len(ruby) == 2 * n_ruby_chunks and not any("\\k" in l for l in ruby)
     unsung, sung = ruby[0::2], ruby[1::2]
-    assert all("\\1c&HFFFFFF&" in l and "\\clip" not in l for l in unsung)  # the whole reading, unsung
+    # the reading in the unsung colour right of the sweep (\iclip), in the sung colour left of it
+    assert all("\\1c&HFFFFFF&" in l and "\\clip" not in l and "\\iclip(0,0," in l for l in unsung)
     assert all("\\clip(0,0," in l and "\\t(" in l for l in sung)  # the sung colour, cut at the sweep
-    # one cut for the whole line: every lyric and ruby event of a line carries the same clip
-    clip_of = lambda l: l.split("\\shad0", 1)[1].split("}", 1)[0]  # noqa: E731
-    by_start: dict[str, set] = {}
-    for l in sung + main[1::2]:
-        by_start.setdefault(l.split(",")[1], set()).add(clip_of(l))
-    assert all(len(v) == 1 for v in by_start.values())
+    assert [l.replace("\\iclip", "\\clip").split("}", 1)[0].split("\\clip", 1)[1] for l in unsung] == \
+        [l.split("}", 1)[0].split("\\clip", 1)[1] for l in sung]
+    # lyric and reading of a chunk are cut by one line while it sweeps over the lyric (the reading's
+    # cut then goes on over the part of the reading wider than its lyric)
+    cuts = lambda l: re.findall(r"\\t\(\d+,\d+,\\clip\([^)]*\)\)", l)  # noqa: E731
+    lyric = next(l for l in main[1::2] if l.endswith("窓"))
+    reading = next(l for l in sung if l.endswith("まど"))
+    assert cuts(reading)[:len(cuts(lyric)) - 1] == cuts(lyric)[:-1]
     # nothing sung before the line starts; the cut sweeps while 窓 (まど) is swept below
     m = next(l for l in own if ",KMain," in l and "窓" in l)
     pre = re.search(r"\\k(\d+)\}\{\\kf(\d+)\}窓", m)
@@ -704,7 +707,7 @@ def test_saved_styles_file_problems_lose_nothing(tmp_path):
     assert [x["name"] for x in ST.list_styles()] == ["默认", "暖阳"]
     assert ST._path().with_suffix(".broken.json").read_text(encoding="utf-8") == "{not json"
     # an entry this version cannot read is written back unchanged when saving
-    future = {"id": "st_future", "name": "未来", "style": {"text": {"size": "huge"}}}
+    future = {"id": "st_future", "name": "未来", "style": "kara-align/style-v9"}
     ST._path().write_text(json.dumps([future]), encoding="utf-8")
     ST.save_style("我的", KaraokeStyle().model_dump(mode="json"))
     raw = json.loads(ST._path().read_text(encoding="utf-8"))
