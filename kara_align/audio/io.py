@@ -55,9 +55,10 @@ def ffmpeg_path() -> str:
 
 def ffprobe_path() -> Optional[str]:
     ff = ffmpeg_path()
-    cand = os.path.join(os.path.dirname(ff), "ffprobe")
-    if os.path.exists(cand):
-        return cand
+    for name in ("ffprobe", "ffprobe.exe"):
+        cand = os.path.join(os.path.dirname(ff), name)
+        if os.path.isfile(cand):
+            return cand
     return shutil.which("ffprobe")
 
 

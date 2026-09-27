@@ -242,7 +242,7 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     # its own process group: stopping it also stops any worker processes the separator started
     proc = subprocess.Popen([python or sys.executable, "-c", _CHILD_SCRIPT, json.dumps(args)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1,
-                            env={**os.environ, "PYTHONIOENCODING": "utf-8"},  # progress bars in any locale
+                            env=_child_env(),
                             **NEW_GROUP)
     # drain both pipes continuously: the separator's progress bar writes to
     # stderr all the time and a full pipe would block the child forever
@@ -333,6 +333,19 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
     if progress:
         progress(1.0, "完成")
     return SeparationOutput(outputs["vocals"], outputs["instrumental"], report)
+
+
+def _child_env() -> dict:
+    """The separator runs ``ffmpeg`` from PATH: the one KiraKara uses goes first.  UTF-8 output
+    (its progress bars) in any locale."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    try:
+        ff = ffmpeg_path()
+    except Exception:
+        ff = None
+    if ff and os.path.isabs(ff):
+        env["PATH"] = os.path.dirname(ff) + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def _signal(proc: subprocess.Popen, which: str) -> None:

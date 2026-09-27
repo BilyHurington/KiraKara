@@ -161,6 +161,7 @@ jobs:
       - name: Models (download when not cached)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
+          $env:PATH = "$env:APP\ffmpeg\bin;$env:PATH"  # audio-separator checks for ffmpeg
           if (-not (Test-Path "$env:APP\models\separation\model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt")) {
             & "$env:APP\python\python.exe" packaging/windows/fetch_models.py "$env:APP\models"
           }
