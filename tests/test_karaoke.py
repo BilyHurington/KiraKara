@@ -413,6 +413,43 @@ def test_advance_shows_everything_earlier_and_lrc_exports_follow(tmp_path):
     assert "\"start_ms\": 1000" in S.export(h, "alignment").content  # data keeps the real time
 
 
+def test_translation_in_a_font_lacking_its_characters(tmp_path, monkeypatch):
+    """Without a known fallback for Chinese characters (Windows, Linux), a translation is not drawn in a
+    Japanese font that lacks many of them (libass would fill those in at another font's scale)."""
+    from kara_align.karaoke import ass, fonts
+
+    monkeypatch.setattr(ass, "system_han_fallback", lambda: False)
+    h = _project(tmp_path)
+    l1, l2 = h.project.lyrics.lines
+    l1.translation, l2.translation = "我们这样说话", "谢谢你陪在我身边"
+    st = h.project.karaoke.model_copy(deep=True)
+    st.translation.enabled = True
+    lyric = fonts.default_family()
+    if not fonts.lacking(lyric, st.translation.bold, "我们这样说话谢谢你陪在我身边"):
+        pytest.skip(f"{lyric} has these characters")
+    better = fonts.covering_family("我们这样说话谢谢你陪在我身边", st.translation.bold, fonts.HAN_FAMILIES)
+    if better is None:
+        pytest.skip("no Chinese font here")
+
+    def trans_font(text: str) -> str:
+        return [ln for ln in text.splitlines() if ln.startswith("Style: KTrans,")][0].split(",")[1]
+
+    S.set_karaoke_style(h, st.model_dump(mode="json"))  # translation font "" = the lyric font
+    text, warnings = S.karaoke_ass(h)
+    assert trans_font(text) == better and any(f"翻译改用 {better}" in w for w in warnings)
+    st.translation.font = "No Such Font Anywhere"  # (the built-in 暖阳 names a macOS font)
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    assert trans_font(S.karaoke_ass(h)[0]) == better
+    st.translation.font = lyric  # chosen on purpose: kept, with a hint
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    text, warnings = S.karaoke_ass(h)
+    assert trans_font(text) == lyric and any("换一个中文字体" in w for w in warnings)
+    monkeypatch.setattr(ass, "system_han_fallback", lambda: True)  # macOS: as before
+    st.translation.font = ""
+    S.set_karaoke_style(h, st.model_dump(mode="json"))
+    assert trans_font(S.karaoke_ass(h)[0]) == lyric
+
+
 def test_translation_positions(tmp_path):
     h = _project(tmp_path)
     l1, l2 = h.project.lyrics.lines

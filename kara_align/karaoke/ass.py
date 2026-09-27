@@ -40,7 +40,7 @@ from typing import Optional
 
 from ..models import AlignmentResult, KaraokeStyle, Line, Project, Segment
 from ..reading.japanese import is_kanji, to_hiragana
-from .fonts import Measurer, default_family, installed
+from .fonts import HAN_FAMILIES, Measurer, covering_family, default_family, installed, lacking, system_han_fallback
 
 REF_WIDTH = 1920  # style pixel values are defined for a frame this wide; other widths scale
 DEFAULT_SIZE = (1920, 1080)
@@ -766,6 +766,22 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     family = usable(txt.font) or default_family()
     ruby_family = (usable(rb.font) or family) if rb.enabled else family
     trans_family = (usable(tr.font) or family) if tr.enabled else family
+    font_notes: list[str] = []
+    if tr.enabled and not system_han_fallback():
+        # a translation (usually Chinese) in a Japanese font lacks many characters; libass fills them in
+        # from a font of its own choosing at that font's scale, so they jump in size (Windows: Yu Gothic).
+        # A font with every character is used instead — unless it is the one the style chose.
+        trans_text = "".join(ln.translation or "" for ln in project.lyrics.sung_lines())
+        miss = lacking(trans_family, tr.bold, trans_text) if trans_text else ""
+        if miss:
+            chosen = bool(tr.font) and trans_family == tr.font
+            better = None if chosen else covering_family(trans_text, tr.bold, HAN_FAMILIES)
+            if better:
+                font_notes.append(f"翻译里有 {trans_family} 没有的字（如「{miss[:6]}」），翻译改用 {better}")
+                trans_family = better
+            else:
+                font_notes.append(f"字体 {trans_family} 没有翻译里的一些字（如「{miss[:6]}」），这些字会用别的字体显示，"
+                                  "大小可能不一致；可以在“卡拉OK字幕”里给翻译换一个中文字体")
     # guards for styles built in code without validation: every size positive, room left between the margins
     main_size = max(1.0, txt.size * k)
     ruby_size = max(1.0, main_size * max(1, rb.size_pct) / 100)
@@ -780,6 +796,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     warnings: list[str] = []
     if missing_fonts:
         warnings.append(f"这台电脑没有字体 {'、'.join(sorted(set(missing_fonts)))}，已改用 {family}")
+    warnings += font_notes
 
     margin_h = min(lay.margin_h * k, W * 0.4)
     avail = W - 2 * margin_h

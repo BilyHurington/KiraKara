@@ -28,6 +28,11 @@ DEFAULT_FAMILIES = [
     "Noto Sans CJK JP", "Source Han Sans JP", "Noto Sans JP", "Noto Sans CJK SC", "Source Han Sans",
     "Hiragino Sans GB", "Microsoft YaHei", "MS Gothic",
 ]
+# Chinese fonts for translations, first installed one that has every character wins (windows, mac, linux)
+HAN_FAMILIES = [
+    "Microsoft YaHei", "DengXian", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC",
+    "Noto Sans SC", "Source Han Sans CN", "WenQuanYi Micro Hei", "SimHei", "Microsoft JhengHei", "Noto Sans CJK TC",
+]
 _FONT_DIRS = ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts",
               os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
               os.path.join(os.environ.get("LOCALAPPDATA", "~/AppData/Local"), "Microsoft/Windows/Fonts"),  # per-user installs
@@ -163,6 +168,34 @@ def resolve(family: str, bold: bool) -> tuple[str, int]:
         raise RuntimeError("找不到可用于日文的字体")
     best = sorted(cands, key=lambda f: f.bold != bold)[0]
     return best.path, best.index
+
+
+def lacking(family: str, bold: bool, text: str) -> str:
+    """The characters of ``text`` the font ``family`` has no glyph for (in order, once each; "" when
+    the font's character map cannot be read)."""
+    try:
+        have = _charmap(*resolve(family, bold))
+    except Exception:
+        return ""
+    if not have:
+        return ""
+    return "".join(dict.fromkeys(c for c in text if not c.isspace() and ord(c) not in have))
+
+
+def covering_family(text: str, bold: bool, prefer: list[str]) -> Optional[str]:
+    """The first family of ``prefer`` installed here that has every character of ``text``."""
+    names = {n for f in list_faces() for n in f.names}
+    for fam in prefer:
+        if fam in names and not lacking(fam, bold, text):
+            return fam
+    return None
+
+
+def system_han_fallback() -> bool:
+    """Whether the fallback libass uses for missing Chinese characters is known and measured (macOS:
+    PingFang through CoreText).  Elsewhere libass picks a font of its own, drawn at that font's own
+    scale: the characters it fills in come out bigger or smaller than their neighbours."""
+    return _mac_han_fallback() is not None
 
 
 @functools.lru_cache(maxsize=32)
