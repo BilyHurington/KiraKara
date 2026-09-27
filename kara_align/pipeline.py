@@ -45,10 +45,14 @@ from .models import KaraokeStyle, _Base, new_id, utcnow
 from .project.jobs import run_heavy
 from .project.store import atomic_write_text, timestamped
 
-try:  # an exclusive lock on the queue's folder (POSIX); elsewhere every server runs its queue
+try:  # an exclusive lock on the queue's folder: flock on POSIX, msvcrt.locking on Windows
     import fcntl
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 log = logging.getLogger(__name__)
 
@@ -236,12 +240,15 @@ class TaskQueue:
     # ---- one queue per workspace
     def _acquire(self):
         """The exclusive queue lock, or None when another process holds it."""
-        if fcntl is None:
+        if fcntl is None and msvcrt is None:
             return True  # no locking available: behave as before
         # held for the life of the process (released by shutdown, or by the OS when the process ends)
         fd = os.open(self.dir / "lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:  # Windows: a byte-range lock on the first byte (non-blocking)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         except OSError:
             os.close(fd)
             return None
@@ -251,7 +258,13 @@ class TaskQueue:
         fd, self._lock_file = self._lock_file, None
         if isinstance(fd, int) and not isinstance(fd, bool):
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                else:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
             finally:
                 os.close(fd)
 

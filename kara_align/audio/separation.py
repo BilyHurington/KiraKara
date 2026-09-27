@@ -27,6 +27,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from ..procs import NEW_GROUP, kill_tree
 from .io import file_sha256, load_audio, write_stem, write_wav
 from .sync import check_stem_sync
 
@@ -240,8 +241,9 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
         progress(0.05, f"加载分离模型 {p.model_filename}")
     # its own process group: stopping it also stops any worker processes the separator started
     proc = subprocess.Popen([python or sys.executable, "-c", _CHILD_SCRIPT, json.dumps(args)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
-                            start_new_session=os.name == "posix")
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8"},  # progress bars in any locale
+                            **NEW_GROUP)
     # drain both pipes continuously: the separator's progress bar writes to
     # stderr all the time and a full pipe would block the child forever
     out_chunks: list[str] = []
@@ -334,21 +336,8 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
 
 
 def _signal(proc: subprocess.Popen, which: str) -> None:
-    """Stop the child and its process group (TERM or KILL)."""
-    import signal
-
-    sig = signal.SIGTERM if which == "TERM" else getattr(signal, "SIGKILL", signal.SIGTERM)
-    pid = getattr(proc, "pid", None)
-    if os.name == "posix" and isinstance(pid, int) and pid > 0:
-        try:
-            os.killpg(pid, sig)  # the group lives on while any of its processes does
-        except OSError:
-            pass
-    if proc.poll() is None:
-        try:
-            proc.send_signal(sig)
-        except OSError:
-            pass
+    """Stop the child and its process group / tree (TERM or KILL; Windows always ends the tree)."""
+    kill_tree(proc, force=which != "TERM")
 
 
 def preset_dicts() -> list[dict]:

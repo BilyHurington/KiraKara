@@ -25,7 +25,7 @@ class RenderError(AudioError):
 
 @functools.lru_cache(maxsize=1)
 def _encoders() -> str:
-    out = subprocess.run([ffmpeg_path(), "-hide_banner", "-encoders"], capture_output=True, text=True)
+    out = subprocess.run([ffmpeg_path(), "-hide_banner", "-encoders"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return out.stdout
 
 
@@ -58,7 +58,7 @@ def _probe_frame(path: str, mtime_ns: int, length: int) -> Optional[tuple[int, i
         return None
     r = subprocess.run([probe, "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,sample_aspect_ratio:stream_tags=rotate:stream_side_data=rotation",
-                        "-of", "json", path], capture_output=True, text=True)
+                        "-of", "json", path], capture_output=True, text=True, encoding="utf-8", errors="replace")
     try:
         st = json.loads(r.stdout or "{}")["streams"][0]
         w, h = int(st["width"]), int(st["height"])
@@ -115,7 +115,7 @@ def preview_png(ass_text: str, t_ms: int, size: tuple[int, int], video: Optional
         else:
             inp = ["-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r=1:d=1"]
         cmd = [ffmpeg_path(), "-v", "error", "-nostdin", "-y", *inp, "-vf", vf, "-frames:v", "1", str(out)]
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=td)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=td)
         if r.returncode != 0 or not out.exists():
             raise RenderError(f"预览渲染失败：{r.stderr.strip()[-300:]}")
         return out.read_bytes()
@@ -175,7 +175,7 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
                 str(part.resolve())]
         # stderr goes to a file: an undrained pipe could block ffmpeg
         err_file = open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace")
-        proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, bufsize=1)
+        proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, encoding="utf-8", errors="replace", bufsize=1)
         total = dur + audio_offset_s
         try:
             assert proc.stdout is not None

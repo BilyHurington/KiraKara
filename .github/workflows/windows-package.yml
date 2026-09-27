@@ -1,0 +1,219 @@
+# Portable Windows builds of KiraKara: tests on Windows, then a folder with its own Python, all
+# dependencies, ffmpeg and the two default models (CPU and NVIDIA CUDA variants), checked by running a
+# whole song through the launcher, packed as 7z volumes (< 2 GB each, the release asset limit) and
+# uploaded to a GitHub release.
+#
+#   Actions → Windows package → Run workflow   → prerelease "windows-preview" (replaced each run)
+#   git push origin v0.2.0                      → release "v0.2.0"
+name: Windows package
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: 要打包的版本
+        type: choice
+        options: [both, cpu, cuda]
+        default: both
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_PYTHON_PREFERENCE: only-managed
+  PYTHONUTF8: "1"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: ffmpeg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          ./packaging/windows/get_ffmpeg.ps1 -Dest "$env:RUNNER_TEMP\ffmpeg"
+          "$env:RUNNER_TEMP\ffmpeg\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Install
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv venv --python $env:PYTHON_VERSION .venv
+          uv pip install --python .venv -e ".[dev]"
+      - name: Fonts the tests will find
+        run: .venv\Scripts\python -c "from kara_align.karaoke import fonts; print(fonts.default_family(), len(fonts.families()), [f['family'] for f in fonts.families()][:20])"
+      - name: pytest
+        run: .venv\Scripts\python -m pytest -q
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="$GITHUB_REF_NAME"
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes ""
+          else
+            tag=windows-preview
+            gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true
+            gh release create "$tag" --prerelease --target "$GITHUB_SHA" --title "Windows 预览版（$(git rev-parse --short HEAD)）" \
+              --notes "由 Actions 自动构建（${GITHUB_SHA::7}），每次手动运行都会替换。解压说明见压缩包里的 使用说明.txt。"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.event.inputs.variants == 'cpu' && '["cpu"]' || github.event.inputs.variants == 'cuda' && '["cuda"]' || '["cpu","cuda"]') }}
+    env:
+      VARIANT: ${{ matrix.variant }}
+      VERSION: ${{ needs.release.outputs.version }}
+      UV_NO_CACHE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Build location (the drive with the most free space)
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}}
+          $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free } | Sort-Object Free -Descending | Select-Object -First 1
+          $root = "$($drive.Root)kk"
+          New-Item -ItemType Directory -Force "$root" | Out-Null
+          "BUILD=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "APP=$root\KiraKara" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Python
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv python install $env:PYTHON_VERSION
+          $exe = uv python find $env:PYTHON_VERSION
+          $home_ = Split-Path $exe
+          Write-Host "python: $exe"
+          Copy-Item -Recurse $home_ "$env:APP\python"
+          Remove-Item -Force -ErrorAction SilentlyContinue "$env:APP\python\Lib\EXTERNALLY-MANAGED"
+          # the Visual C++ runtime next to python.exe (torch needs it; not every PC has it installed)
+          foreach ($dll in "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll", "vcomp140.dll") {
+            if (-not (Test-Path "$env:APP\python\$dll") -and (Test-Path "$env:SystemRoot\System32\$dll")) {
+              Copy-Item "$env:SystemRoot\System32\$dll" "$env:APP\python\$dll"
+            }
+          }
+          foreach ($d in "Lib\test", "Lib\idlelib", "Lib\tkinter", "Lib\turtledemo", "tcl", "include", "Scripts") {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APP\python\$d"
+          }
+          & "$env:APP\python\python.exe" -c "import sys; print(sys.version)"
+
+      - name: Dependencies (torch ${{ matrix.variant }})
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $py = "$env:APP\python\python.exe"
+          $index = if ($env:VARIANT -eq "cuda") { "https://download.pytorch.org/whl/cu128" } else { "https://download.pytorch.org/whl/cpu" }
+          uv pip install --python $py torch --index-url $index
+          uv pip install --python $py ".[ml,separation]"
+          & $py -c "import torch, transformers, audio_separator, kara_align; print('torch', torch.__version__, 'cuda', torch.version.cuda, '| transformers', transformers.__version__)"
+          # only needed to build extensions against torch / for the removed scripts
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:APP\python\Lib\site-packages\torch\include", "$env:APP\python\Scripts"
+          Get-ChildItem "$env:APP\python\Lib\site-packages\torch\lib" -Filter *.lib | Remove-Item -Force
+          Get-ChildItem -Recurse -Directory -Filter __pycache__ "$env:APP\python" | Remove-Item -Recurse -Force
+
+      - name: ffmpeg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          ./packaging/windows/get_ffmpeg.ps1 -Dest "$env:APP\ffmpeg"
+          New-Item -ItemType Directory -Force "$env:APP\ffmpeg\etc\fonts" | Out-Null
+          Copy-Item packaging/windows/fonts.conf "$env:APP\ffmpeg\etc\fonts\fonts.conf"
+
+      - name: Models (cached)
+        uses: actions/cache@v4
+        with:
+          # alignment model revision + separation model file: change the key when either changes
+          key: kirakara-models-v1-2ab2b5f4-melband3005
+          path: ${{ env.APP }}\models
+          enableCrossOsArchive: false
+
+      - name: Models (download when not cached)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not (Test-Path "$env:APP\models\separation\model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt")) {
+            & "$env:APP\python\python.exe" packaging/windows/fetch_models.py "$env:APP\models"
+          }
+          Get-ChildItem -Recurse -File "$env:APP\models" | Format-Table Length, FullName -AutoSize
+
+      - name: Launcher, notes, licences
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Copy-Item packaging/windows/KiraKara.bat "$env:APP\KiraKara.bat"
+          Copy-Item LICENSE "$env:APP\LICENSE-KiraKara.txt"
+          if ($env:VARIANT -eq "cuda") {
+            $label = "NVIDIA 显卡版"
+            $note = "- 这个版本用 NVIDIA 显卡（CUDA 12.8）加速人声分离和对齐：需要 GeForce GTX 16 / RTX 20 系列或更新的显卡，`r`n  以及 570 或更新版本的显卡驱动。没有合适的显卡时自动改用 CPU（较慢）。"
+          } else {
+            $label = "CPU 版"
+            $note = "- 这个版本只用 CPU 计算：人声分离比显卡版慢（一首歌约需几分钟到十几分钟）。有 NVIDIA 显卡时建议用显卡版。"
+          }
+          $text = (Get-Content -Raw -Encoding utf8 "packaging/windows/使用说明.txt").Replace("@VERSION@", $env:VERSION).Replace("@VARIANT_LABEL@", $label).Replace("@VARIANT_NOTE@", $note)
+          $text = $text -replace "`r?`n", "`r`n"
+          [IO.File]::WriteAllText("$env:APP\使用说明.txt", $text, [Text.UTF8Encoding]::new($true))
+          & "$env:APP\python\python.exe" -m compileall -q -j 0 "$env:APP\python\Lib"
+          $global:LASTEXITCODE = 0  # a few files of some packages do not compile (tests, templates)
+          "{0:N1} GB" -f ((Get-ChildItem -Recurse -File $env:APP | Measure-Object Length -Sum).Sum / 1GB)
+
+      - name: Smoke test (whole song through the launcher, from a path with spaces and Chinese)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $odd = "$env:BUILD\中文 路径"
+          New-Item -ItemType Directory -Force $odd | Out-Null
+          Move-Item $env:APP "$odd\KiraKara"
+          try {
+            & "$odd\KiraKara\python\python.exe" packaging/windows/smoke_test.py "$odd\KiraKara" "$env:BUILD\smoke"
+          } finally {
+            Move-Item "$odd\KiraKara" $env:APP
+          }
+
+      - name: Pack (7z volumes)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $name = "KiraKara-$env:VERSION-windows-x64-$env:VARIANT"
+          New-Item -ItemType Directory -Force "$env:BUILD\dist" | Out-Null
+          Push-Location $env:BUILD
+          7z a -t7z -mx=5 -mmt=on -v1900m "dist\$name.7z" KiraKara | Select-Object -Last 5
+          Pop-Location
+          Get-ChildItem "$env:BUILD\dist" | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name
+          } | Out-File -Encoding ascii "$env:BUILD\dist\$name.sha256.txt"
+          Get-ChildItem "$env:BUILD\dist" | Format-Table Length, Name -AutoSize
+
+      - name: Upload to release ${{ needs.release.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $files = (Get-ChildItem "$env:BUILD\dist").FullName
+          gh release upload "${{ needs.release.outputs.tag }}" @files --clobber --repo "$env:GITHUB_REPOSITORY"

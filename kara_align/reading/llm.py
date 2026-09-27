@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..interfaces import CancelToken, Cancelled
+from ..procs import NEW_GROUP, command, kill_tree
 from ..settings import AiSettings, api_key
 
 PROVIDERS = {
@@ -71,7 +72,8 @@ def detect(provider: str, *, refresh: bool = False) -> dict:
             out.update(available=False, detail=f"没有找到 {info['binary']} 命令（需要先安装并登录）")
         else:
             try:
-                v = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20)
+                v = subprocess.run(command([path, "--version"]), capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=20)
                 out["version"] = (v.stdout or v.stderr).strip().splitlines()[0] if (v.stdout or v.stderr) else None
                 out["detail"] = path
             except Exception as e:  # installed but broken
@@ -116,9 +118,9 @@ def _run(cmd: list[str], prompt: str, cwd: str, timeout: float, cancel: Optional
     raises :class:`Cancelled` when the job is cancelled)."""
     try:
         # its own process group, so the whole tree can be stopped
-        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(command(cmd), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                                env={**os.environ, "NO_COLOR": "1"}, start_new_session=os.name == "posix")
+                                env={**os.environ, "NO_COLOR": "1"}, **NEW_GROUP)
     except OSError as e:
         raise LlmError(f"无法启动 {cmd[0]}：{e}") from e
     out: dict[str, str] = {}
@@ -153,18 +155,7 @@ def _run(cmd: list[str], prompt: str, cwd: str, timeout: float, cancel: Optional
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    import signal
-
-    if os.name == "posix":
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-    if proc.poll() is None:
-        try:
-            proc.kill()
-        except OSError:
-            pass
+    kill_tree(proc)
     try:
         proc.wait(5)
     except subprocess.TimeoutExpired:

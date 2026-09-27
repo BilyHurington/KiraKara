@@ -40,7 +40,7 @@ def probe_media(path: str | Path) -> dict:
         raise VideoError("需要 ffprobe（随 ffmpeg 安装）来读取视频")
     try:
         out = subprocess.run([probe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
-                              str(path)], capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+                              str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=PROBE_TIMEOUT_S)
     except subprocess.TimeoutExpired:  # (run() kills it)
         raise VideoError(f"ffprobe 超过 {int(PROBE_TIMEOUT_S)} 秒没有读完媒体文件") from None
     if out.returncode != 0:

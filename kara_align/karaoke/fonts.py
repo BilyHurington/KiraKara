@@ -28,7 +28,9 @@ DEFAULT_FAMILIES = [
     "Noto Sans CJK JP", "Source Han Sans JP", "Noto Sans JP", "Noto Sans CJK SC", "Source Han Sans",
     "Hiragino Sans GB", "Microsoft YaHei", "MS Gothic",
 ]
-_FONT_DIRS = ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts", "C:/Windows/Fonts",
+_FONT_DIRS = ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts",
+              os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
+              os.path.join(os.environ.get("LOCALAPPDATA", "~/AppData/Local"), "Microsoft/Windows/Fonts"),  # per-user installs
               "/usr/share/fonts", "/usr/local/share/fonts", "~/.fonts", "~/.local/share/fonts"]
 
 
@@ -44,7 +46,7 @@ class FontFace:
 def _fc_run(args: list[str]) -> subprocess.CompletedProcess:
     """A fontconfig query; a hung or failing one counts as "nothing found" (never blocks a render)."""
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=20)
+        return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
     except (subprocess.TimeoutExpired, OSError):
         return subprocess.CompletedProcess(args, 1, "", "")
 
@@ -107,8 +109,10 @@ def _scan_dirs() -> list[FontFace]:
                         continue
                     name = font["name"]
                     fam = name.getBestFamilyName() or f.stem
+                    # every family name, localized ones too (a preset may say 游ゴシック or メイリオ)
+                    others = {r.toUnicode(errors="ignore").strip() for r in name.names if r.nameID in (1, 16)} - {fam, ""}
                     weight = font["OS/2"].usWeightClass if "OS/2" in font else 400
-                    faces.append(FontFace(fam, (fam,), str(f), i, weight >= 600))
+                    faces.append(FontFace(fam, (fam, *sorted(others)), str(f), i, weight >= 600))
                 except Exception:
                     continue
     return faces

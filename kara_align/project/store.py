@@ -100,11 +100,24 @@ def atomic_write_text(path: Path, text: str) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())  # the data is on disk before the name points at it (power loss)
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def _replace(src: str, dst: Path) -> None:
+    """os.replace; on Windows it fails while another thread has the target open (a reader), so a
+    few short retries."""
+    for attempt in range(20):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 19:
+                raise
+            time.sleep(0.05)
 
 
 def project_to_json(project: Project) -> str:

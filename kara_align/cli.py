@@ -403,11 +403,59 @@ def cmd_serve(a) -> None:
     if a.host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
         extra.add(a.host)  # listening on a named address: requests to it are accepted
     app = create_app(Path(a.root) if a.root else None, allowed_hosts=extra)
-    print(f"KiraKara WebUI: http://{a.host}:{a.port}", file=sys.stderr)
-    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
+    port = free_port(a.host) if a.port == "auto" else int(a.port)
+    shown = "127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host
+    url = f"http://{'[' + shown + ']' if ':' in shown else shown}:{port}"
+    print(f"KiraKara WebUI: {url}", file=sys.stderr)
+    if a.open:
+        _open_when_ready(url)
+    uvicorn.run(app, host=a.host, port=port, log_level="warning")
+
+
+def free_port(host: str = "127.0.0.1", first: int = 8765, last: int = 8799) -> int:
+    """The first port in ``first..last`` nothing is listening on (the launchers' ``--port auto``)."""
+    import socket
+
+    for port in range(first, last + 1):
+        with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+            try:
+                s.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise SystemExit(f"端口 {first}–{last} 都被占用了，请用 --port 指定一个")
+
+
+def _open_when_ready(url: str) -> None:
+    """Open the browser once the server answers (in the background; gives up after a minute)."""
+    import threading
+    import time
+    import urllib.request
+    import webbrowser
+
+    def wait() -> None:
+        for _ in range(120):
+            try:
+                urllib.request.urlopen(url + "/api/info", timeout=2).close()
+            except OSError:
+                time.sleep(0.5)
+                continue
+            webbrowser.open(url)
+            return
+
+    threading.Thread(target=wait, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
+
+
+def _port(v: str):
+    if v == "auto":
+        return v
+    try:
+        return int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError("端口应为数字或 auto") from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -577,7 +625,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("serve", help="启动本地 WebUI")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=_port, default=8765, help="端口（auto：从 8765 起第一个空闲端口）")
+    p.add_argument("--open", action="store_true", help="启动后在浏览器中打开")
     p.add_argument("--root", help="项目根目录（默认 ~/.kara_align/projects）")
     p.add_argument("--allow-host", action="append", default=[],
                    help="除 127.0.0.1 / localhost 外还接受的主机名（例如在局域网中访问时本机的地址）")
