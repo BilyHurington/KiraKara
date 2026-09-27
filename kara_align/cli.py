@@ -395,6 +395,8 @@ def cmd_cache(a) -> None:
 
 
 def cmd_serve(a) -> None:
+    import asyncio
+
     import uvicorn
 
     from .web.server import create_app
@@ -409,7 +411,22 @@ def cmd_serve(a) -> None:
     print(f"KiraKara WebUI: {url}", file=sys.stderr)
     if a.open:
         _open_when_ready(url)
-    uvicorn.run(app, host=a.host, port=port, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host=a.host, port=port, log_level="warning"))
+
+    async def serve() -> None:
+        asyncio.get_running_loop().set_exception_handler(quiet_connection_resets)
+        await server.serve()
+
+    asyncio.run(serve())
+
+
+def quiet_connection_resets(loop, context: dict) -> None:
+    """Event loop errors, except a browser that closed its connection first: on Windows the loop
+    reports that (ConnectionResetError, WinError 10054) after the request was answered; nothing
+    went wrong."""
+    if isinstance(context.get("exception"), (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return
+    loop.default_exception_handler(context)
 
 
 def free_port(host: str = "127.0.0.1", first: int = 8765, last: int = 8799) -> int:

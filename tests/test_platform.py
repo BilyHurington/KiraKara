@@ -103,3 +103,16 @@ def test_batch_files_run_through_cmd_s(monkeypatch):
     line = procs.command([r"C:\Users\A B\npm\claude.cmd", "-p", "--tools", ""])
     assert line == r'cmd.exe /d /s /c ""C:\Users\A B\npm\claude.cmd" -p --tools """'
     assert procs.command([r"C:\x\claude.exe", "-p"]) == [r"C:\x\claude.exe", "-p"]
+
+
+def test_connection_resets_are_not_reported():
+    seen = []
+
+    class Loop:
+        def default_exception_handler(self, context):
+            seen.append(context)
+
+    cli.quiet_connection_resets(Loop(), {"message": "x", "exception": ConnectionResetError(10054, "reset")})
+    assert seen == []
+    cli.quiet_connection_resets(Loop(), {"message": "y", "exception": ValueError("real")})
+    assert len(seen) == 1
