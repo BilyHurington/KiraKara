@@ -703,14 +703,15 @@ class TaskQueue:
                 if done_status == "succeeded":
                     task.progress = 1.0
         except WaitForUser as w:
+            # (stages first, then the task: a reader never sees a finished task with a running stage)
             if token.cancelled:  # cancelled just as it came to ask: stays cancelled
-                task.status, task.message = "cancelled", "已取消"
                 self._mark_running_stage(task, "pending")
+                task.status, task.message = "cancelled", "已取消"
                 return  # (finally still runs)
-            task.status, task.message = "waiting", str(w)
             for s in task.stages:
                 if s.status == "running":
                     s.status, s.message = "waiting", str(w)
+            task.status, task.message = "waiting", str(w)
         except Cancelled:
             if self._stop:  # the server is shutting down: not the user's cancel
                 self._mark_running_stage(task, "pending")
@@ -719,14 +720,15 @@ class TaskQueue:
                 else:
                     task.status, task.message = "interrupted", "服务关闭时中断，可以重试"
             else:
-                task.status, task.message = "cancelled", "已取消"
                 self._mark_running_stage(task, "pending")
+                task.status, task.message = "cancelled", "已取消"
         except Exception as e:  # report the real reason on the task
-            task.status = "failed"
-            task.error = str(e) if isinstance(e, S.ServiceError) else f"{type(e).__name__}: {e}"
+            error = str(e) if isinstance(e, S.ServiceError) else f"{type(e).__name__}: {e}"
+            self._mark_running_stage(task, "failed", error)
+            task.error = error
             task.detail = traceback.format_exc(limit=8)
             task.message = "失败"
-            self._mark_running_stage(task, "failed", task.error)
+            task.status = "failed"
         finally:
             if task.status in ("succeeded", "failed", "cancelled"):
                 task.finished = utcnow()
