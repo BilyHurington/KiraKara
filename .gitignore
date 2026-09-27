@@ -32,3 +32,6 @@ frontend/*.tsbuildinfo
 
 # model files (separation / alignment): kept in the app folder, loaded from there
 /models/
+
+# promo / tutorial video material (kept local)
+/intro_video/
