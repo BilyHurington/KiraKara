@@ -1,0 +1,180 @@
+# Portable macOS (Apple silicon) build of KiraKara: a folder with its own Python, all dependencies,
+# ffmpeg (with libass) and the two default models, checked by running a whole song through the launcher,
+# zipped and uploaded to a GitHub release.
+#
+# Built on macOS 14: Homebrew's ffmpeg libraries are built for the system they are installed on, and
+# torch needs macOS 14 anyway, so the package runs on macOS 14 and later (checked below).
+#
+#   Actions → macOS package → Run workflow   → prerelease "macos-preview" (replaced each run)
+#   git push origin v0.2.0                    → release "v0.2.0"
+name: macOS package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  MIN_MACOS: "14.0"
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="$GITHUB_REF_NAME"
+            # (the Windows workflow may be creating the same release)
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes "" \
+              || gh release view "$tag" >/dev/null
+          else
+            tag=macos-preview
+            gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true
+            gh release create "$tag" --prerelease --target "$GITHUB_SHA" --title "macOS 预览版（$(git rev-parse --short HEAD)）" \
+              --notes "由 Actions 自动构建（${GITHUB_SHA::7}），每次手动运行都会替换。需要 Apple 芯片、macOS 14 或更新版本；使用方法见压缩包里的 使用说明.txt。"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: release
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      UV_NO_CACHE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Build location
+        run: |
+          df -h "$RUNNER_TEMP"
+          sw_vers
+          echo "BUILD=$RUNNER_TEMP/kk" >> "$GITHUB_ENV"
+          echo "APP=$RUNNER_TEMP/kk/KiraKara" >> "$GITHUB_ENV"
+
+      - name: ffmpeg (Homebrew ffmpeg-full, with libass)
+        run: |
+          brew install ffmpeg-full fontconfig
+          "$(brew --prefix ffmpeg-full)/bin/ffmpeg" -hide_banner -filters | grep -E ' (subtitles|ass) '
+
+      - name: Python
+        run: |
+          set -euo pipefail
+          uv python install "$PYTHON_VERSION"
+          exe="$(uv python find "$PYTHON_VERSION")"
+          root="$(cd "$(dirname "$exe")/.." && pwd)"
+          echo "python: $exe ($root)"
+          mkdir -p "$APP"
+          cp -R "$root" "$APP/python"
+          lib="$APP/python/lib/python$PYTHON_VERSION"
+          rm -rf "$lib/test" "$lib/idlelib" "$lib/tkinter" "$lib/turtledemo" "$APP/python/include" "$lib/EXTERNALLY-MANAGED"
+          "$APP/python/bin/python3" -c "import sys; print(sys.version)"
+
+      - name: Dependencies
+        run: |
+          set -euo pipefail
+          py="$APP/python/bin/python3"
+          uv pip install --python "$py" torch
+          uv pip install --python "$py" ".[ml,separation]"
+          "$py" -c "import torch, transformers, audio_separator, kara_align; print('torch', torch.__version__, '| transformers', transformers.__version__)"
+          site="$("$py" -c 'import site; print(site.getsitepackages()[0])')"
+          rm -rf "$site/torch/include"
+          # only python3 / python3.X stay in bin: the other scripts start with this machine's paths
+          find "$APP/python/bin" -mindepth 1 ! -name 'python3' ! -name "python$PYTHON_VERSION" -exec rm -f {} +
+          find "$APP/python" -name __pycache__ -type d -prune -exec rm -rf {} +
+          ls "$APP/python/bin"
+
+      - name: Bundle ffmpeg, ffprobe, fc-list, fc-match with their libraries
+        run: |
+          set -euo pipefail
+          ff="$(brew --prefix ffmpeg-full)/bin"
+          fc="$(brew --prefix fontconfig)/bin"
+          python3 packaging/macos/bundle_dylibs.py "$APP/ffmpeg" "$ff/ffmpeg" "$ff/ffprobe" "$fc/fc-list" "$fc/fc-match"
+          mkdir -p "$APP/ffmpeg/etc/fonts"
+          cp packaging/macos/fonts.conf "$APP/ffmpeg/etc/fonts/fonts.conf"
+          {
+            echo "ffmpeg（GPL v3，启用 libass / libfontconfig / libfreetype / libharfbuzz 等，未启用 nonfree）"
+            echo "来源：Homebrew ffmpeg-full（macOS 14 构建），源码见 https://ffmpeg.org/download.html"
+            echo
+            "$APP/ffmpeg/bin/ffmpeg" -hide_banner -version
+          } > "$APP/ffmpeg/README-ffmpeg.txt"
+          FONTCONFIG_FILE="$APP/ffmpeg/etc/fonts/fonts.conf" "$APP/ffmpeg/bin/fc-list" :lang=ja family | sort -u | head -20
+
+      - name: Models (cached)
+        uses: actions/cache@v4
+        with:
+          # alignment model revision + separation model file: change the key when either changes
+          key: kirakara-models-macos-v1-2ab2b5f4-melband3005
+          path: ${{ env.APP }}/models
+
+      - name: Models (download when not cached)
+        run: |
+          set -euo pipefail
+          export PATH="$APP/ffmpeg/bin:$PATH"  # audio-separator checks for ffmpeg
+          if [ ! -f "$APP/models/separation/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt" ]; then
+            "$APP/python/bin/python3" packaging/fetch_models.py "$APP/models"
+          fi
+          find "$APP/models" -type f -exec ls -l {} + | awk '{print $5, $9}'
+
+      - name: Launcher, notes, licences
+        run: |
+          set -euo pipefail
+          cp packaging/macos/KiraKara.command "$APP/KiraKara.command"
+          chmod +x "$APP/KiraKara.command"
+          cp LICENSE "$APP/LICENSE-KiraKara.txt"
+          sed "s/@VERSION@/$VERSION/" packaging/macos/使用说明.txt > "$APP/使用说明.txt"
+          "$APP/python/bin/python3" -m compileall -q -j 0 "$APP/python/lib" >/dev/null 2>&1 || true
+          du -sh "$APP"
+
+      - name: Every binary runs on macOS ${{ env.MIN_MACOS }}
+        run: python3 packaging/macos/check_minos.py "$APP" "$MIN_MACOS"
+
+      - name: Smoke test (whole song through the launcher, from a path with spaces and Chinese)
+        run: |
+          set -euo pipefail
+          odd="$BUILD/中文 路径"
+          mkdir -p "$odd"
+          mv "$APP" "$odd/KiraKara"
+          trap 'mv "$odd/KiraKara" "$APP"' EXIT
+          "$odd/KiraKara/python/bin/python3" packaging/smoke_test.py "$odd/KiraKara" "$BUILD/smoke"
+
+      - name: Pack (zip)
+        run: |
+          set -euo pipefail
+          name="KiraKara-$VERSION-macos-arm64"
+          mkdir -p "$BUILD/dist"
+          (cd "$BUILD" && ditto -c -k --sequesterRsrc --keepParent KiraKara "dist/$name.zip")
+          size=$(stat -f %z "$BUILD/dist/$name.zip")
+          echo "$name.zip: $size bytes"
+          if [ "$size" -ge 2147483648 ]; then echo "::error::zip is over the 2 GiB release asset limit"; exit 1; fi
+          (cd "$BUILD/dist" && shasum -a 256 "$name.zip" > "$name.sha256.txt" && cat "$name.sha256.txt")
+
+      - name: Upload to release ${{ needs.release.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release.outputs.tag }}" "$BUILD"/dist/* --clobber --repo "$GITHUB_REPOSITORY"

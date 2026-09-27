@@ -8,7 +8,7 @@
     python smoke_test.py <KiraKara folder> [<work folder>]
 
 The test song is synthetic (tones), so the timing itself means nothing here; the model and every
-step still run for real.  Runs with the Python that runs this script only for checking the output.
+step still run for real.  The Python running this script is only used to check the output (Pillow).
 """
 
 import json
@@ -123,7 +123,10 @@ def serve(launcher: Path, env: dict) -> None:
         else:
             import signal
 
-            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except OSError:  # already ended
+                pass
         proc.wait(30)
 
 

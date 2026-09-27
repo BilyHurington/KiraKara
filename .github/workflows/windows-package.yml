@@ -71,7 +71,9 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             tag="$GITHUB_REF_NAME"
-            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes ""
+            # (the macOS workflow may be creating the same release)
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes "" \
+              || gh release view "$tag" >/dev/null
           else
             tag=windows-preview
             gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true
@@ -163,7 +165,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $env:PATH = "$env:APP\ffmpeg\bin;$env:PATH"  # audio-separator checks for ffmpeg
           if (-not (Test-Path "$env:APP\models\separation\model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt")) {
-            & "$env:APP\python\python.exe" packaging/windows/fetch_models.py "$env:APP\models"
+            & "$env:APP\python\python.exe" packaging/fetch_models.py "$env:APP\models"
           }
           Get-ChildItem -Recurse -File "$env:APP\models" | Format-Table Length, FullName -AutoSize
 
@@ -193,7 +195,7 @@ jobs:
           New-Item -ItemType Directory -Force $odd | Out-Null
           Move-Item $env:APP "$odd\KiraKara"
           try {
-            & "$odd\KiraKara\python\python.exe" packaging/windows/smoke_test.py "$odd\KiraKara" "$env:BUILD\smoke"
+            & "$odd\KiraKara\python\python.exe" packaging/smoke_test.py "$odd\KiraKara" "$env:BUILD\smoke"
           } finally {
             Move-Item "$odd\KiraKara" $env:APP
           }
