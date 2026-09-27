@@ -1,5 +1,6 @@
 """Audio + background picture / looped background video → karaoke video."""
 
+import os
 import shutil
 import subprocess
 import time
@@ -175,7 +176,7 @@ def test_alignment_model_is_loaded_from_the_app_models_folder(tmp_path, monkeypa
     (hub / "blobs").mkdir(parents=True)
     (hub / "blobs" / "abc").write_bytes(b"w")
     (hub / "snapshots" / "rev").mkdir(parents=True)
-    (hub / "snapshots" / "rev" / "model.safetensors").symlink_to("../../blobs/abc")
+    (hub / "snapshots" / "rev" / "model.safetensors").symlink_to(os.path.join("..", "..", "blobs", "abc"))
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hf" / "hub"))
     monkeypatch.setenv("KARA_ALIGN_MODELS", str(tmp_path / "app-models"))
     d = W.model_cache_dir("org/m")

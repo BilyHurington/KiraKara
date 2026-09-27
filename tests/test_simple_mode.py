@@ -56,7 +56,8 @@ def test_settings_merge_and_never_return_the_key():
     assert AS.load().ai.api_key == "sk-secret" and AS.load().ai.model == "m2"
     AS.update({"ai": {"clear_api_key": True}})
     assert AS.load().ai.api_key == ""
-    assert oct(os.stat(AS.settings_path()).st_mode & 0o777) == "0o600"
+    if os.name == "posix":  # (Windows has no such permission bits)
+        assert oct(os.stat(AS.settings_path()).st_mode & 0o777) == "0o600"
     with pytest.raises(ValueError):
         AS.update({"ai": {"provider": "nope"}})
 
@@ -82,8 +83,10 @@ def _fake_bin(tmp_path, monkeypatch, name, body):
     d = tmp_path / "bin"
     d.mkdir(exist_ok=True)
     p = d / name
-    p.write_text(f"#!{sys.executable}\n{body}")
+    p.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":  # what npm installs there: a .cmd that starts the real program
+        (d / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0{name}" %*\r\n')
     monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")
     return p
 

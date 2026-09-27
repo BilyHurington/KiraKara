@@ -94,7 +94,8 @@ def model_cache_dir(model_id: str) -> Optional[str]:
             tmp = d / (name + ".part")
             try:
                 shutil.rmtree(tmp, ignore_errors=True)
-                shutil.copytree(src, tmp, symlinks=True)  # (snapshots link to blobs, relatively)
+                # snapshots link to blobs (relatively); Windows copies the files (symlinks need privileges there)
+                shutil.copytree(src, tmp, symlinks=os.name != "nt")
                 os.replace(tmp, d / name)
             except OSError:
                 shutil.rmtree(tmp, ignore_errors=True)  # downloaded again instead

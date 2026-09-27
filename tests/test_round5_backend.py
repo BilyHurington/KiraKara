@@ -4,6 +4,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -246,6 +247,8 @@ def test_cli_is_killed_when_the_wait_callback_raises(tmp_path, monkeypatch):
                    f"open({str(pids)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}} ' + ' '.join(sys.argv[1:]))\n"
                    "sys.stdin.read()\ntime.sleep(60)\n")
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":  # what npm installs there: a .cmd that starts the real program
+        (d / "claude.cmd").write_text(f'@"{sys.executable}" "%~dp0claude" %*\r\n')
     monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")
 
     def on_wait(waited):
@@ -261,14 +264,23 @@ def test_cli_is_killed_when_the_wait_callback_raises(tmp_path, monkeypatch):
     for pid in map(int, parts[:2]):
         deadline = time.time() + 5
         while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            if not _alive(pid):
                 break
             time.sleep(0.1)
         else:
             os.kill(pid, 9)
             pytest.fail(f"process {pid} still running")
+
+
+def _alive(pid: int) -> bool:
+    if os.name == "nt":  # (os.kill(pid, 0) would end the process there)
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 # ------------------------------------------------------------------ S6 invalid input never poisons a project

@@ -339,7 +339,7 @@ def import_asset(
     info = probe_audio(dest)
     base = Path(project_dir) if project_dir is not None else assets.parent
     try:
-        rel = os.path.relpath(dest, base)
+        rel = Path(os.path.relpath(dest, base)).as_posix()  # stored with "/" on every system
     except ValueError:
         rel = str(dest)
     src_meta = source.model_copy() if source is not None else AudioSource()

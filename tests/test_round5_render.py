@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -523,6 +524,8 @@ def test_measured_text_is_the_written_text():
 
 
 @needs_ffmpeg
+@pytest.mark.skipif(shutil.which("fc-match") is None and sys.platform != "darwin",
+                    reason="the fallback font libass picks is known through fontconfig (or CoreText on macOS)")
 def test_characters_the_font_lacks_are_measured_with_the_fallback():
     fam = default_family()
     m = Measurer(fam, False, 52.8)

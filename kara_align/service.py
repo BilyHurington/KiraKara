@@ -956,7 +956,7 @@ def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
             h.assets_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src_path, dest)
         video = VideoAsset(
-            sha256=sha, path=str(Path("assets") / dest.name), filename=name, container=ext,
+            sha256=sha, path=f"assets/{dest.name}", filename=name, container=ext,
             duration_ms=info["duration_ms"], width=info.get("width"), height=info.get("height"),
             fps=info.get("fps"), video_codec=info.get("video_codec"), audio_codec=info.get("audio_codec"),
             audio_offset_s=audio_offset_s(info), audio_sha256=asset.sha256, upright=True,
@@ -1086,7 +1086,7 @@ def set_background(h: ProjectHandle, src_path: Path, filename: Optional[str] = N
         tmp = dest.with_name(f".{dest.name}.part")
         shutil.copyfile(src_path, tmp)
         tmp.replace(dest)
-    bg = BackgroundAsset(sha256=sha, path=str(Path("assets") / dest.name), filename=name, kind=kind, **info)
+    bg = BackgroundAsset(sha256=sha, path=f"assets/{dest.name}", filename=name, kind=kind, **info)
     with h.lock:
         h.project.background = bg
         h.save()
