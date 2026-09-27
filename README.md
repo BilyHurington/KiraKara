@@ -74,6 +74,7 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 
 ## 许可与说明
 
+- KiraKara 本身的代码以 [MIT 协议](LICENSE) 发布。它使用的第三方依赖、模型和工具（如 PyTorch、transformers、python-audio-separator、ffmpeg 等）各自遵循它们自己的许可。
 - 默认的对齐模型 [`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn) 的许可是 **CC-BY-NC-SA-4.0（非商用）**；人声分离使用 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 和它的模型，许可以上游为准。
 - 音频、视频和项目文件只保存在本机。只有这些情况会联网：第一次下载模型、从音乐链接获取歌词、以及 AI 注音（歌词会发给你选择的 AI 服务）。
 - 请只处理你有权使用的音视频和歌词。
