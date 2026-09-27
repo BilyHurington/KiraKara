@@ -281,6 +281,9 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     assert video.name.endswith(f"-{t.id[-6:]}.mp4")  # its own name: later burns never overwrite it
     # the queue survives a restart; finished tasks stay listed
     q2 = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    deadline = time.time() + 10  # (the final state reaches the disk just after the task finishes)
+    while q2.get(t.id).status != "succeeded" and time.time() < deadline:
+        time.sleep(0.1)
     assert q2.get(t.id).status == "succeeded"
     q.shutdown()
     q2.shutdown()
