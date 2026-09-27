@@ -92,7 +92,7 @@ jobs:
           mkdir -p "$APP"
           cp -R "$root" "$APP/python"
           lib="$APP/python/lib/python$PYTHON_VERSION"
-          rm -rf "$lib/test" "$lib/idlelib" "$lib/tkinter" "$lib/turtledemo" "$APP/python/include" "$lib/EXTERNALLY-MANAGED"
+          rm -rf "$lib/test" "$lib/idlelib" "$lib/tkinter" "$lib/turtledemo" "$lib/EXTERNALLY-MANAGED"
           "$APP/python/bin/python3" -c "import sys; print(sys.version)"
 
       - name: Dependencies
@@ -103,7 +103,8 @@ jobs:
           uv pip install --python "$py" ".[ml,separation]"
           "$py" -c "import torch, transformers, audio_separator, kara_align; print('torch', torch.__version__, '| transformers', transformers.__version__)"
           site="$("$py" -c 'import site; print(site.getsitepackages()[0])')"
-          rm -rf "$site/torch/include"
+          # headers: only needed to build packages (diffq is built from source here)
+          rm -rf "$site/torch/include" "$APP/python/include"
           # only python3 / python3.X stay in bin: the other scripts start with this machine's paths
           find "$APP/python/bin" -mindepth 1 ! -name 'python3' ! -name "python$PYTHON_VERSION" -exec rm -f {} +
           find "$APP/python" -name __pycache__ -type d -prune -exec rm -rf {} +
