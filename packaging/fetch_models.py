@@ -40,7 +40,12 @@ def main() -> None:
 
     preset = next(p for p in PRESETS if p.name == "melband-roformer")
     print(f"==> separation model {preset.model_filename}", flush=True)
+    import torch
     from audio_separator.separator import Separator
+
+    # only downloading: loading it onto a GPU is not needed (and CI machines have no usable one)
+    torch.backends.mps.is_available = lambda: False
+    torch.cuda.is_available = lambda: False
 
     sep_dir = models_dir()
     Separator(model_file_dir=str(sep_dir), output_dir=str(sep_dir)).load_model(model_filename=preset.model_filename)

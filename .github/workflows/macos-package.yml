@@ -156,6 +156,8 @@ jobs:
         run: python3 packaging/macos/check_minos.py "$APP" "$MIN_MACOS"
 
       - name: Smoke test (whole song through the launcher, from a path with spaces and Chinese)
+        env:
+          SMOKE_DEVICE: cpu  # the runner reports MPS but a VM cannot use it
         run: |
           set -euo pipefail
           odd="$BUILD/中文 路径"
