@@ -36,7 +36,9 @@
 
 ## 安装
 
-需要 Python 3.11+、[uv](https://docs.astral.sh/uv/)，以及带 libass 的 `ffmpeg`（macOS：`brew install ffmpeg`）。目前主要在 macOS（Apple 芯片）上使用和测试；Linux / Windows 上可以用 CPU 或 NVIDIA 显卡运行。
+**Windows 离线版**：在 Releases 里下载 `KiraKara-…-windows-x64-cpu.7z`（CPU 版）或 `…-cuda.7z`（NVIDIA 显卡版，需要 570 或更新的驱动；超过 2 GB 时分成 `.7z.001`、`.7z.002`… 几个分卷，需要全部下载），用 7-Zip 解压，双击 `KiraKara.bat`。自带 Python、依赖、ffmpeg 和两个默认模型，不需要联网。离线版由 GitHub Actions 构建（`.github/workflows/windows-package.yml`，打包脚本在 `packaging/windows/`）。
+
+**从源码安装**：需要 Python 3.11+、[uv](https://docs.astral.sh/uv/)，以及带 libass 的 `ffmpeg`（macOS：`brew install ffmpeg`）。目前主要在 macOS（Apple 芯片）上使用和测试；Linux / Windows 上可以用 CPU 或 NVIDIA 显卡运行。
 
 ```bash
 git clone <仓库地址> KiraKara && cd KiraKara

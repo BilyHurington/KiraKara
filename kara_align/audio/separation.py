@@ -255,10 +255,15 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
             out_chunks.append(chunk)
 
     def _drain_err() -> None:
+        # whatever has arrived (read1), not a fixed amount: a progress bar update is a few bytes
+        import codecs
+
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
+        raw = proc.stderr.buffer
         buf = ""
-        for chunk in iter(lambda: proc.stderr.read(512), ""):
-            buf = (buf + chunk)[-8192:]
-            found = _PCT_RE.findall(chunk)
+        for data in iter(lambda: raw.read1(4096), b""):
+            buf = (buf + dec.decode(data))[-8192:]
+            found = _PCT_RE.findall(buf[-1024:])
             if found:
                 pct["value"] = int(found[-1])
         err_tail.append(buf)

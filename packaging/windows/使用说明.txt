@@ -5,7 +5,7 @@ KiraKara（Windows · @VARIANT_LABEL@）离线版  @VERSION@
 项目主页和完整教程：https://github.com/BilyHurington/KiraKara
 
 一、运行
-1. 用 7-Zip（或 Bandizip、WinRAR）解压：选中 .7z.001 解压即可，其余分卷会自动接上。
+1. 用 7-Zip（或 Bandizip、WinRAR）解压；分成多个分卷（.7z.001、.7z.002…）时，下载全部分卷后解压 .7z.001 即可。
    请解压到一个路径较短的文件夹，例如 D:\KiraKara。
 2. 双击 KiraKara.bat。
    第一次运行时 Windows 可能弹出“Windows 已保护你的电脑”：点“更多信息”→“仍要运行”。

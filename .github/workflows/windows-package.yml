@@ -206,9 +206,13 @@ jobs:
           Push-Location $env:BUILD
           7z a -t7z -mx=5 -mmt=on -v1900m "dist\$name.7z" KiraKara | Select-Object -Last 5
           Pop-Location
-          Get-ChildItem "$env:BUILD\dist" | ForEach-Object {
-            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name
-          } | Out-File -Encoding ascii "$env:BUILD\dist\$name.sha256.txt"
+          $vols = @(Get-ChildItem "$env:BUILD\dist" -Filter "$name.7z.*")
+          if ($vols.Count -eq 1) {  # one volume: a plain .7z (opens in Windows 11 without 7-Zip)
+            Rename-Item $vols[0].FullName "$name.7z"
+            $vols = @(Get-Item "$env:BUILD\dist\$name.7z")
+          }
+          $sums = $vols | ForEach-Object { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name }
+          $sums | Out-File -Encoding ascii "$env:BUILD\dist\$name.sha256.txt"
           Get-ChildItem "$env:BUILD\dist" | Format-Table Length, Name -AutoSize
 
       - name: Upload to release ${{ needs.release.outputs.tag }}
