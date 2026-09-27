@@ -38,7 +38,7 @@
 
 **Windows 离线版**：在 Releases 里下载 `KiraKara-…-windows-x64-cpu.7z`（CPU 版）或 `…-cuda.7z`（NVIDIA 显卡版，需要 570 或更新的驱动；超过 2 GB 时分成 `.7z.001`、`.7z.002`… 几个分卷，需要全部下载），用 7-Zip 解压，双击 `KiraKara.bat`。自带 Python、依赖、ffmpeg 和两个默认模型，不需要联网。
 
-**macOS 离线版**（Apple 芯片，macOS 14 或更新）：下载 `KiraKara-…-macos-arm64.zip`，解压后第一次在访达里右键点 `KiraKara.command` →“打开”，以后双击即可。
+**macOS 离线版**（Apple 芯片，macOS 14.8.5 或更新）：下载 `KiraKara-…-macos-arm64.zip`，解压后第一次在访达里右键点 `KiraKara.command` →“打开”，以后双击即可。
 
 离线版都由 GitHub Actions 构建（`.github/workflows/windows-package.yml`、`macos-package.yml`；打包脚本在 `packaging/`）。
 

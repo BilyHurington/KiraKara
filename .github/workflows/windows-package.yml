@@ -81,7 +81,7 @@ jobs:
               --notes "由 Actions 自动构建（${GITHUB_SHA::7}），每次手动运行都会替换。解压说明见压缩包里的 使用说明.txt。"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          echo "version=$(git describe --tags --match 'v*' --always)" >> "$GITHUB_OUTPUT"
 
   package:
     needs: release

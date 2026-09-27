@@ -2,8 +2,8 @@
 # ffmpeg (with libass) and the two default models, checked by running a whole song through the launcher,
 # zipped and uploaded to a GitHub release.
 #
-# Built on macOS 14: Homebrew's ffmpeg libraries are built for the system they are installed on, and
-# torch needs macOS 14 anyway, so the package runs on macOS 14 and later (checked below).
+# Built on macOS 14: Homebrew's ffmpeg libraries are built for the system they are installed on (a
+# newer runner would raise the requirement); the package runs on macOS 14.8.5 and later (checked below).
 #
 #   Actions → macOS package → Run workflow   → prerelease "macos-preview" (replaced each run)
 #   git push origin v0.2.0                    → release "v0.2.0"
@@ -23,7 +23,8 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  MIN_MACOS: "14.0"
+  # libtesseract (an ffmpeg-full dependency, loaded with ffmpeg) is built for 14.8.5; torch needs 14.0
+  MIN_MACOS: "14.8.5"
   UV_PYTHON_PREFERENCE: only-managed
 
 jobs:
@@ -50,10 +51,10 @@ jobs:
             tag=macos-preview
             gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true
             gh release create "$tag" --prerelease --target "$GITHUB_SHA" --title "macOS 预览版（$(git rev-parse --short HEAD)）" \
-              --notes "由 Actions 自动构建（${GITHUB_SHA::7}），每次手动运行都会替换。需要 Apple 芯片、macOS 14 或更新版本；使用方法见压缩包里的 使用说明.txt。"
+              --notes "由 Actions 自动构建（${GITHUB_SHA::7}），每次手动运行都会替换。需要 Apple 芯片、macOS 14.8.5 或更新版本；使用方法见压缩包里的 使用说明.txt。"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          echo "version=$(git describe --tags --match 'v*' --always)" >> "$GITHUB_OUTPUT"
 
   package:
     needs: release
@@ -87,22 +88,27 @@ jobs:
           set -euo pipefail
           uv python install "$PYTHON_VERSION"
           exe="$(uv python find "$PYTHON_VERSION")"
-          root="$(cd "$(dirname "$exe")/.." && pwd)"
+          # (uv's cpython-3.12-… is a symlink to the patch version's folder: copy the folder itself)
+          root="$(cd -P "$(dirname "$exe")/.." && pwd -P)"
           echo "python: $exe ($root)"
           mkdir -p "$APP"
-          cp -R "$root" "$APP/python"
+          cp -R "$root/" "$APP/python"
+          [ -d "$APP/python" ] && [ ! -L "$APP/python" ]
           lib="$APP/python/lib/python$PYTHON_VERSION"
           rm -rf "$lib/test" "$lib/idlelib" "$lib/tkinter" "$lib/turtledemo" "$lib/EXTERNALLY-MANAGED"
-          "$APP/python/bin/python3" -c "import sys; print(sys.version)"
+          "$APP/python/bin/python3" -c "import sys; print(sys.version, sys.prefix); assert sys.prefix == '$APP/python', sys.prefix"
 
       - name: Dependencies
         run: |
           set -euo pipefail
           py="$APP/python/bin/python3"
+          test "$("$py" -c 'import sys; print(sys.prefix)')" = "$APP/python"
           uv pip install --python "$py" torch
           uv pip install --python "$py" ".[ml,separation]"
           "$py" -c "import torch, transformers, audio_separator, kara_align; print('torch', torch.__version__, '| transformers', transformers.__version__)"
           site="$("$py" -c 'import site; print(site.getsitepackages()[0])')"
+          case "$site" in "$APP"/*) ;; *) echo "::error::packages went to $site"; exit 1 ;; esac
+          du -sh "$site"
           # headers: only needed to build packages (diffq is built from source here)
           rm -rf "$site/torch/include" "$APP/python/include"
           # only python3 / python3.X stay in bin: the other scripts start with this machine's paths
