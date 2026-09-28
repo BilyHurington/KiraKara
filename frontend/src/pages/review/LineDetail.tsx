@@ -1,13 +1,13 @@
 // Right column: timing summary of the selected line and its unit table.
 
-import { Lock, LockOpen, Play, RefreshCw, RotateCcw } from 'lucide-react';
+import { Lock, LockOpen, MoveHorizontal, Play, RefreshCw, RotateCcw } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { cn, fmtMs, fmtSigned, ROLE_LABEL, STATUS_LABEL } from '@/lib/format';
 import type { AlignmentResult, UnitTiming } from '@/lib/types';
 import { toast, useApp } from '@/store/app';
-import { clearUnitManual, setUnitLock, setUnitTimes } from '@/store/edits';
+import { clearUnitManual, retimeLine, setUnitLock, setUnitTimes } from '@/store/edits';
 import { Badge, Button, IconButton, NumberInput, Table, Td, Th, Tip } from '@/components/ui';
 import { flagHelp, flagLabel, unitsRange, type LineStats, type UnitInfo } from './helpers';
 
@@ -55,6 +55,16 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
       return;
     }
     void setUnitTimes(u.unit_id, start, end, result.id);
+  };
+
+  // the whole line: a new start shifts it, a new end stretches it (the start stays)
+  const lineStart = range ? range[0] : null;
+  const lineEnd = range ? range[1] : null;
+  const moveLine = (start: number | null, end: number | null) => {
+    if (start === null && end === null) return;
+    if (start !== null && start < 0) return toast('error', '时间不能为负');
+    if (start !== null && end !== null && end <= start) return toast('error', '行尾必须晚于行首');
+    void retimeLine(stat.line.id, start, end, result.id);
   };
 
   return (
@@ -106,6 +116,25 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
           <Info label="音频输入" value={ROLE_LABEL[lt.audio_role ?? ''] ?? lt.audio_role ?? '—'} />
           {lt.candidate && <Info label="已采用" value={<Badge tone="accent">{lt.candidate}</Badge>} />}
           {lt.reason && <Info label="原因" value={<span className="text-danger">{lt.reason}</span>} />}
+        </div>
+      )}
+
+      {editable && range && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-line px-4 py-2.5 text-[13px]">
+          <span className="flex items-center gap-1.5 font-medium"><MoveHorizontal className="size-4 text-muted" />整行</span>
+          <label className="flex items-center gap-1.5 text-muted">行首
+            <NumberInput className="w-28" value={lineStart} min={0} onCommit={(v) => v !== null && moveLine(v, null)} />
+          </label>
+          <label className="flex items-center gap-1.5 text-muted">行尾
+            <NumberInput className="w-28" value={lineEnd} min={0} onCommit={(v) => v !== null && moveLine(lineStart, v)} />
+          </label>
+          <span className="flex gap-1">
+            {[-100, -10, 10, 100].map((d) => (
+              <Button key={d} size="xs" variant="secondary" className="tabular font-mono"
+                onClick={() => lineStart !== null && moveLine(lineStart + d, null)}>{d > 0 ? '+' : '−'}{Math.abs(d)} ms</Button>
+            ))}
+          </span>
+          <span className="text-xs text-subtle">改行首：整行平移；改行尾：按比例伸缩。改过的单元都会锁定，可以 ⌘Z / Ctrl+Z 撤销</span>
         </div>
       )}
 

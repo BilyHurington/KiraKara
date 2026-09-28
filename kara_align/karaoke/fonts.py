@@ -20,7 +20,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 # preferred defaults, first match wins (mac, windows, linux)
 DEFAULT_FAMILIES = [
@@ -28,9 +28,13 @@ DEFAULT_FAMILIES = [
     "Noto Sans CJK JP", "Source Han Sans JP", "Noto Sans JP", "Noto Sans CJK SC", "Source Han Sans",
     "Hiragino Sans GB", "Microsoft YaHei", "MS Gothic",
 ]
+# the fonts KiraKara ships (Noto Sans CJK: Japanese and Chinese in one collection, SIL OFL), in <app>/fonts
+# or $KARA_ALIGN_FONTS; the default on Windows / Linux, and whenever a style's font lacks characters
+BUNDLED_JP, BUNDLED_SC = "Noto Sans CJK JP", "Noto Sans CJK SC"
+
 # Chinese fonts for translations, first installed one that has every character wins (windows, mac, linux)
 HAN_FAMILIES = [
-    "Microsoft YaHei", "DengXian", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC",
+    BUNDLED_SC, "Microsoft YaHei", "DengXian", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC",
     "Noto Sans SC", "Source Han Sans CN", "WenQuanYi Micro Hei", "SimHei", "Microsoft JhengHei", "Noto Sans CJK TC",
 ]
 _FONT_DIRS = ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts",
@@ -60,9 +64,38 @@ def _fc(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 
+def fonts_dir() -> Optional[Path]:
+    """The folder of the bundled fonts: $KARA_ALIGN_FONTS, else the ``fonts`` folder of the app itself
+    (a source checkout), else ``<home>/fonts``; None when none of them has a font."""
+    from ..project.store import home_dir
+
+    env = os.environ.get("KARA_ALIGN_FONTS")
+    for d in ([Path(env).expanduser()] if env else [Path(__file__).resolve().parents[2] / "fonts", home_dir() / "fonts"]):
+        if d.is_dir() and any(f.suffix.lower() in (".ttc", ".otc", ".ttf", ".otf") for f in d.iterdir()):
+            return d
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def bundled_faces() -> tuple[FontFace, ...]:
+    """The bundled fonts' faces (the monospaced variants of the collection left out)."""
+    d = fonts_dir()
+    if d is None:
+        return ()
+    return tuple(f for f in _faces_in(sorted(d.iterdir())) if "Mono" not in f.family)
+
+
+def bundled(family: str) -> bool:
+    return any(family == f.family or family in f.names for f in bundled_faces())
+
+
 @functools.lru_cache(maxsize=1)
 def list_faces() -> tuple[FontFace, ...]:
-    """Faces that can render Japanese (kana + kanji)."""
+    """Faces that can render Japanese (kana + kanji): the system's and the bundled ones."""
+    return tuple(_system_faces()) + tuple(f for f in bundled_faces())
+
+
+def _system_faces() -> list[FontFace]:
     faces: list[FontFace] = []
     if _fc("fc-list"):
         out = _fc_run(["fc-list", ":lang=ja", "family", "file", "index", "weight"]).stdout
@@ -81,7 +114,8 @@ def list_faces() -> tuple[FontFace, ...]:
             faces.append(FontFace(names[0], names, file, _first_int(props.get("index", "0")), weight >= 180))
     else:
         faces = _scan_dirs()
-    return tuple(faces)
+    d = fonts_dir()  # (the bundled ones are added by list_faces, also when fontconfig knows their folder)
+    return [f for f in faces if d is None or Path(f.path).parent.resolve() != d.resolve()]
 
 
 def _first_int(v: str) -> int:
@@ -93,34 +127,83 @@ def _first_int(v: str) -> int:
 
 
 def _scan_dirs() -> list[FontFace]:
-    from fontTools.ttLib import TTCollection, TTFont
-
-    faces = []
+    """The font folders read directly (no fontconfig: Windows).  Reading every font takes seconds, so
+    what each file holds is kept in ``<home>/cache/fonts.json`` by path, size and modification time."""
+    files = []
     for d in _FONT_DIRS:
         root = Path(os.path.expanduser(d))
-        if not root.is_dir():
+        if root.is_dir():
+            files += [f for f in root.rglob("*") if f.suffix.lower() in (".ttf", ".otf", ".ttc", ".otc")]
+    return _faces_in(files, cache=True)
+
+
+_SCAN_CACHE_VERSION = 1
+
+
+def _scan_cache_path() -> Path:
+    from ..project.store import home_dir
+
+    return home_dir() / "cache" / "fonts.json"
+
+
+def _faces_in(files: list[Path], *, cache: bool = False) -> list[FontFace]:
+    import json
+
+    known: dict = {}
+    if cache:
+        try:
+            data = json.loads(_scan_cache_path().read_text(encoding="utf-8"))
+            if data.get("version") == _SCAN_CACHE_VERSION:
+                known = data.get("files", {})
+        except (OSError, ValueError):
+            pass
+    faces: list[FontFace] = []
+    seen: dict = {}
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
             continue
-        for f in root.rglob("*"):
-            if f.suffix.lower() not in (".ttf", ".otf", ".ttc", ".otc"):
-                continue
-            try:
-                fonts = TTCollection(str(f)).fonts if f.suffix.lower() in (".ttc", ".otc") else [TTFont(str(f), lazy=True)]
-            except Exception:
-                continue
-            for i, font in enumerate(fonts):
-                try:
-                    cmap = font.getBestCmap() or {}
-                    if ord("あ") not in cmap or ord("漢") not in cmap:
-                        continue
-                    name = font["name"]
-                    fam = name.getBestFamilyName() or f.stem
-                    # every family name, localized ones too (a preset may say 游ゴシック or メイリオ)
-                    others = {r.toUnicode(errors="ignore").strip() for r in name.names if r.nameID in (1, 16)} - {fam, ""}
-                    weight = font["OS/2"].usWeightClass if "OS/2" in font else 400
-                    faces.append(FontFace(fam, (fam, *sorted(others)), str(f), i, weight >= 600))
-                except Exception:
-                    continue
+        key, sig = str(f), [st.st_size, int(st.st_mtime)]
+        entry = known.get(key)
+        if entry is None or entry.get("sig") != sig:
+            entry = {"sig": sig, "faces": _read_faces(f)}
+        seen[key] = entry
+        faces += [FontFace(fam, tuple(names), key, index, bold) for fam, names, index, bold in entry["faces"]]
+    if cache and seen != known:
+        try:
+            from ..project.store import atomic_write_text
+
+            atomic_write_text(_scan_cache_path(), json.dumps({"version": _SCAN_CACHE_VERSION, "files": seen},
+                                                             ensure_ascii=False))
+        except OSError:
+            pass
     return faces
+
+
+def _read_faces(f: Path) -> list:
+    """[family, names, index, bold] of the faces in a font file that have kana and kanji."""
+    from fontTools.ttLib import TTCollection, TTFont
+
+    try:
+        fonts = TTCollection(str(f), lazy=True).fonts if f.suffix.lower() in (".ttc", ".otc") else [TTFont(str(f), lazy=True)]
+    except Exception:
+        return []
+    out = []
+    for i, font in enumerate(fonts):
+        try:
+            cmap = font.getBestCmap() or {}
+            if ord("あ") not in cmap or ord("漢") not in cmap:
+                continue
+            name = font["name"]
+            fam = name.getBestFamilyName() or f.stem
+            # every family name, localized ones too (a preset may say 游ゴシック or メイリオ)
+            others = {r.toUnicode(errors="ignore").strip() for r in name.names if r.nameID in (1, 16)} - {fam, ""}
+            weight = font["OS/2"].usWeightClass if "OS/2" in font else 400
+            out.append([fam, [fam, *sorted(others)], i, weight >= 600])
+        except Exception:
+            continue
+    return out
 
 
 def families() -> list[dict]:
@@ -140,6 +223,9 @@ def installed(family: str) -> bool:
 
 
 def default_family() -> str:
+    # Windows / Linux: the bundled font (every character, the same look everywhere; no font scan needed)
+    if sys.platform != "darwin" and bundled(BUNDLED_JP):
+        return BUNDLED_JP
     names = {f.family for f in list_faces()}
     for fam in DEFAULT_FAMILIES:
         if fam in names:
@@ -157,6 +243,10 @@ def fc_escape(family: str) -> str:
 def resolve(family: str, bold: bool) -> tuple[str, int]:
     """Font file + face index libass will use for ``family`` (fontconfig match)."""
     family = family or default_family()
+    own = [f for f in bundled_faces() if family == f.family or family in f.names]
+    if own:  # the bundled font: the very file libass is given (fontsdir), not whatever fontconfig has
+        best = sorted(own, key=lambda f: f.bold != bold)[0]
+        return best.path, best.index
     if _fc("fc-match"):
         pattern = f"{fc_escape(family)}:weight={'bold' if bold else 'regular'}"
         out = _fc_run(["fc-match", "-f", "%{file}|%{index}", pattern])
@@ -189,6 +279,14 @@ def covering_family(text: str, bold: bool, prefer: list[str]) -> Optional[str]:
         if fam in names and not lacking(fam, bold, text):
             return fam
     return None
+
+
+def covering(family: str, bold: bool, text: str, prefer: Sequence[str]) -> str:
+    """``family``, or — where the characters it lacks would be drawn by a fallback of libass's own
+    choosing (not macOS) — the first of ``prefer`` that has every character of ``text``."""
+    if not text or system_han_fallback() or not lacking(family, bold, text):
+        return family
+    return covering_family(text, bold, list(prefer)) or family
 
 
 def system_han_fallback() -> bool:

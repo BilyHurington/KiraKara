@@ -103,6 +103,47 @@ def test_manual_lock_survives_rerun_and_staleness(tmp_path):
     assert all(x["stale"] for x in view["view"]["results"])
 
 
+def test_retime_line_shifts_or_stretches_every_unit(tmp_path):
+    from fastapi.testclient import TestClient
+    from kara_align.project import edits
+    from kara_align.web.server import create_app
+
+    h = _project(tmp_path, "plain")
+    r = S.run_align(h)
+    line = h.project.lyrics.sung_lines()[0].id
+    units = [u for u in r.units if u.line_id == line]
+    before = [(u.start_ms, u.end_ms) for u in units]
+    s0, e0 = min(b[0] for b in before), max(b[1] for b in before)
+    # a new start alone: the whole line moves, lengths kept, every unit locked
+    changed = edits.retime_line(r, line, s0 + 250, None)
+    assert [(u.start_ms, u.end_ms) for u in changed] == [(a + 250, b + 250) for a, b in before]
+    assert all(u.locked and u.manual.note == "整行平移" for u in changed)
+    lt = next(x for x in r.lines if x.line_id == line)
+    assert (lt.start_ms, lt.end_ms) == (s0 + 250, e0 + 250)
+    # start and end: the line is stretched onto the new span, proportions kept
+    changed = edits.retime_line(r, line, s0, s0 + 2 * (e0 - s0))
+    assert [(u.start_ms, u.end_ms) for u in changed] == [(s0 + 2 * (a - s0), s0 + 2 * (b - s0)) for a, b in before]
+    assert changed[0].manual.note == "整行伸缩"
+    with pytest.raises(edits.EditError):
+        edits.retime_line(r, line, 5000, 4000)
+    h.save()
+    # over HTTP: one call, the changed units back (the workspace keeps a project in a folder named by its id)
+    import shutil
+
+    pid = h.project.id
+    root = tmp_path / "root"
+    root.mkdir()
+    shutil.move(str(h.dir), str(root / pid))
+    client = TestClient(create_app(root))
+    res = client.post(f"/api/projects/{pid}/results/{r.id}/lines/{line}/retime", json={"start_ms": s0})
+    assert res.status_code == 200, res.text
+    got = res.json()["units"]
+    assert [(u["start_ms"], u["end_ms"]) for u in got] == [(s0 + 2 * (a - s0), s0 + 2 * (b - s0))
+                                                          for a, b in before]
+    assert client.post(f"/api/projects/{pid}/results/{r.id}/lines/{line}/retime",
+                       json={"start_ms": 10, "end_ms": 5}).status_code == 400
+
+
 def test_local_rerun_is_partial_and_adoptable(tmp_path):
     h = _project(tmp_path, "plain")
     full = S.run_align(h)

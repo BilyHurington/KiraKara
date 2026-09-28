@@ -84,6 +84,9 @@ class TaskStyleOptions(_Base):
     song_info: Optional[bool] = True  # title card at the start; None = as the style says
     ruby: Literal["style", "hiragana", "katakana", "romaji", "off"] = "hiragana"
     ruby_target: Optional[Literal["kanji", "all"]] = "kanji"  # None = as the style says
+    # the effect as each syllable is sung, chosen on its own (the glow template's sparkles can be turned
+    # off without leaving the template); None = as the style says
+    effects: Optional[Literal["none", "pulse", "ring", "shine", "sparkle", "petals", "hearts", "ball"]] = None
     video_audio: Optional[Literal["original", "mix", "none"]] = None  # None = the settings' choice
     vocal_keep_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)  # "mix": None = the settings' level
 

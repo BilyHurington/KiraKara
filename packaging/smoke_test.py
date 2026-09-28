@@ -31,7 +31,7 @@ def main() -> None:
     launcher = app / ("KiraKara.bat" if os.name == "nt" else "KiraKara.command")
     env = {**os.environ, "KARA_ALIGN_HOME": str(work / "home"), "HF_HUB_CACHE": str(work / "hf-cache"),
            "HF_HOME": str(work / "hf-home"), "KIRAKARA_NO_BROWSER": "1"}
-    for k in ("KARA_ALIGN_MODELS", "KARA_ALIGN_FFMPEG", "FONTCONFIG_FILE", "VIRTUAL_ENV", "PYTHONPATH"):
+    for k in ("KARA_ALIGN_MODELS", "KARA_ALIGN_FONTS", "KARA_ALIGN_FFMPEG", "FONTCONFIG_FILE", "VIRTUAL_ENV", "PYTHONPATH"):
         env.pop(k, None)
     models_before = _listing(app / "models")
 

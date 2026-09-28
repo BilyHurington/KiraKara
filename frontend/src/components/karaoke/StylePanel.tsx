@@ -612,7 +612,7 @@ function InfoText({ auto, custom, onText }: { auto: string; custom: string | nul
 
 // ------------------------------------------------------------------ effects
 
-const EFFECTS: Record<EffectKind, { label: string; hint: string }> = {
+export const EFFECTS: Record<EffectKind, { label: string; hint: string }> = {
   none: { label: '无', hint: '' },
   pulse: { label: '光晕扩散', hint: '唱到的字向外扩散出一圈光晕' },
   ring: { label: '光环爆开', hint: '唱到的字的轮廓向外爆开一圈柔和的光环' },

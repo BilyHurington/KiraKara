@@ -39,8 +39,25 @@ def video_encoder(quality: str) -> list[str]:
 
 
 def _subtitles_filter(ass_name: str) -> str:
-    # run ffmpeg inside the temp dir so the filter argument needs no escaping
-    return f"subtitles={ass_name}"
+    # run ffmpeg inside the temp dir so the file name needs no escaping; the bundled fonts' folder
+    # (fontsdir: libass loads its fonts itself, whatever font provider it uses) is escaped
+    from .fonts import fonts_dir
+
+    d = fonts_dir()
+    if d is None:
+        return f"subtitles={ass_name}"
+    return f"subtitles={ass_name}:fontsdir={filter_path(d)}"
+
+
+def filter_path(p) -> str:
+    """A path as a filter option value inside an ffmpeg filter graph, escaped at both levels: the
+    option value (``\\ ' :`` — a drive letter's colon would end the option) and then the graph
+    (``\\ ' [ ] , ;``).  "/" separators on Windows too."""
+    import re
+
+    v = Path(p).resolve().as_posix()
+    v = re.sub(r"([\\':])", r"\\\1", v)
+    return re.sub(r"([\\'\[\],;])", r"\\\1", v)
 
 
 def even_size(size: tuple[int, int]) -> tuple[int, int]:

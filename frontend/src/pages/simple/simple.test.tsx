@@ -104,7 +104,7 @@ describe('simple mode home', () => {
     await waitFor(() => expect(api.find('POST', '/api/karaoke/theme').at(-1)?.body).toEqual({ template: 'glow', color: '#2F80ED', secondary: '#ED35B3' }));
     expect(screen.getByRole('img', { name: '字幕示意' })).toBeInTheDocument();
     const want = { source: 'template', template: 'glow', color: '#2F80ED', secondary: '#ED35B3', saved_id: '', translation: null, song_info: true,
-      ruby: 'romaji', ruby_target: 'kanji', video_audio: 'mix', vocal_keep_pct: 35 };
+      ruby: 'romaji', ruby_target: 'kanji', video_audio: 'mix', vocal_keep_pct: 35, effects: null };
     // remembered right away (the next song starts from the same choices)
     await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body).toEqual({ simple: { task_style: want } }), { timeout: 2000 });
     await userEvent.click(start);

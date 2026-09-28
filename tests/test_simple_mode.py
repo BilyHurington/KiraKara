@@ -934,3 +934,15 @@ def test_ai_readings_by_hand_can_be_skipped_and_the_switch_turns_them_off(tmp_pa
     AS.update({"ai": {"enabled": False}})
     t = _wait(q, q.add(media=_wav(tmp_path / "b.wav"), filename="b.wav", lyrics="きみと\n", mode="plain").id)
     assert t.status == "succeeded" and t.stage("readings").status == "skipped" and not P.manual_readings(t)
+
+
+def test_task_effect_is_chosen_on_its_own():
+    """Step 4's effect: the glow template's sparkles can be turned off (or swapped) without leaving it."""
+    simple = AS.SimpleSettings()
+    glow = AS.TaskStyleOptions(source="template", template="glow")
+    base, _, _ = P.resolve_task_style(simple, glow)
+    assert base.effects.kind != "none"  # the template brings an effect
+    for kind in ("none", "petals"):
+        style, _, _ = P.resolve_task_style(simple, glow.model_copy(update={"effects": kind}))
+        assert style.effects.kind == kind
+        assert style.glow.enabled == base.glow.enabled  # the rest of the template stays

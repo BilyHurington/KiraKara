@@ -1171,6 +1171,8 @@ def resolve_task_style(simple: "app_settings.SimpleSettings",
         style.ruby.enabled, style.ruby.script = True, opts.ruby
     if opts.ruby_target and style.ruby.enabled:
         style.ruby.target = opts.ruby_target
+    if opts.effects is not None:
+        style.effects.kind = opts.effects
     return style, label, colors
 
 

@@ -73,12 +73,29 @@ export function clearUnitManual(uid: string, rid = currentResult()?.id) {
     (pid, r) => api.del<UnitTiming>(upath(pid, r, uid, '/manual')), '操作失败');
 }
 
+/** Move a whole line: a start alone shifts it, a start and end stretch it (every unit locked); one undo step. */
+export function retimeLine(lineId: string, start: number | null, end: number | null, rid = currentResult()?.id) {
+  const pid = useApp.getState().pid;
+  if (!rid || !pid) return Promise.resolve();
+  return serial(() => run(async () => {
+    const r = useApp.getState().pv?.project.results.find((x) => x.id === rid);
+    const before = new Map((r?.units ?? []).filter((u) => u.line_id === lineId).map((u) => [u.unit_id, u.manual ?? null]));
+    const res = await api.post<{ units: UnitTiming[] }>(`/api/projects/${pid}/results/${rid}/lines/${lineId}/retime`,
+      { start_ms: start, end_ms: end });
+    for (const ut of res.units) applyUnit(pid, rid, ut);
+    if (useApp.getState().pid !== pid || !res.units.length) return;
+    const items = res.units.map((ut) => ({ uid: ut.unit_id, before: before.get(ut.unit_id) ?? null, after: ut.manual }));
+    const what = res.units[0].manual?.note === '整行伸缩' ? '整行伸缩' : '整行平移';
+    push({ rid, uid: items[0].uid, before: items[0].before, after: items[0].after, label: what, items });
+  }, '调整失败'));
+}
+
 /** Units of these lines were replaced (adopting a rerun / candidate): their undo steps no longer apply. */
 export function forgetEdits(rid: string, lineIds: string[]) {
   const lines = new Set(lineIds);
   const r = useApp.getState().pv?.project.results.find((x) => x.id === rid);
   const units = new Set((r?.units ?? []).filter((u) => lines.has(u.line_id)).map((u) => u.unit_id));
-  const keep = (e: UndoEntry) => !(e.rid === rid && units.has(e.uid));
+  const keep = (e: UndoEntry) => !(e.rid === rid && (units.has(e.uid) || !!e.items?.some((i) => units.has(i.uid))));
   useApp.setState((s) => ({ undo: s.undo.filter(keep), redo: s.redo.filter(keep) }));
 }
 
@@ -104,10 +121,13 @@ function step(from: 'undo' | 'redo') {
       toast('warn', `无法${from === 'undo' ? '撤销' : '重做'}：${e.label}`, `${why}；这一步已从记录中移除`);
       return;
     }
-    const manual: ManualEdit | null = from === 'undo' ? e.before : e.after;
+    const items = e.items ?? [{ uid: e.uid, before: e.before, after: e.after }];
     try {
-      const ut = await api.post<UnitTiming>(upath(pid, e.rid, e.uid, '/restore'), { manual });
-      applyUnit(pid, e.rid, ut);
+      for (const it of items) {
+        const manual: ManualEdit | null = from === 'undo' ? it.before : it.after;
+        const ut = await api.post<UnitTiming>(upath(pid, e.rid, it.uid, '/restore'), { manual });
+        applyUnit(pid, e.rid, ut);
+      }
       if (useApp.getState().pid !== pid) return;
       useApp.setState((st) => ({ [to]: [...st[to], e] }) as any);
       if (e.rid !== useApp.getState().resultId) {

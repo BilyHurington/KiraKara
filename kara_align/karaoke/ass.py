@@ -40,7 +40,8 @@ from typing import Optional
 
 from ..models import AlignmentResult, KaraokeStyle, Line, Project, Segment
 from ..reading.japanese import is_kanji, to_hiragana
-from .fonts import HAN_FAMILIES, Measurer, covering_family, default_family, installed, lacking, system_han_fallback
+from .fonts import (BUNDLED_JP, BUNDLED_SC, HAN_FAMILIES, Measurer, bundled, covering_family, default_family,
+                    installed, lacking, system_han_fallback)
 
 REF_WIDTH = 1920  # style pixel values are defined for a frame this wide; other widths scale
 DEFAULT_SIZE = (1920, 1080)
@@ -766,6 +767,8 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     family = usable(txt.font) or default_family()
     ruby_family = (usable(rb.font) or family) if rb.enabled else family
     trans_family = (usable(tr.font) or family) if tr.enabled else family
+    if tr.enabled and trans_family == BUNDLED_JP and not usable(tr.font) and bundled(BUNDLED_SC):
+        trans_family = BUNDLED_SC  # the bundled font's Chinese face: a Chinese translation in Chinese glyph forms
     font_notes: list[str] = []
     if tr.enabled and not system_han_fallback():
         # a translation (usually Chinese) in a Japanese font lacks many characters; libass fills them in

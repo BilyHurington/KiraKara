@@ -136,6 +136,11 @@ class UnitBody(BaseModel):
     locked: bool = True
 
 
+class RetimeBody(BaseModel):
+    start_ms: Optional[int] = None  # the line's new start (alone: shift the whole line)
+    end_ms: Optional[int] = None  # with a start: stretch the line onto [start_ms, end_ms)
+
+
 class LockBody(BaseModel):
     locked: bool
 
@@ -1037,6 +1042,23 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         from ..project.edits import restore_manual
 
         return unit_op(pid, rid, restore_manual, uid, body.manual)
+
+    @app.post("/api/projects/{pid}/results/{rid}/lines/{lid}/retime")
+    def retime_line(pid: str, rid: str, lid: str, body: RetimeBody):
+        """Shift (start only) or stretch (start and end) every unit of a line; they become locked manual edits."""
+        from ..project.edits import EditError, retime_line as retime
+
+        h = handle(pid)
+        result_or_404(h, rid)
+        orig = h.project.asset("original")
+        with h.lock:
+            r = S.get_result(h, rid)
+            try:
+                units = retime(r, lid, body.start_ms, body.end_ms, duration_ms=orig.duration_ms if orig else None)
+            except EditError as e:
+                raise HTTPException(400, str(e)) from e
+            h.save()
+            return {"units": [u.model_dump(mode="json") for u in units]}
 
     @app.post("/api/projects/{pid}/results/{rid}/adopt")
     def adopt(pid: str, rid: str, body: AdoptBody):

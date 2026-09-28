@@ -6,6 +6,7 @@ rem (ASCII only: cmd.exe reads batch files in the console code page.)
 setlocal
 set "APP=%~dp0"
 set "KARA_ALIGN_MODELS=%APP%models"
+set "KARA_ALIGN_FONTS=%APP%fonts"
 set "KARA_ALIGN_FFMPEG=%APP%ffmpeg\bin\ffmpeg.exe"
 set "PATH=%APP%ffmpeg\bin;%PATH%"
 set "FONTCONFIG_FILE=%APP%ffmpeg\etc\fonts\fonts.conf"

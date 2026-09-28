@@ -21,7 +21,11 @@ export const STEPS: { id: Step; label: string; hint: string; optional?: boolean;
 
 export interface Toast { id: number; kind: 'ok' | 'error' | 'info' | 'warn'; title: string; body?: string; ttl: number }
 
-export interface UndoEntry { rid: string; uid: string; before: ManualEdit | null; after: ManualEdit | null; label: string }
+export interface UndoEntry {
+  rid: string; uid: string; before: ManualEdit | null; after: ManualEdit | null; label: string;
+  /** several units changed as one step (a whole line moved): undone / redone together */
+  items?: { uid: string; before: ManualEdit | null; after: ManualEdit | null }[];
+}
 
 interface State {
   info: Info | null;

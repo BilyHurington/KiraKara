@@ -49,6 +49,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           uv venv --python $env:PYTHON_VERSION .venv
           uv pip install --python .venv -e ".[dev]"
+          .venv\Scripts\python packaging/fetch_fonts.py  # the bundled font: the Windows default
       - name: Fonts the tests will find
         run: .venv\Scripts\python -c "from kara_align.karaoke import fonts; print(fonts.default_family(), len(fonts.families()), [f['family'] for f in fonts.families()][:20])"
       - name: pytest
@@ -168,6 +169,11 @@ jobs:
             & "$env:APP\python\python.exe" packaging/fetch_models.py "$env:APP\models"
           }
           Get-ChildItem -Recurse -File "$env:APP\models" | Format-Table Length, FullName -AutoSize
+
+      - name: Fonts (Noto Sans CJK)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:APP\python\python.exe" packaging/fetch_fonts.py "$env:APP\fonts"
 
       - name: Launcher, notes, licences
         run: |

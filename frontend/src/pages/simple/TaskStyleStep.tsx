@@ -6,16 +6,17 @@
 import { Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import type { AppSettings, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
+import type { AppSettings, EffectKind, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
 import { useApp } from '@/store/app';
 import { loadSavedStyles, useLibrary } from '@/store/styles';
 import { Segmented, Select, SliderField, Switch } from '@/components/ui';
 import { ColorRow } from '@/components/karaoke/ThemeColors';
+import { EFFECTS } from '@/components/karaoke/StylePanel';
 
 type RubyChoice = Exclude<TaskStyleOptions['ruby'], 'style'>;
 const TEMPLATE_HINT = {
   plain: '朴素：只有扫光变色和描边，干净清楚',
-  glow: '荧光：带荧光边缘、翻译发光和字幕后面的小星光',
+  glow: '荧光：带荧光边缘和翻译发光（唱到时的特效在下面单独选）',
 };
 
 export function TaskStyleStep({ value: o, onChange, settings }: {
@@ -56,18 +57,20 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const songInfo = o.song_info ?? base?.info.enabled ?? false;
   const ruby: RubyChoice = o.ruby === 'style' ? (base && !base.ruby.enabled ? 'off' : base?.ruby.script ?? 'hiragana') : o.ruby;
   const rubyTarget = o.ruby_target ?? base?.ruby.target ?? 'all';
+  const effect: EffectKind = o.effects ?? base?.effects.kind ?? 'none';
   const audio = o.video_audio ?? settings.video_audio;
   const vocal = o.vocal_keep_pct ?? settings.vocal_keep_pct;
   const shown = useMemo(() => base && {
     ...base,
     translation: { ...base.translation, enabled: translation },
     info: { ...base.info, enabled: songInfo },
-  }, [base, translation, songInfo]);
+    effects: { ...base.effects, kind: effect },
+  }, [base, translation, songInfo, effect]);
 
   return (
     <div className="space-y-4">
       <Segmented<TaskStyleOptions['source']> label="字幕样式来源" value={o.source}
-        onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null })} options={[
+        onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null, effects: null })} options={[
         { value: 'template', label: '模版配色' },
         { value: 'saved', label: '保存的预设' },
         { value: 'default', label: '设置里的样式' },
@@ -122,6 +125,20 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
                 <Switch checked={rubyTarget === 'kanji'} onChange={(v) => set({ ruby_target: v ? 'kanji' : 'all' })} label="仅汉字" />
               )}
             </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
+              <span className="w-14 shrink-0 text-muted">特效</span>
+              <Select aria-label="特效" className="h-8 w-40 text-[13px]" value={effect}
+                onChange={(e) => set({ effects: e.target.value as EffectKind })}>
+                {(Object.keys(EFFECTS) as EffectKind[]).map((k) => <option key={k} value={k}>{EFFECTS[k].label}</option>)}
+              </Select>
+              {effect !== 'none' && <span className="text-xs text-subtle">{EFFECTS[effect].hint}</span>}
+            </div>
+            {base && (
+              <p className="text-xs text-subtle">
+                字幕默认比实际演唱<b className="font-semibold text-muted">提前 {base.timing.advance_ms} ms</b> 显示：每个字的扫光要走完整个音，
+                提前一点看起来正好在唱。想改的话，在详细模式“字幕样式 → 时间”里调整“歌词提前显示”。
+              </p>
+            )}
             {settings.auto_export && (
               <div className="space-y-2 text-[13px]">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

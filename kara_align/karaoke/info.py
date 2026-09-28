@@ -22,7 +22,7 @@ import re
 from typing import Optional, Sequence
 
 from ..models import KaraokeStyle, Project
-from .fonts import Measurer
+from .fonts import BUNDLED_JP, HAN_FAMILIES, Measurer, covering
 
 LABELS = {"title": "歌名", "artist": "歌手", "album": "专辑", "lyricist": "作词", "composer": "作曲", "arranger": "编曲"}
 # a label may name several roles ("作词/作曲", "词曲", "Lyrics & Music"): each one is filled
@@ -131,6 +131,9 @@ def info_events(project: Project, style: KaraokeStyle, W: int, H: int, k: float,
     lines = info_lines(project, style)
     if not info.enabled or not lines:
         return []
+    # a title / album with characters the lyric font lacks: a font with all of them (Windows: libass would
+    # fill them in from a font of its own, at another size)
+    family = covering(family, style.text.bold, "".join(lines), [BUNDLED_JP, *HAN_FAMILIES])
     t0 = max(0.0, info.start_ms + time_offset_ms)
     t1 = t0 + info.duration_ms
     events = _card(lines, style, W, H, k, family, t0, t1, boxes, warnings, at_end=False)

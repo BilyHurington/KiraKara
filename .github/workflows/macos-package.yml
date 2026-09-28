@@ -148,6 +148,9 @@ jobs:
           fi
           find "$APP/models" -type f -exec ls -l {} + | awk '{print $5, $9}'
 
+      - name: Fonts (Noto Sans CJK)
+        run: '"$APP/python/bin/python3" packaging/fetch_fonts.py "$APP/fonts"'
+
       - name: Launcher, notes, licences
         run: |
           set -euo pipefail

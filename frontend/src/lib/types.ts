@@ -402,6 +402,8 @@ export interface TaskStyleOptions {
   ruby: 'style' | 'hiragana' | 'katakana' | 'romaji' | 'off';
   /** null: as the chosen style says */
   ruby_target?: 'kanji' | 'all' | null;
+  /** the effect as each syllable is sung; null: as the chosen style says */
+  effects?: EffectKind | null;
   /** null: the settings' choice */
   video_audio: 'original' | 'mix' | 'none' | null;
   /** vocals kept with "mix"; null: the settings' level */

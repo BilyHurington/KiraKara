@@ -33,6 +33,8 @@ frontend/*.tsbuildinfo
 
 # model files (separation / alignment): kept in the app folder, loaded from there
 /models/
+# the bundled fonts (packaging/fetch_fonts.py)
+/fonts/
 
 # promo / tutorial video material (kept local)
 /intro_video/

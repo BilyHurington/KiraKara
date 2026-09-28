@@ -111,6 +111,39 @@ def restore_manual(result: AlignmentResult, unit_id: str, edit: Optional[dict]) 
     return set_manual(result, unit_id, e.start_ms, e.end_ms, locked=e.locked, note=e.note or "撤销/重做")
 
 
+def retime_line(result: AlignmentResult, line_id: str, start_ms: Optional[int], end_ms: Optional[int],
+                *, duration_ms: Optional[int] = None) -> list[UnitTiming]:
+    """Move a whole line: a new start alone shifts every unit by the same amount; a new start and end
+    map the line's current span onto the new one (units keep their proportions).  Every unit with times
+    becomes a locked manual edit; units without times are left as they are.  Returns the changed units."""
+    units = [u for u in result.units if u.line_id == line_id]
+    if not units:
+        raise EditError(f"结果中没有行 {line_id}")
+    timed = [u for u in units if u.start_ms is not None and u.end_ms is not None]
+    if not timed:
+        raise EditError("这一行没有带时间的单元，无法整行调整；请先设置单元的时间")
+    old_start = min(u.start_ms for u in timed)  # type: ignore[type-var]
+    old_end = max(u.end_ms for u in timed)  # type: ignore[type-var]
+    new_start = old_start if start_ms is None else start_ms
+    new_end = (old_end + (new_start - old_start)) if end_ms is None else end_ms
+    if new_start < 0:
+        raise EditError("时间不能为负")
+    if duration_ms is not None and new_end > duration_ms:
+        raise EditError("时间超出音频长度")
+    if new_end <= new_start:
+        raise EditError("行尾必须晚于行首")
+    scale = (new_end - new_start) / (old_end - old_start) if old_end > old_start else 1.0
+    stretch = end_ms is not None and abs(scale - 1.0) > 1e-9
+    note = "整行伸缩" if stretch else "整行平移"
+    mapped = lambda t: int(round(new_start + (t - old_start) * scale))  # noqa: E731
+    changed = []
+    for u in timed:
+        s, e = mapped(u.start_ms), mapped(u.end_ms)  # type: ignore[arg-type]
+        e = max(e, s + 1)  # a very short unit squeezed by a strong shrink keeps a length
+        changed.append(set_manual(result, u.unit_id, s, e, locked=True, note=note, duration_ms=duration_ms))
+    return changed
+
+
 def _refresh_line(result: AlignmentResult, line_id: str) -> None:
     units = [u for u in result.units if u.line_id == line_id]
     starts = [u.start_ms for u in units if u.start_ms is not None]

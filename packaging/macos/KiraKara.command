@@ -9,6 +9,7 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null
 
 PY="$APP/python/bin/python3"
 export KARA_ALIGN_MODELS="$APP/models"          # 自带的模型
+export KARA_ALIGN_FONTS="$APP/fonts"            # 自带的字体（Noto Sans CJK）
 export KARA_ALIGN_FFMPEG="$APP/ffmpeg/bin/ffmpeg"
 export PATH="$APP/ffmpeg/bin:$PATH"              # ffprobe、fc-list / fc-match 以及分离组件用到的 ffmpeg
 export FONTCONFIG_FILE="$APP/ffmpeg/etc/fonts/fonts.conf"

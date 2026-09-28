@@ -39,6 +39,14 @@ function serverLike() {
       u.end_ms = c.body.end_ms;
       return u;
     },
+    [`POST /api/projects/${PID}/results/`]: (c) => {  // .../lines/{lid}/retime: the whole line moved
+      const r = currentResult()!;
+      const lid = c.url.split('/lines/')[1].split('/')[0];
+      const units = r.units.filter((x) => x.line_id === lid && x.start_ms !== null && x.end_ms !== null);
+      const d = c.body.start_ms - Math.min(...units.map((x) => x.start_ms!));
+      return { units: units.map((x) => ({ ...structuredClone(x), start_ms: x.start_ms! + d, end_ms: x.end_ms! + d,
+        manual: { start_ms: x.start_ms! + d, end_ms: x.end_ms! + d, locked: true, at: '', note: '整行平移' } })) };
+    },
     [`POST /api/projects/${PID}/align`]: () => ({ id: 'job1', kind: 'align', project_id: PID, status: 'queued', progress: 0, message: '', error: null, created: 'z', finished: null, output: null }),
     [`POST /api/projects/${PID}/mix/preview-gain`]: () => ({ bus_gain: 1, peak_before: 0.5 }),
     [`POST /api/projects/${PID}/lyrics/parse`]: () => ({ preview_id: 'pv1', detected: 'lrc', warnings: ['示例警告'], error: null, doc: fixturePV().project.lyrics, extra_tracks: {} }),
@@ -107,7 +115,7 @@ describe('interactions', () => {
     seedStore('review');
     const api = serverLike();
     renderUI(<ReviewPage />);
-    const input = (await screen.findAllByRole('spinbutton'))[0] as HTMLInputElement;
+    const input = within(await screen.findByRole('table')).getAllByRole('spinbutton')[0] as HTMLInputElement;
     const orig = Number(input.value);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: String(orig - 15) } });
@@ -117,11 +125,29 @@ describe('interactions', () => {
     await waitFor(() => expect(useApp.getState().undo).toHaveLength(1));
   });
 
+  it('review: a new line start moves the whole line in one call, undone as one step', async () => {
+    seedStore('review');
+    const api = serverLike();
+    renderUI(<ReviewPage />);
+    const start = await screen.findByRole('spinbutton', { name: '行首' }) as HTMLInputElement;
+    const orig = Number(start.value);
+    fireEvent.focus(start);
+    fireEvent.change(start, { target: { value: String(orig - 100) } });
+    fireEvent.blur(start);
+    await waitFor(() => expect(api.find('POST', '/retime')).toHaveLength(1));
+    expect(api.find('POST', '/retime')[0].body).toEqual({ start_ms: orig - 100, end_ms: null });
+    await waitFor(() => expect(useApp.getState().undo).toHaveLength(1));
+    const step = useApp.getState().undo[0];
+    expect(step.label).toBe('整行平移');
+    expect(step.items!.length).toBeGreaterThan(1);
+    expect(api.find('PUT', '/units/')).toHaveLength(0);  // not unit by unit
+  });
+
   it('review: end before start is rejected locally', async () => {
     seedStore('review');
     const api = serverLike();
     renderUI(<ReviewPage />);
-    const inputs = await screen.findAllByRole('spinbutton');
+    const inputs = within(await screen.findByRole('table')).getAllByRole('spinbutton');
     fireEvent.change(inputs[1], { target: { value: '1' } });
     fireEvent.blur(inputs[1]);
     await new Promise((r) => setTimeout(r, 20));
