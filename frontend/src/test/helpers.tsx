@@ -44,7 +44,7 @@ export function mockApi(routes: Record<string, Handler> = {}) {
 export function seedStore(step: Step = 'mode', pv = fixturePV()) {
   useApp.setState({
     info: fixtureInfo(), projects: [{ id: pv.project.id, name: pv.project.name, mode: pv.project.mode, updated: pv.project.updated }],
-    pid: null, pv: null, resultId: null, step, selLineId: null, selUnitId: null, calibLineId: null,
+    pid: null, pv: null, resultId: null, step, selLineId: null, selUnitId: null, selUnitIds: [], calibLineId: null,
     compareWithId: null, candidateId: null, undo: [], redo: [], jobs: {}, jobHistory: {}, toasts: [],
   });
   clearDrafts(pv.project.id);

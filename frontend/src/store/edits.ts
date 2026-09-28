@@ -73,21 +73,37 @@ export function clearUnitManual(uid: string, rid = currentResult()?.id) {
     (pid, r) => api.del<UnitTiming>(upath(pid, r, uid, '/manual')), '操作失败');
 }
 
-/** Move a whole line: a start alone shifts it, a start and end stretch it (every unit locked); one undo step. */
-export function retimeLine(lineId: string, start: number | null, end: number | null, rid = currentResult()?.id) {
+/** Several units moved in one call (a start alone shifts them, a start and end stretch them; every unit
+ * locked), undone / redone as one step. */
+function retime(rid: string | undefined, unitIds: string[], url: (pid: string, rid: string) => string,
+  body: Record<string, unknown>, label: (stretch: boolean, n: number) => string) {
   const pid = useApp.getState().pid;
-  if (!rid || !pid) return Promise.resolve();
+  if (!rid || !pid || !unitIds.length) return Promise.resolve();
   return serial(() => run(async () => {
     const r = useApp.getState().pv?.project.results.find((x) => x.id === rid);
-    const before = new Map((r?.units ?? []).filter((u) => u.line_id === lineId).map((u) => [u.unit_id, u.manual ?? null]));
-    const res = await api.post<{ units: UnitTiming[] }>(`/api/projects/${pid}/results/${rid}/lines/${lineId}/retime`,
-      { start_ms: start, end_ms: end });
+    const ids = new Set(unitIds);
+    const before = new Map((r?.units ?? []).filter((u) => ids.has(u.unit_id)).map((u) => [u.unit_id, u.manual ?? null]));
+    const res = await api.post<{ units: UnitTiming[] }>(url(pid, rid), body);
     for (const ut of res.units) applyUnit(pid, rid, ut);
     if (useApp.getState().pid !== pid || !res.units.length) return;
     const items = res.units.map((ut) => ({ uid: ut.unit_id, before: before.get(ut.unit_id) ?? null, after: ut.manual }));
-    const what = res.units[0].manual?.note === '整行伸缩' ? '整行伸缩' : '整行平移';
-    push({ rid, uid: items[0].uid, before: items[0].before, after: items[0].after, label: what, items });
+    const stretch = !!res.units[0].manual?.note?.endsWith('伸缩');
+    push({ rid, uid: items[0].uid, before: items[0].before, after: items[0].after, label: label(stretch, items.length), items });
   }, '调整失败'));
+}
+
+/** Move a whole line: a start alone shifts it, a start and end stretch it (every unit locked); one undo step. */
+export function retimeLine(lineId: string, start: number | null, end: number | null, rid = currentResult()?.id) {
+  const r = useApp.getState().pv?.project.results.find((x) => x.id === rid);
+  const ids = (r?.units ?? []).filter((u) => u.line_id === lineId).map((u) => u.unit_id);
+  return retime(rid, ids, (pid, r2) => `/api/projects/${pid}/results/${r2}/lines/${lineId}/retime`,
+    { start_ms: start, end_ms: end }, (stretch) => (stretch ? '整行伸缩' : '整行平移'));
+}
+
+/** Move the selected units together (the waveform's multi-selection, may span lines); one undo step. */
+export function retimeUnits(unitIds: string[], start: number | null, end: number | null, rid = currentResult()?.id) {
+  return retime(rid, unitIds, (pid, r2) => `/api/projects/${pid}/results/${r2}/units/retime`,
+    { unit_ids: unitIds, start_ms: start, end_ms: end }, (stretch, n) => `${stretch ? '伸缩' : '平移'} ${n} 个单元`);
 }
 
 /** Units of these lines were replaced (adopting a rerun / candidate): their undo steps no longer apply. */

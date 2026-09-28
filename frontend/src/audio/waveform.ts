@@ -1,4 +1,4 @@
-// Canvas waveform: zoom/scroll, seek, drag-to-loop, unit handles and overlays.
+// Canvas waveform: zoom/scroll, seek, drag-to-loop, unit handles, several units moved together, overlays.
 // All coordinates are original-audio ms.
 
 export interface OverlayUnit {
@@ -17,14 +17,19 @@ export interface Overlays {
   lineStarts: LineStart[];
   loop: { on: boolean; start: number | null; end: number | null };
   selectedUnitId: string | null;
+  /** units selected together (Shift / ⌘ click); two or more: dragged as a group */
+  selectedUnitIds?: string[];
   marks: { ms: number; label: string }[];
 }
 export interface Peaks { per_second: number; mins: number[]; maxs: number[]; duration_ms: number }
 
 interface Callbacks {
   onSeek: (ms: number) => void;
-  onSelectUnit: (id: string) => void;
+  /** single: click; toggle: ⌘ / Ctrl click; range: Shift click */
+  onSelectUnit: (id: string, mode: 'single' | 'toggle' | 'range') => void;
   onEditUnit: (id: string, start: number, end: number) => void;
+  /** a group moved (end null) or stretched onto [start, end) */
+  onRetimeUnits?: (ids: string[], start: number, end: number | null) => void;
   onLoop: (a: number, b: number) => void;
   getOverlays: () => Overlays;
   getPlayhead: () => { ms: number; playing: boolean };
@@ -47,7 +52,13 @@ export const STATUS_COLORS = {
 
 type Drag =
   | { kind: 'start' | 'end'; unit: OverlayUnit; start: number; end: number }
-  | { kind: 'pending' | 'loop'; x0: number; y0: number; ms0: number; ms1?: number };
+  | { kind: 'pending' | 'loop'; x0: number; y0: number; ms0: number; ms1?: number }
+  /** a group: moved as a whole or stretched by its outer edges ([s0, e0] → [start, end]) */
+  | { kind: 'gmove' | 'gstart' | 'gend'; ids: string[]; s0: number; e0: number; start: number; end: number; x0: number; y0: number; ms0: number;
+      lo: number; hi: number };
+
+/** ``lo`` / ``hi``: the room around the group up to the nearest units not in it (a group never slides into them) */
+interface Group { ids: string[]; start: number; end: number; lo: number; hi: number }
 
 export class Waveform {
   canvas: HTMLCanvasElement;
@@ -241,6 +252,13 @@ export class Waveform {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const ov = this.cb.getOverlays();
+      const g = this.group();
+      if (g) {
+        const base = { ids: g.ids, s0: g.start, e0: g.end, start: g.start, end: g.end, x0: x, y0: y, ms0: this.msAt(x), lo: g.lo, hi: g.hi };
+        if (Math.abs(x - this.xOf(g.start)) <= HANDLE_PX) { this.drag = { kind: 'gstart', ...base }; return; }
+        if (Math.abs(x - this.xOf(g.end)) <= HANDLE_PX) { this.drag = { kind: 'gend', ...base }; return; }
+        if (x > this.xOf(g.start) && x < this.xOf(g.end) && y > RULER_H) { this.drag = { kind: 'gmove', ...base }; return; }
+      }
       const sel = ov.units.find((u) => u.id === ov.selectedUnitId);
       if (sel?.editable && sel.start !== null && sel.end !== null) {
         if (Math.abs(x - this.xOf(sel.start)) <= HANDLE_PX) {
@@ -270,12 +288,19 @@ export class Waveform {
         const hx = inside ? x : null;
         if (hx === this.hoverX) return;
         this.hoverX = hx;
-        if (inside) c.style.cursor = this.hitHandle(x) ? 'ew-resize' : 'crosshair';
+        if (inside) c.style.cursor = this.hitHandle(x) ? 'ew-resize' : this.inGroup(x) ? 'grab' : 'crosshair';
         this.invalidate();
         return;
       }
       const ms = Math.max(0, Math.min(this.durationMs, this.msAt(x)));
-      if (d.kind === 'start') d.start = Math.min(ms, d.end - 1);
+      if (d.kind === 'gmove') {
+        const delta = Math.max(d.lo - d.s0, Math.min(d.hi - d.e0, ms - d.ms0));
+        d.start = d.s0 + delta;
+        d.end = d.e0 + delta;
+        c.style.cursor = 'grabbing';
+      } else if (d.kind === 'gstart') d.start = Math.max(d.lo, Math.min(ms, d.end - 10));
+      else if (d.kind === 'gend') d.end = Math.min(d.hi, Math.max(ms, d.start + 10));
+      else if (d.kind === 'start') d.start = Math.min(ms, d.end - 1);
       else if (d.kind === 'end') d.end = Math.max(ms, d.start + 1);
       else if (d.kind === 'pending' && Math.abs(x - d.x0) > 4) (d as any).kind = 'loop';
       if (d.kind === 'loop') d.ms1 = ms;
@@ -289,25 +314,63 @@ export class Waveform {
       const rect = c.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      const mode = e.shiftKey ? 'range' : (e.metaKey || e.ctrlKey) ? 'toggle' : 'single';
+      const click = (ms: number) => {
+        if (y > this.height - UNIT_H) {
+          const hit = this.hitUnit(ms);
+          if (hit) this.cb.onSelectUnit(hit.id, mode);
+        }
+        if (mode === 'single') this.cb.onSeek(Math.max(0, Math.min(this.durationMs, ms)));
+      };
       if (d.kind === 'start' || d.kind === 'end') {
         if (Math.round(d.start) !== d.unit.start || Math.round(d.end) !== d.unit.end) {
           this.cb.onEditUnit(d.unit.id, Math.round(d.start), Math.round(d.end));
         }
+      } else if (d.kind === 'gmove' || d.kind === 'gstart' || d.kind === 'gend') {
+        c.style.cursor = 'grab';
+        const moved = Math.abs(x - d.x0) > 2 && (Math.round(d.start) !== Math.round(d.s0) || Math.round(d.end) !== Math.round(d.e0));
+        if (!moved) click(this.msAt(x));  // a click inside the group: select / seek as usual
+        else if (d.kind === 'gmove') this.cb.onRetimeUnits?.(d.ids, Math.round(d.start), null);
+        else this.cb.onRetimeUnits?.(d.ids, Math.round(d.start), Math.round(d.end));
       } else if (d.kind === 'loop' && d.ms1 !== undefined) {
         this.cb.onLoop(Math.min(d.ms0, d.ms1), Math.max(d.ms0, d.ms1));
       } else if (d.kind === 'pending') {
-        const ms = this.msAt(x);
-        if (y > this.height - UNIT_H) {
-          const hit = this.hitUnit(ms);
-          if (hit) this.cb.onSelectUnit(hit.id);
-        }
-        this.cb.onSeek(Math.max(0, Math.min(this.durationMs, ms)));
+        click(this.msAt(x));
       }
       this.invalidate();
     });
   }
 
+  /** Two or more editable units selected together, with times: their ids and outer span. */
+  private group(): Group | null {
+    const ov = this.cb.getOverlays();
+    const ids = ov.selectedUnitIds ?? [];
+    if (ids.length < 2 || !this.cb.onRetimeUnits) return null;
+    const want = new Set(ids);
+    const us = ov.units.filter((u) => want.has(u.id) && u.start !== null && u.end !== null);
+    if (us.length < 2 || us.some((u) => !u.editable)) return null;
+    const start = Math.min(...us.map((u) => u.start!));
+    const end = Math.max(...us.map((u) => u.end!));
+    const outside = ov.units.filter((u) => !want.has(u.id) && u.start !== null && u.end !== null);
+    const before = outside.filter((u) => u.start! < start).map((u) => u.end!);
+    const after = outside.filter((u) => u.end! > end).map((u) => u.start!);
+    const lo = Math.min(start, before.length ? Math.max(...before) : 0);
+    const hi = Math.max(end, after.length ? Math.min(...after) : this.durationMs);
+    return { ids: us.map((u) => u.id), start, end, lo, hi };
+  }
+
+  private inGroup(x: number) {
+    const g = this.group();
+    return !!g && x > this.xOf(g.start) && x < this.xOf(g.end);
+  }
+
   private hitHandle(x: number) {
+    const g = this.group();
+    if (g) {
+      if (Math.abs(x - this.xOf(g.start)) <= HANDLE_PX) return 'start';
+      if (Math.abs(x - this.xOf(g.end)) <= HANDLE_PX) return 'end';
+      return null;
+    }
     const ov = this.cb.getOverlays();
     const sel = ov.units.find((u) => u.id === ov.selectedUnitId);
     if (!sel?.editable || sel.start === null || sel.end === null) return null;
@@ -476,6 +539,8 @@ export class Waveform {
     const bandTop = H - UNIT_H;
     ctx.fillStyle = 'rgba(0,0,0,0.22)';
     ctx.fillRect(0, bandTop, W, UNIT_H);
+    const group = this.group();
+    const inSel = new Set(group?.ids ?? []);
     const drawUnits = (units: OverlayUnit[], yOff: number, h: number) => {
       for (const u of units) {
         if (u.start === null || u.end === null) continue;
@@ -485,12 +550,16 @@ export class Waveform {
         if (d && (d.kind === 'start' || d.kind === 'end') && d.unit.id === u.id) {
           s = d.start;
           e = d.end;
+        } else if (d && (d.kind === 'gmove' || d.kind === 'gstart' || d.kind === 'gend') && d.ids.includes(u.id)) {
+          const k = (d.end - d.start) / Math.max(1, d.e0 - d.s0);  // the group's new span
+          s = d.start + (u.start - d.s0) * k;
+          e = d.start + (u.end - d.s0) * k;
         }
         const x1 = this.xOf(s);
         const x2 = this.xOf(e);
         if (x2 < 0 || x1 > W) continue;
         const w = Math.max(2, x2 - x1 - 1.5);
-        const selected = u.id === ov.selectedUnitId;
+        const selected = u.id === ov.selectedUnitId || inSel.has(u.id);
         ctx.fillStyle = STATUS_COLORS[u.color] ?? STATUS_COLORS.ok;
         ctx.globalAlpha = selected ? 1 : 0.82;
         roundRect(ctx, x1, yOff, w, h, Math.min(5, w / 2));
@@ -502,7 +571,7 @@ export class Waveform {
           roundRect(ctx, x1, yOff, w, h, Math.min(5, w / 2));
           ctx.stroke();
           ctx.lineWidth = 1;
-          if (u.editable) {
+          if (u.editable && !group) {
             // full-height handles for dragging start / end
             ctx.fillStyle = 'rgba(255,255,255,0.9)';
             ctx.fillRect(x1 - 1.5, waveTop, 3, bandTop - waveTop + h + 3);
@@ -529,6 +598,28 @@ export class Waveform {
       drawUnits(ov.candUnits, bandTop + 21, 13);
     } else {
       drawUnits(ov.units, bandTop + 5, UNIT_H - 10);
+    }
+    const gd = this.drag && (this.drag.kind === 'gmove' || this.drag.kind === 'gstart' || this.drag.kind === 'gend') ? this.drag : null;
+    const gx1 = group ? this.xOf(gd ? gd.start : group.start) : 0;
+    const gx2 = group ? this.xOf(gd ? gd.end : group.end) : 0;
+    if (group && gx2 >= 0 && gx1 <= W) {
+      // the group's outer edges: drag them to stretch it, drag inside to move it
+      const x1 = gx1;
+      const x2 = gx2;
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(x1, waveTop, x2 - x1, waveH);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fillRect(x1 - 1.5, waveTop, 3, bandTop - waveTop + UNIT_H - 2);
+      ctx.fillRect(x2 - 1.5, waveTop, 3, bandTop - waveTop + UNIT_H - 2);
+      ctx.font = font(11, 600);
+      const label = `${group.ids.length} 个单元 · 拖动整体移动，拖两端按比例伸缩`;
+      const tw = ctx.measureText(label).width;
+      const lx = Math.max(4, Math.min(W - tw - 12, x1));
+      ctx.fillStyle = 'rgba(15,17,28,0.85)';
+      roundRect(ctx, lx, waveTop + 4, tw + 10, 18, 4);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, lx + 5, waveTop + 17);
     }
 
     // hover time

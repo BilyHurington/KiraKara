@@ -12,8 +12,8 @@ import type { Source } from '@/lib/types';
 import { player, usePlayer, usePlayhead } from '@/audio/player';
 import { Waveform, type Overlays, type Peaks } from '@/audio/waveform';
 import { waveformRef } from '@/audio/waveformRef';
-import { resultFrom, setLayoutSize, toast, useApp, WAVE_HEIGHT } from '@/store/app';
-import { setUnitTimes } from '@/store/edits';
+import { resultFrom, setLayoutSize, toast, useApp, WAVE_HEIGHT, selectUnit, selectedUnitIds } from '@/store/app';
+import { setUnitTimes, retimeUnits } from '@/store/edits';
 import { Badge, IconButton, Kbd, ResizeHandle, Segmented, SliderField, Tip } from '@/components/ui';
 
 export function StudioDock() {
@@ -225,7 +225,7 @@ export function makeOverlays(): () => Overlays {
   return () => {
     const s = useApp.getState();
     const L = player.loop;
-    const next = [s.pv, s.resultId, s.step, s.selLineId, s.selUnitId, s.calibLineId, s.candidateId, s.compareWithId, L.on, L.start, L.end];
+    const next = [s.pv, s.resultId, s.step, s.selLineId, s.selUnitId, s.selUnitIds, s.calibLineId, s.candidateId, s.compareWithId, L.on, L.start, L.end];
     if (cached && key && key.every((v, i) => v === next[i])) return cached;
     key = next;
     cached = buildOverlays(s);
@@ -236,7 +236,8 @@ export function makeOverlays(): () => Overlays {
 function buildOverlays(s: ReturnType<typeof useApp.getState>): Overlays {
   {
     const pv = s.pv;
-    const out: Overlays = { units: [], candUnits: [], lineStarts: [], loop: player.loop, selectedUnitId: s.selUnitId, marks: [] };
+    const out: Overlays = { units: [], candUnits: [], lineStarts: [], loop: player.loop, selectedUnitId: s.selUnitId,
+      selectedUnitIds: selectedUnitIds(s), marks: [] };
     if (!pv) return out;
     const lines = pv.project.lyrics.lines;
     const idx = new Map(lines.map((l, i) => [l.id, i]));
@@ -302,13 +303,9 @@ function WaveArea() {
     const canvas = canvasRef.current!;
     const wf = new Waveform(canvas, {
       onSeek: (ms) => player.seek(ms),
-      onSelectUnit: (id) => {
-        const s = useApp.getState();
-        const r = resultFrom(s.pv, s.resultId);
-        const u = r?.units.find((x) => x.unit_id === id);
-        useApp.setState({ selUnitId: id, selLineId: u?.line_id ?? s.selLineId });
-      },
+      onSelectUnit: (id, mode) => selectUnit(id, mode),
       onEditUnit: (id, start, end) => void setUnitTimes(id, start, end),
+      onRetimeUnits: (ids, start, end) => void retimeUnits(ids, start, end),
       onLoop: (a, b) => player.setLoop(a, b),
       getOverlays,
       getPlayhead: () => ({ ms: player.positionMs(), playing: player.playing }),
@@ -322,7 +319,7 @@ function WaveArea() {
     // draw only when something shown changed (store, player) or while playing
     const unsubApp = useApp.subscribe((s, prev) => {
       if (s.pv !== prev.pv || s.resultId !== prev.resultId || s.step !== prev.step || s.selLineId !== prev.selLineId
-        || s.selUnitId !== prev.selUnitId || s.calibLineId !== prev.calibLineId || s.candidateId !== prev.candidateId
+        || s.selUnitId !== prev.selUnitId || s.selUnitIds !== prev.selUnitIds || s.calibLineId !== prev.calibLineId || s.candidateId !== prev.candidateId
         || s.compareWithId !== prev.compareWithId) wf.invalidate();
     });
     const unsubPlayer = player.subscribe(() => wf.invalidate());
@@ -385,7 +382,7 @@ function WaveArea() {
       <ScrollBar state={scroll} />
       <div className="mt-1 hidden flex-wrap gap-x-4 text-[11px] text-subtle lg:flex">
         <span>点击定位 · 拖动选择循环区间 · 滚轮缩放 · Shift+滚轮平移 · 拖动上边缘调整高度</span>
-        <span>在“人工检查”中选中单元后可拖动两端修改起止</span>
+        <span>在“人工检查”中选中单元后可拖动两端修改起止；Shift 点选一段、⌘ / Ctrl 点选多个，可一起拖动或按比例伸缩</span>
         {effectiveHeight < waveHeight && (
           <span className="text-warn">窗口较矮：波形最多占窗口高度的 1/4（现为 {effectiveHeight} px，设置为 {waveHeight} px，窗口变高后恢复）</span>
         )}

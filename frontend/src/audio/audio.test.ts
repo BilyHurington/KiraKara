@@ -61,6 +61,64 @@ describe('Waveform', () => {
     expect(cb.onEditUnit).toHaveBeenCalledWith('u1', 800, 2000);
   });
 
+  it('two or more selected units: dragged together, stretched by their outer edges', () => {
+    const { cb, canvas, overlays } = makeWave();
+    overlays.units.push({ id: 'u2', start: 2000, end: 3000, label: 'み', color: 'ok', editable: true },
+      { id: 'u3', start: 5000, end: 6000, label: 'と', color: 'ok', editable: true });
+    overlays.selectedUnitIds = ['u1', 'u2'];
+    const onRetime = vi.fn();
+    (cb as any).onRetimeUnits = onRetime;
+    // inside the group (1000–3000 ms = 100–300 px): the whole group moves
+    mouse(canvas, 'mousedown', 200);
+    mouse(window, 'mousemove', 250);
+    mouse(window, 'mouseup', 250);
+    expect(onRetime).toHaveBeenLastCalledWith(['u1', 'u2'], 1500, null);
+    // its right edge: stretched onto a new span
+    mouse(canvas, 'mousedown', 300);
+    mouse(window, 'mousemove', 400);
+    mouse(window, 'mouseup', 400);
+    expect(onRetime).toHaveBeenLastCalledWith(['u1', 'u2'], 1000, 4000);
+    expect(cb.onEditUnit).not.toHaveBeenCalled();
+    // a click inside without moving still seeks
+    mouse(canvas, 'mousedown', 150);
+    mouse(window, 'mouseup', 150);
+    expect(cb.onSeek).toHaveBeenLastCalledWith(1500);
+    expect(onRetime).toHaveBeenCalledTimes(2);
+  });
+
+  it('a dragged group stops at the units next to it', () => {
+    const { cb, canvas, overlays } = makeWave();
+    overlays.units.push({ id: 'u2', start: 2000, end: 3000, label: 'み', color: 'ok', editable: true },
+      { id: 'u3', start: 3200, end: 4000, label: 'と', color: 'ok', editable: true });
+    overlays.selectedUnitIds = ['u1', 'u2'];
+    const onRetime = vi.fn();
+    (cb as any).onRetimeUnits = onRetime;
+    mouse(canvas, 'mousedown', 200);
+    mouse(window, 'mousemove', 300);  // +1000 ms asked; 'と' starts 200 ms after the group
+    mouse(window, 'mouseup', 300);
+    expect(onRetime).toHaveBeenLastCalledWith(['u1', 'u2'], 1200, null);
+    mouse(canvas, 'mousedown', 300);  // the right edge, stretched past 'と': stops at its start
+    mouse(window, 'mousemove', 380);
+    mouse(window, 'mouseup', 380);
+    expect(onRetime).toHaveBeenLastCalledWith(['u1', 'u2'], 1000, 3200);
+  });
+
+  it('Shift / ⌘ clicks on a unit extend the selection instead of seeking', () => {
+    const { cb, canvas } = makeWave();
+    const click = (init: MouseEventInit) => {
+      canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: 150, clientY: 170, bubbles: true, ...init }));
+      window.dispatchEvent(new MouseEvent('mouseup', { clientX: 150, clientY: 170, bubbles: true, ...init }));
+    };
+    click({ shiftKey: true });
+    expect(cb.onSelectUnit).toHaveBeenLastCalledWith('u1', 'range');
+    click({ metaKey: true });
+    expect(cb.onSelectUnit).toHaveBeenLastCalledWith('u1', 'toggle');
+    expect(cb.onSeek).not.toHaveBeenCalled();
+    click({});
+    expect(cb.onSelectUnit).toHaveBeenLastCalledWith('u1', 'single');
+    expect(cb.onSeek).toHaveBeenCalledWith(1500);
+  });
+
   it('reveal brings a range into view', () => {
     const { wf } = makeWave();
     wf.zoom(0.1, 0);

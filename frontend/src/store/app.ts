@@ -36,6 +36,8 @@ interface State {
   step: Step;
   selLineId: string | null;
   selUnitId: string | null;
+  /** more units selected together with selUnitId (Shift / ⌘ click); only counts while it contains selUnitId */
+  selUnitIds: string[];
   calibLineId: string | null;
   compareWithId: string | null;
   candidateId: string | null;
@@ -82,6 +84,7 @@ export const useApp = create<State>(() => ({
   step: 'mode',
   selLineId: null,
   selUnitId: null,
+  selUnitIds: [],
   calibLineId: null,
   compareWithId: null,
   candidateId: null,
@@ -101,7 +104,7 @@ const get = useApp.getState;
 
 /** Everything that belongs to one open project (selection, undo …). */
 const PROJECT_RESET = {
-  resultId: null, undo: [], redo: [], selLineId: null, selUnitId: null, calibLineId: null,
+  resultId: null, undo: [], redo: [], selLineId: null, selUnitId: null, selUnitIds: [], calibLineId: null,
   compareWithId: null, candidateId: null,
 } satisfies Partial<State>;
 
@@ -148,6 +151,35 @@ export function resultFrom(pv: ProjectView | null, rid: string | null): Alignmen
 
 export function currentResult(): AlignmentResult | null {
   return resultFrom(get().pv, get().resultId);
+}
+
+/** The selected units: the multi-selection when it holds the current unit, else just that unit. */
+export function selectedUnitIds(s: Pick<State, 'selUnitId' | 'selUnitIds'> = get()): string[] {
+  if (!s.selUnitId) return [];
+  return s.selUnitIds.length > 1 && s.selUnitIds.includes(s.selUnitId) ? s.selUnitIds : [s.selUnitId];
+}
+
+/** Select a unit: alone, adding / removing it (⌘ / Ctrl), or every unit from the current one to it
+ * in time order (Shift, also across lines). */
+export function selectUnit(id: string, mode: 'single' | 'toggle' | 'range' = 'single') {
+  const s = get();
+  const r = currentResult();
+  const unit = r?.units.find((u) => u.unit_id === id);
+  const lineId = unit?.line_id ?? s.selLineId;
+  const current = selectedUnitIds(s);
+  if (mode === 'single' || !s.selUnitId || !r) {
+    set({ selUnitId: id, selUnitIds: [id], selLineId: lineId });
+  } else if (mode === 'toggle') {
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    const primary = next.includes(id) ? id : next[next.length - 1] ?? null;
+    set({ selUnitId: primary, selUnitIds: next, selLineId: primary ? r.units.find((u) => u.unit_id === primary)?.line_id ?? lineId : lineId });
+  } else {
+    const order = r.units.filter((u) => u.start_ms !== null).sort((a, b) => a.start_ms! - b.start_ms!).map((u) => u.unit_id);
+    const a = order.indexOf(s.selUnitId);
+    const b = order.indexOf(id);
+    if (a < 0 || b < 0) return set({ selUnitId: id, selUnitIds: [id], selLineId: lineId });
+    set({ selUnitId: s.selUnitId, selUnitIds: order.slice(Math.min(a, b), Math.max(a, b) + 1) });
+  }
 }
 
 // ------------------------------------------------------------------ toasts

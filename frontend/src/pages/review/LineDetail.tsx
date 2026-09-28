@@ -6,7 +6,7 @@ import { player } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { cn, fmtMs, fmtSigned, ROLE_LABEL, STATUS_LABEL } from '@/lib/format';
 import type { AlignmentResult, UnitTiming } from '@/lib/types';
-import { toast, useApp } from '@/store/app';
+import { toast, useApp, selectUnit, selectedUnitIds } from '@/store/app';
 import { clearUnitManual, retimeLine, setUnitLock, setUnitTimes } from '@/store/edits';
 import { Badge, Button, IconButton, NumberInput, Table, Td, Th, Tip } from '@/components/ui';
 import { flagHelp, flagLabel, unitsRange, type LineStats, type UnitInfo } from './helpers';
@@ -18,7 +18,7 @@ export function playUnit(u: UnitTiming) {
     toast('info', '该单元没有时间', u.reason ?? '模型未给出区间；可以手动填写起止时间');
     return;
   }
-  useApp.setState({ selUnitId: u.unit_id, selLineId: u.line_id });
+  useApp.setState({ selUnitId: u.unit_id, selUnitIds: [u.unit_id], selLineId: u.line_id });
   revealOnWaveform(u.start_ms, u.end_ms);
   player.playRange(u.start_ms, u.end_ms, { loop: true, padMs: 150 });
 }
@@ -33,6 +33,8 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
   contextTexts: Map<string, string>;
 }) {
   const lt = result.lines.find((l) => l.line_id === stat.line.id);
+  const selIds = useApp((s) => s.selUnitIds);  // (a stable array: derived below, not in the selector)
+  const multi = selectedUnitIds({ selUnitId, selUnitIds: selIds });
   const editable = !result.stale;
   const range = unitsRange(stat.units);
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
@@ -134,7 +136,7 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
                 onClick={() => lineStart !== null && moveLine(lineStart + d, null)}>{d > 0 ? '+' : '−'}{Math.abs(d)} ms</Button>
             ))}
           </span>
-          <span className="text-xs text-subtle">改行首：整行平移；改行尾：按比例伸缩。改过的单元都会锁定，可以 ⌘Z / Ctrl+Z 撤销</span>
+          <span className="text-xs text-subtle">改行首：整行平移；改行尾：按比例伸缩。只动其中几个字：在表格或波形上 Shift / ⌘ 点选后，在波形上一起拖动。改过的单元都会锁定，可以 ⌘Z / Ctrl+Z 撤销</span>
         </div>
       )}
 
@@ -159,13 +161,15 @@ export function LineDetail({ stat, result, info, selUnitId, onRerun, rerunBusy, 
         <tbody ref={tbodyRef}>
           {stat.units.map((u) => {
             const ui = info.get(u.unit_id);
-            const sel = u.unit_id === selUnitId;
+            const sel = u.unit_id === selUnitId || (multi.length > 1 && multi.includes(u.unit_id));
             const differs = !!u.manual && (u.manual.start_ms !== u.model_start_ms || u.manual.end_ms !== u.model_end_ms);
             return (
               <tr
                 key={u.unit_id}
                 data-unit={u.unit_id}
-                onClick={() => playUnit(u)}
+                onMouseDown={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) e.preventDefault(); }}  // (no text selection)
+                onClick={(e) => (e.shiftKey ? selectUnit(u.unit_id, 'range')
+                  : e.metaKey || e.ctrlKey ? selectUnit(u.unit_id, 'toggle') : playUnit(u))}
                 className={cn('cursor-pointer transition', sel ? 'bg-accent-soft/70' : 'hover:bg-surface-2/70')}
               >
                 <Td>

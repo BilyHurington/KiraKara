@@ -141,6 +141,10 @@ class RetimeBody(BaseModel):
     end_ms: Optional[int] = None  # with a start: stretch the line onto [start_ms, end_ms)
 
 
+class RetimeUnitsBody(RetimeBody):
+    unit_ids: list[str]  # the units moved together (a selection on the waveform; may span lines)
+
+
 class LockBody(BaseModel):
     locked: bool
 
@@ -1055,6 +1059,24 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
             r = S.get_result(h, rid)
             try:
                 units = retime(r, lid, body.start_ms, body.end_ms, duration_ms=orig.duration_ms if orig else None)
+            except EditError as e:
+                raise HTTPException(400, str(e)) from e
+            h.save()
+            return {"units": [u.model_dump(mode="json") for u in units]}
+
+    @app.post("/api/projects/{pid}/results/{rid}/units/retime")
+    def retime_units(pid: str, rid: str, body: RetimeUnitsBody):
+        """Shift (start only) or stretch (start and end) several units together; they become locked manual edits."""
+        from ..project.edits import EditError, retime_units as retime
+
+        h = handle(pid)
+        result_or_404(h, rid)
+        orig = h.project.asset("original")
+        with h.lock:
+            r = S.get_result(h, rid)
+            try:
+                units = retime(r, body.unit_ids, body.start_ms, body.end_ms,
+                               duration_ms=orig.duration_ms if orig else None)
             except EditError as e:
                 raise HTTPException(400, str(e)) from e
             h.save()

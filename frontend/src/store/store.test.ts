@@ -140,3 +140,47 @@ describe('job resume', () => {
     expect(useApp.getState().jobs.j1.label).toBe('人声分离');
   });
 });
+
+describe('selecting several units', () => {
+  beforeEach(() => seedStore('review'));
+
+  it('Shift selects the units between in time order, ⌘ adds / removes one, a plain click selects one', async () => {
+    const { selectUnit, selectedUnitIds } = await import('./app');
+    const byTime = currentResult()!.units.filter((u) => u.start_ms !== null)
+      .sort((a, b) => a.start_ms! - b.start_ms!).map((u) => u.unit_id);
+    expect(byTime.length).toBeGreaterThanOrEqual(3);
+    selectUnit(byTime[0]);
+    selectUnit(byTime[2], 'range');
+    expect(selectedUnitIds()).toEqual(byTime.slice(0, 3));
+    expect(useApp.getState().selUnitId).toBe(byTime[0]);  // the anchor stays
+    selectUnit(byTime[1], 'toggle');
+    expect(selectedUnitIds()).toEqual([byTime[0], byTime[2]]);
+    selectUnit(byTime[1]);
+    expect(selectedUnitIds()).toEqual([byTime[1]]);
+    // another unit selected elsewhere (arrow keys, the table): the group no longer counts
+    selectUnit(byTime[0]);
+    selectUnit(byTime[2], 'range');
+    useApp.setState({ selUnitId: byTime[byTime.length - 1] });
+    expect(selectedUnitIds()).toEqual([byTime[byTime.length - 1]]);
+  });
+
+  it('a moved group is one undo step for all its units', async () => {
+    const { retimeUnits } = await import('./edits');
+    const ids = currentResult()!.units.filter((u) => u.start_ms !== null).slice(0, 2).map((u) => u.unit_id);
+    const api = mockApi({
+      'POST /api/projects/': (c: any) => ({
+        units: c.body.unit_ids.map((id: string) => {
+          const u = structuredClone(currentResult()!.units.find((x) => x.unit_id === id)!);
+          u.manual = { start_ms: u.start_ms! + 100, end_ms: u.end_ms! + 100, locked: true, at: '', note: '平移' };
+          u.start_ms = u.manual.start_ms; u.end_ms = u.manual.end_ms;
+          return u;
+        }),
+      }),
+    });
+    await retimeUnits(ids, 0, null);
+    expect(api.find('POST', '/units/retime')[0].body).toEqual({ unit_ids: ids, start_ms: 0, end_ms: null });
+    const undoStep = useApp.getState().undo.at(-1)!;
+    expect(undoStep.label).toBe('平移 2 个单元');
+    expect(undoStep.items!.map((i) => i.uid)).toEqual(ids);
+  });
+});

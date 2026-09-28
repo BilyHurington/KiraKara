@@ -233,6 +233,8 @@ Every `url` returned for an exported file (mix, video, burn, task video, this li
 | DELETE | `/api/projects/{pid}/results/{rid}/units/{uid}/manual` | – | `UnitTiming` |
 | POST | `/api/projects/{pid}/results/{rid}/units/{uid}/lock` | `{locked}` | `UnitTiming`; 400 when the unit has no times to lock |
 | POST | `/api/projects/{pid}/results/{rid}/units/{uid}/restore` | `{manual: ManualEdit\|null}` | `UnitTiming` (undo/redo support) |
+| POST | `/api/projects/{pid}/results/{rid}/lines/{lid}/retime` | `{start_ms?, end_ms?}` | `{units: [UnitTiming]}`: the line's timed units shifted so the first starts at `start_ms`, or with `end_ms` too mapped onto `[start_ms, end_ms)` (proportions kept; `end_ms` alone moves only the end); each becomes a locked manual edit. 400 when the line has no timed units or the times are out of order / past the audio |
+| POST | `/api/projects/{pid}/results/{rid}/units/retime` | `{unit_ids, start_ms?, end_ms?}` | `{units: [UnitTiming]}`: the same for any set of timed units (may span lines), taken together by their outer edges |
 | POST | `/api/projects/{pid}/results/{rid}/adopt` | `{from_result_id?, candidate_id?, line_ids: [str]}` | `AlignmentResult` (copies non-locked unit times of the lines from a local rerun or a candidate; locked units untouched) |
 
 A local rerun (`align` with `line_ids`) creates a new partial result with `parent_result_id`; it never overwrites the parent.

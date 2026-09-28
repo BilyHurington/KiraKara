@@ -144,6 +144,30 @@ def test_retime_line_shifts_or_stretches_every_unit(tmp_path):
                        json={"start_ms": 10, "end_ms": 5}).status_code == 400
 
 
+def test_retime_units_moves_a_selection_across_lines(tmp_path):
+    from kara_align.project import edits
+
+    h = _project(tmp_path, "plain")
+    r = S.run_align(h)
+    # the last unit of the first line and the first two of the second: one selection
+    l1, l2 = [ln.id for ln in h.project.lyrics.sung_lines()[:2]]
+    sel = [u for u in r.units if u.line_id == l1][-1:] + [u for u in r.units if u.line_id == l2][:2]
+    before = {u.unit_id: (u.start_ms, u.end_ms) for u in sel}
+    others = {u.unit_id: (u.start_ms, u.end_ms) for u in r.units if u.unit_id not in before}
+    s0 = min(a for a, _ in before.values())
+    changed = edits.retime_units(r, list(before), s0 - 40, None)
+    assert {u.unit_id: (u.start_ms, u.end_ms) for u in changed} == {k: (a - 40, b - 40) for k, (a, b) in before.items()}
+    assert all(u.locked and u.manual.note == "平移" for u in changed)
+    assert {u.unit_id: (u.start_ms, u.end_ms) for u in r.units if u.unit_id in others} == others  # the rest stays
+    # both lines' ranges follow
+    for lid in (l1, l2):
+        lt = next(x for x in r.lines if x.line_id == lid)
+        us = [u for u in r.units if u.line_id == lid]
+        assert (lt.start_ms, lt.end_ms) == (min(u.start_ms for u in us), max(u.end_ms for u in us))
+    with pytest.raises(edits.EditError):
+        edits.retime_units(r, ["nope"], 0, None)
+
+
 def test_local_rerun_is_partial_and_adoptable(tmp_path):
     h = _project(tmp_path, "plain")
     full = S.run_align(h)
