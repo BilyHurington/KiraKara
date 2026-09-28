@@ -4,6 +4,8 @@
 
 > 本软件受 [StrangeUtaGame](https://github.com/karaoke-studio/StrangeUtaGame) 启发。KiraKara 是自动对齐工具，不是卡拉OK手动打轴软件；如果需要手动打轴，请使用 StrangeUtaGame 原软件。
 
+> **名称说明**：本项目与 [KiraKara player](https://rl.fmpeach.top) 及其相关项目无关，只是撞名。为避免混淆，本项目将在下一个版本更新时改名。
+
 放入视频（或音频 + 背景图），粘贴网易云 / QQ 音乐的歌曲链接或 LRC 歌词，KiraKara 会自动给汉字注音、分离人声、把每一个假名（拍）对齐到演唱的时间上，然后把带注音、翻译和歌曲信息的卡拉OK字幕直接烧录进视频。全部在本机运行。
 
 <p align="center">
