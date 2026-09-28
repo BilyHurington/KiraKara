@@ -135,8 +135,10 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
             </div>
             {base && (
               <p className="text-xs text-subtle">
-                字幕默认比实际演唱<b className="font-semibold text-muted">提前 {base.timing.advance_ms} ms</b> 显示：每个字的扫光要走完整个音，
-                提前一点看起来正好在唱。想改的话，在详细模式“字幕样式 → 时间”里调整“歌词提前显示”。
+                {base.timing.advance_ms > 0
+                  ? <>这个样式的字幕比实际演唱<b className="font-semibold text-muted">提前 {base.timing.advance_ms} ms</b> 显示：每个字的扫光要走完整个音，提前一点看起来正好在唱。</>
+                  : <>这个样式的字幕<b className="font-semibold text-muted">没有提前</b>，和演唱同时开始扫光（扫光走到一半左右才像“唱到”，一般提前约 150 ms 看起来更准时）。</>}
+                想改的话，在详细模式“字幕样式 → 时间”里调整“歌词提前显示”。
               </p>
             )}
             {settings.auto_export && (
