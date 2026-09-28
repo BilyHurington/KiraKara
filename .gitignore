@@ -1,6 +1,7 @@
-# design documents (kept local only)
+# design documents and the known-issues list (kept local only)
 Karaoke-Aligner-high-level.md
 *.design.md
+/KNOWN_ISSUES.md
 
 # python
 __pycache__/
