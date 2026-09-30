@@ -704,6 +704,12 @@ def update_line(h: ProjectHandle, line_id: str, **fields: Any) -> None:
             from .lyrics.singers import remap
 
             remap(ln, old_text)  # who sings which characters follows the edit
+        if "countdown" in fields and fields["countdown"] is not None:
+            # karaoke display only: "auto" = the style's rules, "on" / "off" = this line always / never
+            v = fields["countdown"]
+            if v not in ("auto", "on", "off"):
+                raise ServiceError("countdown 只能是 auto / on / off")
+            ln.countdown = None if v == "auto" else v == "on"
         if text_changed or (ln.kind == "lyric" and ln.sing and not ln.units()):
             # a line switched back to a sung lyric (or edited) is prepared now, in the project:
             # an alignment must never refer to units the project does not have

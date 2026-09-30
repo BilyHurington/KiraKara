@@ -17,6 +17,7 @@ import { run, toast } from '@/store/app';
 import { deleteStyle, loadSavedStyles, sameLook, saveStyle, useLibrary } from '@/store/styles';
 import { Badge, Button, Input, Segmented, Select, SliderField, Switch, Textarea } from '@/components/ui';
 import { ColorRow, TEMPLATE_LABEL } from './ThemeColors';
+import { COUNTDOWN_DEFAULTS } from '@/lib/countdown';
 
 export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'info' | 'layout' | 'timing' | 'effects';
 type Patch = (fn: (s: KaraokeStyle) => void) => void;
@@ -26,6 +27,14 @@ export interface TranslationInfo {
   lines?: number;
   /** fetch the translation from the lyrics' music platform */
   onFetch?: () => void;
+}
+
+/** Lines of the open project with their own countdown setting (the detailed page) */
+export interface CountdownLines {
+  /** lines set to always / never by hand */
+  overrides: number;
+  /** every line back to the rules above */
+  onReset: () => void;
 }
 
 export interface SongInfoEditing {
@@ -104,7 +113,7 @@ const Dot = ({ c }: { c: string }) => <span className="inline-block size-2.5 rou
 
 // ------------------------------------------------------------------ the panel
 
-export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = ['colors'], storageKey, translation, songInfo }: {
+export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = ['colors'], storageKey, translation, songInfo, countdownLines }: {
   style: KaraokeStyle;
   onChange: (next: KaraokeStyle) => void;
   fonts: FontFamily[];
@@ -115,6 +124,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
   translation?: TranslationInfo;
   /** the detailed page edits the card's text; the simple mode only picks the lines */
   songInfo?: SongInfoEditing;
+  countdownLines?: CountdownLines;
 }) {
   const [open, setOpen] = useState<Set<SectionId>>(() => {
     try {
@@ -137,6 +147,8 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
     onChange(next);
   };
   const { layout: L, text: T, ruby: R, translation: Tr, glow: G, timing: M, effects: E, info: I } = style;
+  const C = style.countdown ?? COUNTDOWN_DEFAULTS;
+  const setCd = (fn: (c: NonNullable<KaraokeStyle['countdown']>) => void) => patch((s) => { s.countdown = { ...C }; fn(s.countdown); });
   const posLabel = { opposite: L.position === 'bottom' ? '画面顶部' : '画面底部', block: '歌词旁', line: '每行下方' };
   const sec = (id: SectionId) => ({ id, open: open.has(id), onToggle: () => toggle(id) });
 
@@ -311,7 +323,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
         </Section>
 
         <Section {...sec('timing')} icon={<Timer className="size-4" />} title="时间"
-          summary={`提前 ${M.lead_in_ms / 1000}s · 停留 ${M.hold_ms / 1000}s · 淡入淡出 ${M.fade_in_ms}/${M.fade_out_ms}ms${M.advance_ms ? ` · 扫光提前 ${M.advance_ms}ms` : ''}`}>
+          summary={`提前 ${M.lead_in_ms / 1000}s · 停留 ${M.hold_ms / 1000}s · 淡入淡出 ${M.fade_in_ms}/${M.fade_out_ms}ms${M.advance_ms ? ` · 扫光提前 ${M.advance_ms}ms` : ''}${C.intro || C.interlude ? ` · 倒计时${C.intro && C.interlude ? '' : C.intro ? '（开头）' : '（间奏后）'}` : ''}`}>
           <Row label="提前出现" hint="歌词至少在开唱前这么久出现">
             <Num name="提前出现" unit="ms" value={M.lead_in_ms} max={8000} step={100} onChange={(v) => patch((s) => { s.timing.lead_in_ms = v; })} />
           </Row>
@@ -330,6 +342,28 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
               <Num name="歌词提前" unit="ms" value={M.advance_ms} min={10} max={1000} step={10} onChange={(v) => patch((s) => { s.timing.advance_ms = v; })} />
             </Row>
           )}
+          <div className="space-y-3 rounded-xl border border-line p-3">
+            <div className="text-[13px] font-medium">开唱倒计时</div>
+            <p className="text-xs text-subtle">行首上方显示几个圆点，最后几秒每秒消失一个，最后一个在开始扫光时消失。</p>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              <Switch checked={C.intro} onChange={(v) => setCd((c) => { c.intro = v; })} label="第一句前" />
+              <Switch checked={C.interlude} onChange={(v) => setCd((c) => { c.interlude = v; })} label="间奏后" />
+            </div>
+            {C.interlude && (
+              <Row label="停顿多久算间奏" hint="和上一句之间隔了这么久，才在这一句前倒计时">
+                <Num name="间奏至少" unit="ms" value={C.min_gap_ms} min={2000} max={30000} step={500} onChange={(v) => setCd((c) => { c.min_gap_ms = v; })} />
+              </Row>
+            )}
+            {(C.intro || C.interlude) && (
+              <Row label="圆点数"><Num name="圆点数" unit="个" value={C.dots} min={2} max={5} onChange={(v) => setCd((c) => { c.dots = v; })} /></Row>
+            )}
+            <p className="text-xs text-subtle">
+              {countdownLines
+                ? <>单独某一句：在预览里选中这一行，设为“显示”或“不显示”。{countdownLines.overrides > 0 && (
+                  <> 已有 {countdownLines.overrides} 句单独设置，<button type="button" className="focus-ring rounded text-accent hover:underline" onClick={countdownLines.onReset}>全部恢复自动</button>。</>)}</>
+                : '单独某一句可以在详细模式的“卡拉OK字幕”预览里设置。'}
+            </p>
+          </div>
         </Section>
 
         <Section {...sec('effects')} icon={<Sparkles className="size-4" />} title="特效"

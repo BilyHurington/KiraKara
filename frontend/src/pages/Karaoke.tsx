@@ -19,9 +19,10 @@ import {
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { BACKGROUND_ACCEPT } from '@/pages/input/AudioCard';
 import { setSimpleDefault } from '@/store/simple';
+import { countdownPlan } from '@/lib/countdown';
 import { singersSettled } from '@/store/singers';
 
-interface LineSpan { id: string; index: number; text: string; start: number; end: number }
+interface LineSpan { id: string; index: number; text: string; start: number; end: number; countdown: boolean | null }
 
 export function KaraokePage() {
   const project = useProject()!;
@@ -122,12 +123,19 @@ export function KaraokePage() {
     toast('ok', `已获取翻译：${pv.paired} 行`);
   }, '获取翻译失败');
 
+  const resetCountdowns = () => run(async () => {
+    for (const l of lines.filter((x) => x.countdown !== null)) {
+      setPV(await api.patch<ProjectView>(ppath(`/lines/${l.id}`), { countdown: 'auto' }));
+    }
+  }, '恢复失败');
+
   const lines: LineSpan[] = useMemo(() => {
     if (!result) return [];
-    const text = new Map(project.lyrics.lines.map((l, i) => [l.id, { t: l.text, i }]));
+    const text = new Map(project.lyrics.lines.map((l, i) => [l.id, { t: l.text, i, cd: l.countdown ?? null }]));
     return result.lines
-      .filter((l) => l.start_ms !== null && l.end_ms !== null)
-      .map((l) => ({ id: l.line_id, index: (text.get(l.line_id)?.i ?? 0) + 1, text: text.get(l.line_id)?.t ?? '', start: l.start_ms!, end: l.end_ms! }))
+      .filter((l) => l.start_ms !== null && l.end_ms !== null && text.has(l.line_id))
+      .map((l) => ({ id: l.line_id, index: (text.get(l.line_id)?.i ?? 0) + 1, text: text.get(l.line_id)?.t ?? '', start: l.start_ms!, end: l.end_ms!,
+        countdown: text.get(l.line_id)?.cd ?? null }))
       .sort((a, b) => a.start - b.start);
   }, [result, project.lyrics.lines]);
 
@@ -169,7 +177,7 @@ export function KaraokePage() {
       <SingersNote style={style} />
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
-          <PreviewCard style={style} lines={lines} refreshKey={songInfo?.text ?? ''} />
+          <PreviewCard style={style} lines={lines} refreshKey={`${songInfo?.text ?? ''}|${lines.map((l) => l.countdown ?? '').join()}`} />
           <BurnCard style={style} patch={patch} beforeBurn={flush} />
         </div>
         {/* next to the preview from 1024 px on (not below the burn card), sticky while scrolling */}
@@ -187,6 +195,7 @@ export function KaraokePage() {
               <StylePanel style={style} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
                 defaultOpen={['colors', 'text']} storageKey="detail"
                 translation={{ lines: translated, onFetch: canFetch ? fetchTranslation : undefined }}
+                countdownLines={{ overrides: lines.filter((l) => l.countdown !== null).length, onReset: resetCountdowns }}
                 songInfo={{ data: songInfo, onText: (t) => void saveInfoText(t) }} />
             </CardBody>
           </Card>
@@ -237,6 +246,7 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
   const [timeDraft, setTimeDraft] = useState<string | null>(null);
 
   const line = lines[Math.min(lineIdx, Math.max(0, lines.length - 1))];
+  const plan = useMemo(() => countdownPlan(lines, style.countdown), [lines, style.countdown]);
   const t = custom ?? (line ? Math.round(line.start + (line.end - line.start) * pct / 100) : 0);
   // the burn-in audio setting lives in the style but does not change the picture
   const lookKey = JSON.stringify({ ...style, output: undefined });
@@ -327,6 +337,7 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
               )}
               <Tip content="使用播放器当前位置"><Button size="sm" variant="ghost" icon={<Crosshair className="size-4" />} onClick={followPlayhead}>播放头</Button></Tip>
               <Button size="sm" variant="ghost" onClick={listen}>试听本行</Button>
+              {line && <LineCountdown line={line} plan={plan.get(line.id)} onShow={() => setCustom(Math.max(0, line.start - style.timing.advance_ms - 1500))} />}
               {style.info.enabled && (
                 <Tip content="跳到开头歌曲信息完全显示的时刻">
                   <Button size="sm" variant="ghost" onClick={() => setCustom(style.info.start_ms + 1200)}>看歌曲信息</Button>
@@ -340,6 +351,26 @@ function PreviewCard({ style, lines, refreshKey }: { style: KaraokeStyle; lines:
         )}
       </CardBody>
     </Card>
+  );
+}
+
+/** This line's countdown dots: as the style's rules say, or always / never (a small select; rarely used). */
+function LineCountdown({ line, plan, onShow }: {
+  line: LineSpan; plan: { auto: boolean; on: boolean } | undefined; onShow: () => void;
+}) {
+  const value = line.countdown === null ? 'auto' : line.countdown ? 'on' : 'off';
+  const save = (v: string) => run(async () => {
+    setPV(await api.patch<ProjectView>(ppath(`/lines/${line.id}`), { countdown: v }));
+  }, '设置倒计时失败');
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Select aria-label="本行倒计时" className="h-8 w-auto text-xs" value={value} onChange={(e) => void save(e.target.value)}>
+        <option value="auto">倒计时：自动（{plan?.auto ? '有' : '无'}）</option>
+        <option value="on">倒计时：显示</option>
+        <option value="off">倒计时：不显示</option>
+      </Select>
+      {plan?.on && <Tip content="跳到这一行的倒计时"><Button size="sm" variant="ghost" onClick={onShow}>看倒计时</Button></Tip>}
+    </span>
   );
 }
 

@@ -163,7 +163,7 @@ to 0 with a message (undo: `calibration/undo`). QQ Music's `//` placeholder line
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| PATCH | `/api/projects/{pid}/lines/{line_id}` | `{text?, sing?, kind?, translation?, voice?}` | `ProjectView` (a line edited, or switched back to a sung lyric without units, gets rule readings at once) |
+| PATCH | `/api/projects/{pid}/lines/{line_id}` | `{text?, sing?, kind?, translation?, voice?, countdown?: "auto"\|"on"\|"off"}` | `ProjectView` (a line edited, or switched back to a sung lyric without units, gets rule readings at once) |
 | POST | `/api/projects/{pid}/lines/merge` | `{line_ids}` | `ProjectView` |
 | POST | `/api/projects/{pid}/lines/{line_id}/split` | `{at: int (char index)}` | `ProjectView` |
 | PUT | `/api/projects/{pid}/lines/{line_id}/anchor` | `{abs_ms: int\|null, hard: bool, tolerance_ms}` | `ProjectView` |
@@ -280,6 +280,13 @@ Warnings say when the result is stale or partial and how many lines were skipped
 | POST | `/api/projects/{pid}/singers/markers` | `{names?: [str], strip?: true}` | `ProjectView` + `messages`: those lines assigned to the named singers (new names added to the style; “全员 / 合 / ALL …” = every one of them); `strip` takes the names out of the lyrics (the text changes: results become outdated) |
 | POST | `/api/projects/{pid}/karaoke/preview` | `{t_ms, style?, background?: "auto"\|"black"}` | `image/png` of the whole frame at `t_ms` (libass, the video's displayed size) |
 | POST | `/api/projects/{pid}/karaoke/burn` | `{background?: "auto"\|"black", audio?: "original"\|"mix"\|"none", quality?: "standard"\|"high", vocal_keep_pct?: 0–100}` | `Job` (kind `burn`); output `{filename, url, warnings}` |
+
+**Countdown** (开唱倒计时): `KaraokeStyle.countdown = {intro: true, interlude: true, min_gap_ms: 6000 (2000–30000), dots: 3 (2–5)}`:
+dots above the start of the first line (`intro`) and of a line after a pause of at least `min_gap_ms` since everything before it
+was sung (`interlude`); in the last `dots` seconds one goes each second (evenly over a shorter wait), the last as the line's sweep
+starts (so with `advance_ms`). A line can override the rules: `Line.countdown` true / false (null = the rules), set with
+`PATCH …/lines/{id}` `{countdown: "on"|"off"|"auto"}`. Such a line is shown early enough for its dots. In the ASS the dots are
+drawings with the style `KDots`. Simple-mode tasks: `task_style.countdown_intro` / `countdown_interlude` (null = as the style says).
 
 **Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, color, color_unsung, color_sung, outline_color, glow_unsung,
 glow_sung}] (≤ 9; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal",

@@ -87,6 +87,9 @@ class TaskStyleOptions(_Base):
     # the effect as each syllable is sung, chosen on its own (the glow template's sparkles can be turned
     # off without leaving the template); None = as the style says
     effects: Optional[Literal["none", "pulse", "ring", "shine", "sparkle", "petals", "hearts", "ball"]] = None
+    # countdown dots before the first line / after a long pause; None = as the style says
+    countdown_intro: Optional[bool] = None
+    countdown_interlude: Optional[bool] = None
     video_audio: Optional[Literal["original", "mix", "none"]] = None  # None = the settings' choice
     vocal_keep_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)  # "mix": None = the settings' level
 

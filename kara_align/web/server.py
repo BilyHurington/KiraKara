@@ -79,6 +79,7 @@ class LinePatch(BaseModel):
     kind: Optional[LineKind] = None
     translation: Optional[str] = None
     voice: Optional[str] = None
+    countdown: Optional[Literal["auto", "on", "off"]] = None  # countdown dots before this line (karaoke)
 
 
 class SpanBody(BaseModel):

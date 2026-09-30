@@ -40,6 +40,8 @@ export interface Line {
   singers?: number[];
   /** parts sung by others than `singers`: character ranges [start, end) of `text` */
   singer_spans?: SingerSpan[];
+  /** countdown dots before this line: null = as the style's rules say, true / false = always / never */
+  countdown?: boolean | null;
 }
 
 export interface SingerSpan { start: number; end: number; singers: number[] }
@@ -252,7 +254,11 @@ export interface KaraokeStyle {
   output?: { vocal_keep_pct: number };
   /** singers (多人演唱): who sings which part is kept in the lyrics (Line.singers / singer_spans) */
   singers?: KaraokeSingers;
+  /** countdown dots before the first line / after a long pause (time based; a line can say otherwise) */
+  countdown?: KaraokeCountdown;
 }
+
+export interface KaraokeCountdown { intro: boolean; interlude: boolean; min_gap_ms: number; dots: number }
 
 /** A saved subtitle style (预设); 默认 is built in and read-only. */
 export interface SavedStyle { id: string; name: string; builtin: boolean; updated: string | null; style: KaraokeStyle }
@@ -429,6 +435,9 @@ export interface TaskStyleOptions {
   ruby_target?: 'kanji' | 'all' | null;
   /** the effect as each syllable is sung; null: as the chosen style says */
   effects?: EffectKind | null;
+  /** countdown dots before the first line / after a long pause; null: as the chosen style says */
+  countdown_intro?: boolean | null;
+  countdown_interlude?: boolean | null;
   /** null: the settings' choice */
   video_audio: 'original' | 'mix' | 'none' | null;
   /** vocals kept with "mix"; null: the settings' level */

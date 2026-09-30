@@ -148,6 +148,7 @@ class LaidLine:
     # a long line wrapped into pieces (wrap_line): the translation goes with the first piece and is
     # shown until the last one is sung
     trans_until: Optional[int] = None
+    countdown_ms: int = 0  # countdown dots before it (plan_countdowns): the time they need; 0 = none
 
     @property
     def text(self) -> str:
@@ -419,6 +420,35 @@ def wrap_line(ll: LaidLine, extent, avail: float, mode: str, max_pieces: int = 4
     return out
 
 
+def plan_countdowns(lines: list[LaidLine], style: KaraokeStyle) -> None:
+    """Which lines (sorted by start) get countdown dots: the first line (``countdown.intro``) and a
+    line after a pause of at least ``min_gap_ms`` since everything before it was sung
+    (``countdown.interlude``), unless the line itself says otherwise (``Line.countdown``).  Only
+    the first piece of a wrapped line."""
+    cd = style.countdown
+    seen: set[str] = set()
+    sung_to: Optional[int] = None
+    for ll in lines:
+        if ll.line.id not in seen:
+            seen.add(ll.line.id)
+            want = ll.line.countdown
+            if want is None:
+                want = cd.intro if sung_to is None else (cd.interlude and ll.start - sung_to >= cd.min_gap_ms)
+            ll.countdown_ms = cd.dots * 1000 if want else 0
+        sung_to = ll.end if sung_to is None else max(sung_to, ll.end)
+
+
+def countdown_dots(appear: float, t0: float, n: int) -> list[float]:
+    """When each of ``n`` dots (left to right) goes, for a line shown from ``appear`` and sung from
+    ``t0``: the rightmost first, one a second, the leftmost as the singing starts; evenly over a shorter
+    wait.  [] when there is hardly any time to show them."""
+    wait = t0 - appear
+    if wait < 300 or n < 1:
+        return []
+    step = min(1000.0, wait / n)
+    return [t0 - i * step for i in range(n)]
+
+
 def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
     """Give each line a display window and a slot (rows stacked on screen); return how many
     lines had to go to an extra row.
@@ -443,10 +473,14 @@ def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
     for ll in lines:
         ll.show_to = ll.end + hold
 
+        # a line with countdown dots is shown early enough for all of them
+        lead_ll = max(lead, ll.countdown_ms + 300) if ll.countdown_ms else lead
+        early_ll = max(early, lead_ll)
+
         def appear(slot: int) -> int:
             prev = last.get(slot)
             free_at = prev.show_to if prev is not None else 0
-            t = max(0, ll.start - early, min(free_at, ll.start - lead))
+            t = max(0, ll.start - early_ll, min(free_at, ll.start - lead_ll))
             if prev is not None and prev.show_to > t:
                 t = max(t, min(prev.show_to, max(prev.end, ll.start - 200)))
             return t
@@ -973,6 +1007,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     if tr.enabled and not any(ll.translation for ll in laid):
         warnings.append("已开启翻译字幕，但歌词里没有翻译")
     laid.sort(key=lambda x: x.start)
+    plan_countdowns(laid, style)
     extra = schedule(laid, style)
     if extra:
         warnings.append(f"{extra} 行与其他行同时演唱（对唱 / 和声），已临时显示在歌词区外多出的一行")
@@ -1143,6 +1178,32 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             i = j + 1
         return out
 
+    def emit_countdown(ll: LaidLine, t_from: float, x0: float, line_top: float, scale: float) -> float:
+        """Countdown dots above the start of the line, going one by one until its first syllable (their
+        times shifted like the lyrics, so the last goes as the sweep starts); returns their top edge."""
+        goes = countdown_dots(t_from, ll.start, style.countdown.dots)
+        if not goes:
+            return line_top
+        r = max(3.0, main_size * scale * 0.12)
+        cy = line_top - r * 1.9
+        ids = live(ll.chunks[0].singers) if ll.chunks else ()
+        c = scol[ids[0]] if ids else None
+        fill = c["sung"] if c else txt.color_sung
+        outline = c["outline"] if c else txt.outline_color
+        kappa = 0.5523 * r
+        circle = (f"m {r:.1f} 0 b {r + kappa:.1f} 0 {2 * r:.1f} {r - kappa:.1f} {2 * r:.1f} {r:.1f} "
+                  f"b {2 * r:.1f} {r + kappa:.1f} {r + kappa:.1f} {2 * r:.1f} {r:.1f} {2 * r:.1f} "
+                  f"b {r - kappa:.1f} {2 * r:.1f} 0 {r + kappa:.1f} 0 {r:.1f} "
+                  f"b 0 {r - kappa:.1f} {r - kappa:.1f} 0 {r:.1f} 0")
+        for i, t_go in enumerate(goes):
+            cx = x0 + r + i * r * 3.2
+            fi = int(max(0, min(fade_in, (t_go - t_from) / 2)))
+            tags = (f"\\an5\\pos({cx:.1f},{cy:.1f})\\1c{bgr_tag(fill)}\\3c{bgr_tag(outline)}"
+                    f"\\bord{max(1.0, txt.outline * k * 0.5):.1f}\\shad0\\p1")
+            emit(L_RUBY, t_from, t_go, "KDots", tags, circle, f"\\fad({fi},0)" if fi else "",
+                 sname.get(ids[0], "") if ids else "")
+        return cy - r * 1.5
+
     def fx_color(ids: tuple[int, ...]) -> Optional[str]:
         """Effects fired by a singer's part: in the singer's colours (its sung glow / sung colour when the
         effect follows, else a pale tint like a template's sparkles)."""
@@ -1208,7 +1269,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         for w in widths:
             cxs.append(x + w * scale / 2)
             x += w * scale
-        for t_from, t_to in spans:
+        for n_span, (t_from, t_to) in enumerate(spans):
             # an ASS event cannot start before 0:00: start it there and time the sweep from there,
             # or the fill would lag by what was cut off
             t_from = max(t_from, -time_offset_ms)
@@ -1216,7 +1277,10 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 continue
             fad = fade_tag(fade_in, fade_out, t_from, t_to, *_sung_within(ll, t_from, t_to))
             bottom = main_y + ((trans_gap + trans_size) if (ll.translation and per_line_trans) else 0)
-            boxes.append((t_from + time_offset_ms, t_to + time_offset_ms, x0 - over_l, line_top,
+            top = line_top
+            if ll.countdown_ms and n_span == 0:
+                top = emit_countdown(ll, t_from, x0, line_top, scale)
+            boxes.append((t_from + time_offset_ms, t_to + time_offset_ms, x0 - over_l, top,
                           x0 + line_w + over_r, bottom))
             runs = runs_of(ll, cxs, scale)
             for c, cx, run in zip(ll.chunks, cxs, runs):
@@ -1331,6 +1395,9 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         # glow layers: invisible fill, the (blurred) border is the glow; sizes set per event
         style_line("KGlow", family, main_size, "#FFFFFF", "#FFFFFF", "#FFFFFF", 0, 0, txt.bold, fill_alpha=100),
         *singer_styles,
+        # countdown dots (drawings; colours set per event)
+        style_line("KDots", family, main_size, txt.color_sung, txt.color_sung, txt.outline_color, txt.outline * 0.5,
+                   0, txt.bold),
         FX_STYLE,
         info_style(family, main_size),
         "",

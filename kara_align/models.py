@@ -182,6 +182,9 @@ class Line(_Base):
     singers: list[int] = Field(default_factory=list)
     # parts sung by someone else than ``singers`` (character ranges, sorted, not overlapping)
     singer_spans: list[SingerSpan] = Field(default_factory=list)
+    # countdown dots before this line in the karaoke subtitles: None = as the style's rules say
+    # (KaraokeCountdown), True / False = always / never for this line
+    countdown: Optional[bool] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -846,6 +849,17 @@ class KaraokeEffects(_KaraokeBase):
         return data
 
 
+class KaraokeCountdown(_KaraokeBase):
+    """Dots above a line counting down to its first syllable (the last one goes as its sweep starts):
+    before the first line and after a long pause.  Time based: in the last ``dots`` seconds one dot
+    goes each second (evenly over a shorter wait).  A line can say otherwise (``Line.countdown``)."""
+
+    intro: bool = True  # before the first line
+    interlude: bool = True  # before a line after a pause of at least min_gap_ms
+    min_gap_ms: int = Field(default=6000, ge=2000, le=30000)
+    dots: int = Field(default=3, ge=2, le=5)
+
+
 class KaraokeOutput(_KaraokeBase):
     # "reduced vocals" audio for burn-in: vocals at this %, instrumental at 100 %
     # (independent of the Export page's mix, which comes later in the flow)
@@ -972,6 +986,7 @@ class KaraokeStyle(_KaraokeBase):
     theme: Optional[KaraokeTheme] = None  # None = colours set by hand (or a preset)
     output: KaraokeOutput = Field(default_factory=KaraokeOutput)
     singers: KaraokeSingers = Field(default_factory=KaraokeSingers)
+    countdown: KaraokeCountdown = Field(default_factory=KaraokeCountdown)
 
     @model_validator(mode="before")
     @classmethod

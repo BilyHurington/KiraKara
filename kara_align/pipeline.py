@@ -1173,6 +1173,10 @@ def resolve_task_style(simple: "app_settings.SimpleSettings",
         style.ruby.target = opts.ruby_target
     if opts.effects is not None:
         style.effects.kind = opts.effects
+    if opts.countdown_intro is not None:
+        style.countdown.intro = opts.countdown_intro
+    if opts.countdown_interlude is not None:
+        style.countdown.interlude = opts.countdown_interlude
     return style, label, colors
 
 

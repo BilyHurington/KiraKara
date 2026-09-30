@@ -6,6 +6,7 @@
 import { Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { COUNTDOWN_DEFAULTS } from '@/lib/countdown';
 import type { AppSettings, EffectKind, KaraokeStyle, TaskStyleOptions, ThemePreview } from '@/lib/types';
 import { useApp } from '@/store/app';
 import { loadSavedStyles, useLibrary } from '@/store/styles';
@@ -58,6 +59,9 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   const ruby: RubyChoice = o.ruby === 'style' ? (base && !base.ruby.enabled ? 'off' : base?.ruby.script ?? 'hiragana') : o.ruby;
   const rubyTarget = o.ruby_target ?? base?.ruby.target ?? 'all';
   const effect: EffectKind = o.effects ?? base?.effects.kind ?? 'none';
+  const cdBase = base?.countdown ?? COUNTDOWN_DEFAULTS;
+  const cdIntro = o.countdown_intro ?? cdBase.intro;
+  const cdInterlude = o.countdown_interlude ?? cdBase.interlude;
   const audio = o.video_audio ?? settings.video_audio;
   const vocal = o.vocal_keep_pct ?? settings.vocal_keep_pct;
   const shown = useMemo(() => base && {
@@ -70,7 +74,7 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
   return (
     <div className="space-y-4">
       <Segmented<TaskStyleOptions['source']> label="字幕样式来源" value={o.source}
-        onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null, effects: null })} options={[
+        onChange={(v) => set({ source: v, translation: null, song_info: null, ruby: 'style', ruby_target: null, effects: null, countdown_intro: null, countdown_interlude: null })} options={[
         { value: 'template', label: '模版配色' },
         { value: 'saved', label: '保存的预设' },
         { value: 'default', label: '设置里的样式' },
@@ -132,6 +136,12 @@ export function TaskStyleStep({ value: o, onChange, settings }: {
                 {(Object.keys(EFFECTS) as EffectKind[]).map((k) => <option key={k} value={k}>{EFFECTS[k].label}</option>)}
               </Select>
               {effect !== 'none' && <span className="text-xs text-subtle">{EFFECTS[effect].hint}</span>}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px]">
+              <span className="w-14 shrink-0 text-muted">倒计时</span>
+              <Switch checked={cdIntro} onChange={(v) => set({ countdown_intro: v })} label="第一句前" />
+              <Switch checked={cdInterlude} onChange={(v) => set({ countdown_interlude: v })} label="间奏后" />
+              <span className="text-xs text-subtle">开唱前几个圆点逐个消失</span>
             </div>
             {base && (
               <p className="text-xs text-subtle">
