@@ -1,7 +1,7 @@
 #!/bin/bash
-# KiraKara 启动脚本（macOS 离线版）
+# MiliKara 启动脚本（macOS 离线版）
 #   双击：启动 WebUI 并在浏览器中打开；关闭这个终端窗口（或按 Ctrl+C）即停止。
-#   ./KiraKara.command <命令> ...：运行命令行工具，例如 ./KiraKara.command --help
+#   ./MiliKara.command <命令> ...：运行命令行工具，例如 ./MiliKara.command --help
 APP="$(cd "$(dirname "$0")" && pwd)"
 
 # 从网上下载的压缩包里的文件带有“隔离”标记：第一次放行本脚本后，把整个目录的标记一并去掉
@@ -23,7 +23,7 @@ if [ $# -gt 0 ]; then
 fi
 
 cd "$APP" || exit 1
-echo "KiraKara 正在启动（第一次启动需要十几秒；关闭这个窗口即停止 KiraKara）"
+echo "MiliKara 正在启动（第一次启动需要十几秒；关闭这个窗口即停止 MiliKara）"
 OPEN=--open
-[ -n "$KIRAKARA_NO_BROWSER" ] && OPEN=
+[ -n "$MILIKARA_NO_BROWSER$KIRAKARA_NO_BROWSER" ] && OPEN=  # (KIRAKARA_: the name before v1.1.0)
 exec "$PY" -m kara_align.cli serve --port auto $OPEN

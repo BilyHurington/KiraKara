@@ -145,7 +145,7 @@ export function ConnectionBanner() {
       <WifiOff className="size-4 shrink-0 text-danger" />
       <span className="min-w-0 flex-1">
         <b className="font-semibold">无法连接本地服务。</b>
-        请确认运行 <code className="rounded bg-surface px-1 font-mono text-xs">kirakara serve</code> 的终端仍在运行；恢复后会自动继续，也可以手动重试。
+        请确认运行 <code className="rounded bg-surface px-1 font-mono text-xs">milikara serve</code> 的终端仍在运行；恢复后会自动继续，也可以手动重试。
       </span>
       <Button size="xs" variant="secondary" loading={busy} onClick={() => void retry()}>重试连接</Button>
     </div>

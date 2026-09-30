@@ -1,4 +1,4 @@
-# Portable macOS (Apple silicon) build of KiraKara: a folder with its own Python, all dependencies,
+# Portable macOS (Apple silicon) build of MiliKara: a folder with its own Python, all dependencies,
 # ffmpeg (with libass) and the two default models, checked by running a whole song through the launcher,
 # zipped and uploaded to a GitHub release.
 #
@@ -45,7 +45,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             tag="$GITHUB_REF_NAME"
             # (the Windows workflow may be creating the same release)
-            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes "" \
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "MiliKara $tag" --notes "" \
               || gh release view "$tag" >/dev/null
           else
             tag=macos-preview
@@ -76,7 +76,7 @@ jobs:
           df -h "$RUNNER_TEMP"
           sw_vers
           echo "BUILD=$RUNNER_TEMP/kk" >> "$GITHUB_ENV"
-          echo "APP=$RUNNER_TEMP/kk/KiraKara" >> "$GITHUB_ENV"
+          echo "APP=$RUNNER_TEMP/kk/MiliKara" >> "$GITHUB_ENV"
 
       - name: ffmpeg (Homebrew ffmpeg-full, with libass)
         run: |
@@ -154,9 +154,9 @@ jobs:
       - name: Launcher, notes, licences
         run: |
           set -euo pipefail
-          cp packaging/macos/KiraKara.command "$APP/KiraKara.command"
-          chmod +x "$APP/KiraKara.command"
-          cp LICENSE "$APP/LICENSE-KiraKara.txt"
+          cp packaging/macos/MiliKara.command "$APP/MiliKara.command"
+          chmod +x "$APP/MiliKara.command"
+          cp LICENSE "$APP/LICENSE-MiliKara.txt"
           sed "s/@VERSION@/$VERSION/" packaging/macos/使用说明.txt > "$APP/使用说明.txt"
           "$APP/python/bin/python3" -m compileall -q -j 0 "$APP/python/lib" >/dev/null 2>&1 || true
           du -sh "$APP"
@@ -171,16 +171,16 @@ jobs:
           set -euo pipefail
           odd="$BUILD/中文 路径"
           mkdir -p "$odd"
-          mv "$APP" "$odd/KiraKara"
-          trap 'mv "$odd/KiraKara" "$APP"' EXIT
-          "$odd/KiraKara/python/bin/python3" packaging/smoke_test.py "$odd/KiraKara" "$BUILD/smoke"
+          mv "$APP" "$odd/MiliKara"
+          trap 'mv "$odd/MiliKara" "$APP"' EXIT
+          "$odd/MiliKara/python/bin/python3" packaging/smoke_test.py "$odd/MiliKara" "$BUILD/smoke"
 
       - name: Pack (zip)
         run: |
           set -euo pipefail
-          name="KiraKara-$VERSION-macos-arm64"
+          name="MiliKara-$VERSION-macos-arm64"
           mkdir -p "$BUILD/dist"
-          (cd "$BUILD" && ditto -c -k --sequesterRsrc --keepParent KiraKara "dist/$name.zip")
+          (cd "$BUILD" && ditto -c -k --sequesterRsrc --keepParent MiliKara "dist/$name.zip")
           size=$(stat -f %z "$BUILD/dist/$name.zip")
           echo "$name.zip: $size bytes"
           if [ "$size" -ge 2147483648 ]; then echo "::error::zip is over the 2 GiB release asset limit"; exit 1; fi

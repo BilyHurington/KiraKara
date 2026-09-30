@@ -1,16 +1,16 @@
-KiraKara（Windows · @VARIANT_LABEL@）离线版  @VERSION@
+MiliKara（Windows · @VARIANT_LABEL@）离线版  @VERSION@
 ==============================================
 
 用一首歌和它的歌词，做出逐字扫光的日语卡拉OK视频。
-项目主页和完整教程：https://github.com/BilyHurington/KiraKara
+项目主页和完整教程：https://github.com/BilyHurington/MiliKara
 
 一、运行
 1. 用 7-Zip（或 Bandizip、WinRAR）解压；分成多个分卷（.7z.001、.7z.002…）时，下载全部分卷后解压 .7z.001 即可。
-   请解压到一个路径较短的文件夹，例如 D:\KiraKara。
-2. 双击 KiraKara.bat。
+   请解压到一个路径较短的文件夹，例如 D:\MiliKara。
+2. 双击 MiliKara.bat。
    第一次运行时 Windows 可能弹出“Windows 已保护你的电脑”：点“更多信息”→“仍要运行”。
-   防火墙询问时可以拒绝（KiraKara 只在本机使用，不需要局域网访问）。
-3. 黑色窗口里会显示启动信息，十几秒后浏览器自动打开 KiraKara。
+   防火墙询问时可以拒绝（MiliKara 只在本机使用，不需要局域网访问）。
+3. 黑色窗口里会显示启动信息，十几秒后浏览器自动打开 MiliKara。
 4. 用完关闭那个黑色窗口即可停止。
 
 二、说明
@@ -23,10 +23,10 @@ KiraKara（Windows · @VARIANT_LABEL@）离线版  @VERSION@
   设置里换用其他分离模型时，会在第一次使用时下载。
 - 设置、字幕预设和项目保存在你的用户目录 %USERPROFILE%\.kara_align 里，删除或更新这个文件夹不会丢失它们。
 - 整个文件夹可以放在任何位置；移动后照样双击运行。
-- 命令行：在这个文件夹里打开终端，运行 KiraKara.bat --help。
+- 命令行：在这个文件夹里打开终端，运行 MiliKara.bat --help。
 
 三、许可
-- KiraKara 本身：MIT（见 LICENSE-KiraKara.txt）。
+- MiliKara 本身：MIT（见 LICENSE-MiliKara.txt）。
 - 对齐模型：CC-BY-NC-SA-4.0（非商用）。
 - 自带字体 Noto Sans CJK：SIL Open Font License 1.1（见 fonts/LICENSE-NotoSansCJK.txt）。
 - ffmpeg：GPL v3（见 ffmpeg\README-ffmpeg.txt）；Python、PyTorch、transformers、python-audio-separator 等依赖

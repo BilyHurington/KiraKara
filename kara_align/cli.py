@@ -408,7 +408,7 @@ def cmd_serve(a) -> None:
     port = free_port(a.host) if a.port == "auto" else int(a.port)
     shown = "127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host
     url = f"http://{'[' + shown + ']' if ':' in shown else shown}:{port}"
-    print(f"KiraKara WebUI: {url}", file=sys.stderr)
+    print(f"MiliKara WebUI: {url}", file=sys.stderr)
     if a.open:
         _open_when_ready(url)
     server = uvicorn.Server(uvicorn.Config(app, host=a.host, port=port, log_level="warning"))
@@ -476,7 +476,7 @@ def _port(v: str):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="kirakara", description="KiraKara：用歌曲和已知歌词做逐字卡拉OK字幕与视频")
+    ap = argparse.ArgumentParser(prog="milikara", description="MiliKara：用歌曲和已知歌词做逐字卡拉OK字幕与视频")
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -537,7 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--role", choices=["original", "vocals", "instrumental"], default="original")
 
-    p = add("separate", cmd_separate, "人声分离（需要 kirakara[separation]）")
+    p = add("separate", cmd_separate, "人声分离（需要 milikara[separation]）")
     p.add_argument("--preset", default="melband-roformer", choices=_preset_names(),
                    help="分离预设（kara-align backends 列出说明）")
     p.add_argument("--device", choices=["auto", "cpu"], default="auto",
@@ -652,6 +652,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    if argv is None and Path(sys.argv[0]).stem.lower() == "kirakara":
+        print("提示：KiraKara 已改名为 MiliKara，以后请使用 milikara 命令（kirakara 仍然可用）", file=sys.stderr)
     args = build_parser().parse_args(argv)
     try:
         args.fn(args)

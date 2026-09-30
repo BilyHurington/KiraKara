@@ -1,6 +1,6 @@
-# KiraKara HTTP API (local WebUI)
+# MiliKara HTTP API (local WebUI)
 
-Served by `kirakara serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON unless noted.
+Served by `milikara serve` (FastAPI, default `http://127.0.0.1:8765`). All JSON unless noted.
 Times are integer ms on the original audio timeline, intervals `[start_ms, end_ms)`.
 Errors: HTTP 4xx/5xx with `{"detail": "<human readable message>"}` (pydantic body validation errors are FastAPI's 422 list).
 
@@ -82,7 +82,7 @@ while True:
 ## Access and status codes
 
 - **Local only.** Requests whose `Host` is not `127.0.0.1`, `localhost` or `[::1]` get **403** (DNS rebinding);
-  more host names can be allowed with `kirakara serve --allow-host NAME` (repeatable; `--host` with a named
+  more host names can be allowed with `milikara serve --allow-host NAME` (repeatable; `--host` with a named
   address allows that name too). A request other than GET / HEAD / OPTIONS that carries an `Origin` of another
   site (scheme not http/https, or host:port ≠ `Host`) gets **403** (CSRF).
 - **400**: invalid input or a state that does not allow the operation (`ServiceError`, `ProjectError`, mix / fetch errors).

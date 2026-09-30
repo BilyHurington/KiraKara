@@ -28,7 +28,7 @@ DEFAULT_FAMILIES = [
     "Noto Sans CJK JP", "Source Han Sans JP", "Noto Sans JP", "Noto Sans CJK SC", "Source Han Sans",
     "Hiragino Sans GB", "Microsoft YaHei", "MS Gothic",
 ]
-# the fonts KiraKara ships (Noto Sans CJK: Japanese and Chinese in one collection, SIL OFL), in <app>/fonts
+# the fonts MiliKara ships (Noto Sans CJK: Japanese and Chinese in one collection, SIL OFL), in <app>/fonts
 # or $KARA_ALIGN_FONTS; the default on Windows / Linux, and whenever a style's font lacks characters
 BUNDLED_JP, BUNDLED_SC = "Noto Sans CJK JP", "Noto Sans CJK SC"
 

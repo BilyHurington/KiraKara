@@ -1,11 +1,11 @@
-"""Check a built portable KiraKara folder the way a user runs it, through its launcher only:
+"""Check a built portable MiliKara folder the way a user runs it, through its launcher only:
 
 1. the WebUI starts (launcher without arguments) and answers /api/info;
 2. a whole song goes through: lyrics (LRC) → vocal separation → alignment → karaoke video, offline,
    with the bundled models and ffmpeg;
 3. the video has the lyrics drawn on it (libass found a Japanese font).
 
-    python smoke_test.py <KiraKara folder> [<work folder>]
+    python smoke_test.py <MiliKara folder> [<work folder>]
 
 The test song is synthetic (tones), so the timing itself means nothing here; the model and every
 step still run for real.  The Python running this script is only used to check the output (Pillow).
@@ -26,17 +26,17 @@ LRC = "[ti:smoke]\n[00:02.00]きみとあるいた\n[00:06.00]はるのみち\n[
 
 def main() -> None:
     app = Path(sys.argv[1]).resolve()
-    work = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix="kirakara-smoke-"))
+    work = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix="milikara-smoke-"))
     work.mkdir(parents=True, exist_ok=True)
-    launcher = app / ("KiraKara.bat" if os.name == "nt" else "KiraKara.command")
+    launcher = app / ("MiliKara.bat" if os.name == "nt" else "MiliKara.command")
     env = {**os.environ, "KARA_ALIGN_HOME": str(work / "home"), "HF_HUB_CACHE": str(work / "hf-cache"),
-           "HF_HOME": str(work / "hf-home"), "KIRAKARA_NO_BROWSER": "1"}
+           "HF_HOME": str(work / "hf-home"), "MILIKARA_NO_BROWSER": "1"}
     for k in ("KARA_ALIGN_MODELS", "KARA_ALIGN_FONTS", "KARA_ALIGN_FFMPEG", "FONTCONFIG_FILE", "VIRTUAL_ENV", "PYTHONPATH"):
         env.pop(k, None)
     models_before = _listing(app / "models")
 
     def kk(*args: str, timeout: float = 1800) -> str:
-        print("$ KiraKara", *args, flush=True)
+        print("$ MiliKara", *args, flush=True)
         t0 = time.monotonic()
         r = subprocess.run(_launch([str(launcher), *args]), env=env, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout)
@@ -89,7 +89,7 @@ def main() -> None:
 
 
 def serve(launcher: Path, env: dict) -> None:
-    print("$ KiraKara   (WebUI)", flush=True)
+    print("$ MiliKara   (WebUI)", flush=True)
     kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     proc = subprocess.Popen(_launch([str(launcher)]), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
@@ -102,7 +102,7 @@ def serve(launcher: Path, env: dict) -> None:
             if not line:
                 break
             lines.append(line)
-            m = re.search(r"KiraKara WebUI: (http://\S+)", line)
+            m = re.search(r"MiliKara WebUI: (http://\S+)", line)
             if m:
                 url = m.group(1)
                 break

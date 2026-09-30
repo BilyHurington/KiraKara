@@ -1,7 +1,7 @@
 [project]
-name = "kirakara"
-version = "0.1.0"
-description = "KiraKara: Japanese karaoke videos from a song and its lyrics (mora-level alignment, furigana, burned-in subtitles)"
+name = "milikara"
+version = "1.1.0"
+description = "MiliKara: Japanese karaoke videos from a song and its lyrics (mora-level alignment, furigana, burned-in subtitles)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -42,7 +42,8 @@ dev = [
 ]
 
 [project.scripts]
-kirakara = "kara_align.cli:main"
+milikara = "kara_align.cli:main"
+kirakara = "kara_align.cli:main"  # the name before v1.1.0: still works, says it was renamed
 kara-align = "kara_align.cli:main"  # the earlier name, kept working
 
 [build-system]

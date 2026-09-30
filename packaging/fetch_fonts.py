@@ -1,11 +1,11 @@
-"""Download the fonts KiraKara ships into a folder (default: the project's own ``fonts``):
+"""Download the fonts MiliKara ships into a folder (default: the project's own ``fonts``):
 Noto Sans CJK (regular + bold), a collection with Japanese, Simplified / Traditional Chinese and Korean
 forms, under the SIL Open Font License.
 
     python packaging/fetch_fonts.py [folder]
 
 It is the default font on Windows / Linux and the one used wherever a style's font lacks characters;
-without it KiraKara still works with the system's fonts.  Files are pinned to a commit and checked.
+without it MiliKara still works with the system's fonts.  Files are pinned to a commit and checked.
 """
 
 import hashlib

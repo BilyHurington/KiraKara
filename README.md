@@ -1,12 +1,12 @@
-# KiraKara
+# MiliKara
 
 **用一首歌和它的歌词，做出逐字扫光的日语卡拉OK视频。**
 
-> 本软件受 [StrangeUtaGame](https://github.com/karaoke-studio/StrangeUtaGame) 启发。KiraKara 是自动对齐工具，不是卡拉OK手动打轴软件；如果需要手动打轴，请使用 StrangeUtaGame 原软件。
+> 本软件受 [StrangeUtaGame](https://github.com/karaoke-studio/StrangeUtaGame) 启发。MiliKara 是自动对齐工具，不是卡拉OK手动打轴软件；如果需要手动打轴，请使用 StrangeUtaGame 原软件。
 
-> **名称说明**：本项目与 [KiraKara player](https://rl.fmpeach.top) 及其相关项目无关，只是撞名。为避免混淆，本项目将在下一个版本更新时改名。
+> **名称说明**：本项目原名 KiraKara，因与 [KiraKara player](https://rl.fmpeach.top) 及其相关项目重名，从 v1.1.0 起改名为 MiliKara（两者之间没有关系）。旧版本的项目和设置在新版本里可以直接使用。
 
-放入视频（或音频 + 背景图），粘贴网易云 / QQ 音乐的歌曲链接或 LRC 歌词，KiraKara 会自动给汉字注音、分离人声、把每一个假名（拍）对齐到演唱的时间上，然后把带注音、翻译和歌曲信息的卡拉OK字幕直接烧录进视频。全部在本机运行。
+放入视频（或音频 + 背景图），粘贴网易云 / QQ 音乐的歌曲链接或 LRC 歌词，MiliKara 会自动给汉字注音、分离人声、把每一个假名（拍）对齐到演唱的时间上，然后把带注音、翻译和歌曲信息的卡拉OK字幕直接烧录进视频。全部在本机运行。
 
 <p align="center">
   <img src="docs/images/simple-form.png" alt="极简模式：放入视频，粘贴歌曲链接，选好字幕配色，点“开始制作”" width="640">
@@ -39,16 +39,16 @@
 
 ## 安装
 
-**Windows 离线版**：在 Releases 里下载 `KiraKara-…-windows-x64-cpu.7z`（CPU 版）或 `…-cuda.7z`（NVIDIA 显卡版，需要 570 或更新的驱动；超过 2 GB 时分成 `.7z.001`、`.7z.002`… 几个分卷，需要全部下载），用 7-Zip 解压，双击 `KiraKara.bat`。自带 Python、依赖、ffmpeg 和两个默认模型，不需要联网。
+**Windows 离线版**：在 Releases 里下载 `MiliKara-…-windows-x64-cpu.7z`（CPU 版）或 `…-cuda.7z`（NVIDIA 显卡版，需要 570 或更新的驱动；超过 2 GB 时分成 `.7z.001`、`.7z.002`… 几个分卷，需要全部下载），用 7-Zip 解压，双击 `MiliKara.bat`。自带 Python、依赖、ffmpeg 和两个默认模型，不需要联网。
 
-**macOS 离线版**（Apple 芯片，macOS 14.8.5 或更新）：下载 `KiraKara-…-macos-arm64.zip`，解压后第一次在访达里右键点 `KiraKara.command` →“打开”，以后双击即可。
+**macOS 离线版**（Apple 芯片，macOS 14.8.5 或更新）：下载 `MiliKara-…-macos-arm64.zip`，解压后第一次在访达里右键点 `MiliKara.command` →“打开”，以后双击即可。
 
 离线版都由 GitHub Actions 构建（`.github/workflows/windows-package.yml`、`macos-package.yml`；打包脚本在 `packaging/`）。
 
 **从源码安装**：需要 Python 3.11+、[uv](https://docs.astral.sh/uv/)，以及带 libass 的 `ffmpeg`（macOS：`brew install ffmpeg-full`）。目前主要在 macOS（Apple 芯片）上使用和测试；Linux / Windows 上可以用 CPU 或 NVIDIA 显卡运行。
 
 ```bash
-git clone <仓库地址> KiraKara && cd KiraKara
+git clone <仓库地址> MiliKara && cd MiliKara
 uv venv --python 3.12 .venv
 uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）和人声分离
 ```
@@ -60,7 +60,7 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 ## 使用
 
 ```bash
-.venv/bin/kirakara serve        # 然后打开 http://127.0.0.1:8765
+.venv/bin/milikara serve        # 然后打开 http://127.0.0.1:8765
 ```
 
 默认打开**极简模式**：
@@ -85,7 +85,7 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 
 ## 许可与说明
 
-- KiraKara 本身的代码以 [MIT 协议](LICENSE) 发布。它使用的第三方依赖、模型和工具（如 PyTorch、transformers、python-audio-separator、ffmpeg 等）各自遵循它们自己的许可。
+- MiliKara 本身的代码以 [MIT 协议](LICENSE) 发布。它使用的第三方依赖、模型和工具（如 PyTorch、transformers、python-audio-separator、ffmpeg 等）各自遵循它们自己的许可。
 - 默认的对齐模型 [`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn) 的许可是 **CC-BY-NC-SA-4.0（非商用）**；人声分离使用 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 和它的模型，许可以上游为准。
 - 音频、视频和项目文件只保存在本机。只有这些情况会联网：第一次下载模型、从音乐链接获取歌词、以及 AI 注音（歌词会发给你选择的 AI 服务）。
 - 请只处理你有权使用的音视频和歌词。

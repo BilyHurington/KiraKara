@@ -105,7 +105,7 @@ def ensure_available() -> str:
     except Exception as exc:  # ImportError or broken install
         raise SeparationError(
             "人声分离需要可选依赖 audio-separator"
-            "（pip install 'kirakara[separation]'）；导入失败：" + str(exc)) from exc
+            "（pip install 'milikara[separation]'）；导入失败：" + str(exc)) from exc
     return audio_separator_version() or "unknown"
 
 
@@ -341,7 +341,7 @@ def separate(original_path, out_dir, preset: str = "melband-roformer", cancel=No
 
 
 def _child_env() -> dict:
-    """The separator runs ``ffmpeg`` from PATH: the one KiraKara uses goes first.  UTF-8 output
+    """The separator runs ``ffmpeg`` from PATH: the one MiliKara uses goes first.  UTF-8 output
     (its progress bars) in any locale."""
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     try:

@@ -24,7 +24,7 @@ export function Sidebar() {
           <AudioWaveform className="size-4.5" />
         </div>
         <div className="hidden lg:block">
-          <div className="text-[15px] leading-5 font-semibold tracking-tight">KiraKara</div>
+          <div className="text-[15px] leading-5 font-semibold tracking-tight">MiliKara</div>
           <div className="text-[11px] text-muted">已知歌词时间戳对齐</div>
         </div>
       </div>

@@ -368,7 +368,7 @@ def test_one_queue_per_workspace(tmp_path, monkeypatch):
     assert client.get("/api/info").json()["tasks_elsewhere"] is True
     assert [x["id"] for x in client.get("/api/tasks").json()] == [t.id]
     r = client.post(f"/api/tasks/{t.id}/cancel")
-    assert r.status_code == 409 and "另一个 KiraKara 服务进程" in r.json()["detail"]
+    assert r.status_code == 409 and "另一个 MiliKara 服务进程" in r.json()["detail"]
     q1.shutdown()
     q3 = P.TaskQueue(S.Workspace(ws_root))  # the lock is free again
     assert not q3.passive

@@ -1,8 +1,8 @@
-# KiraKara 技术说明
+# MiliKara 技术说明
 
 面向想了解实现细节或参与开发的读者。日常使用见 [使用教程](tutorial.md)，接口见 [HTTP API](api.md)。
 
-- Python 核心（`kara_align/`），命令行（`kirakara`，旧名 `kara-align` 仍可用）与本地 WebUI（`kirakara serve`）共用同一套服务层与时间语义。对齐结果是可复用的**逐发音单元时间**（原音频起点起算的整数毫秒，区间 `[start_ms, end_ms)`）。使用现成模型，不训练、不微调。
+- Python 核心（`kara_align/`），命令行（`milikara`，旧名 `kara-align` 仍可用）与本地 WebUI（`milikara serve`）共用同一套服务层与时间语义。对齐结果是可复用的**逐发音单元时间**（原音频起点起算的整数毫秒，区间 `[start_ms, end_ms)`）。使用现成模型，不训练、不微调。
 - 默认 CTC 对齐权重：[`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn)，固定 revision `2ab2b5f4…`，**许可 CC-BY-NC-SA-4.0（非商用）**。
 - 可选人声分离：[`python-audio-separator`](https://github.com/nomadkaraoke/python-audio-separator)（MelBand RoFormer（默认）/ BS-RoFormer / MDX-Net / Demucs 预设，许可以上游为准）。
 
@@ -10,7 +10,7 @@
 
 - 模型：`$KARA_ALIGN_MODELS`，否则是程序目录下的 `models/`（源码目录或解压即用的程序包；以 pip 包安装时是 `~/.kara_align/models`）。对齐模型在 `models/alignment/`（Hugging Face 的目录结构，加载时显式传入 `cache_dir`；第一次使用时若默认的 Hugging Face 缓存里已有就复制过来），分离模型在 `models/separation/`（作为分离器的 `model_file_dir`；以前放在 `/tmp/audio-separator-models` 或 `~/.kara_align/models/separation` 的会移过来）。模型只在第一次使用时下载，之后离线可用。
 - 设置、字幕预设、声学分数缓存：`$KARA_ALIGN_HOME`（默认 `~/.kara_align`）。缓存可以随时清空。
-- 项目：`kirakara serve --root <目录>`（默认 `~/.kara_align/projects`）下每个项目一个文件夹（`project.json`、按内容指纹命名的 `assets/`、`exports/`）；极简模式的任务队列在 `<目录>/.tasks/`。
+- 项目：`milikara serve --root <目录>`（默认 `~/.kara_align/projects`）下每个项目一个文件夹（`project.json`、按内容指纹命名的 `assets/`、`exports/`）；极简模式的任务队列在 `<目录>/.tasks/`。
 - `ffmpeg` 路径可用 `KARA_ALIGN_FFMPEG` 指定。
 
 ## WebUI 的访问限制
@@ -34,28 +34,28 @@
 ## 命令行
 
 ```bash
-kirakara init work/song --mode lrc
-kirakara lyrics work/song song.lrc            # 或：cat song.lrc | kirakara lyrics work/song -
-kirakara fetch "https://music.163.com/#/song?id=123" --project work/song --with-track translation
-kirakara audio work/song song.flac
-kirakara lines work/song --readings           # 查看规则注音（! = 不确定）
-kirakara readings work/song                   # 重新生成规则注音（--no-overwrite-rule 保留现有规则读音；人工/AI/已确认读音都不覆盖）
-kirakara ai-prompt work/song --out prompt.txt # 粘贴到网页聊天
-kirakara ai-apply work/song reply.txt         # 校验并应用注音补丁（--dry-run 仅预览）
-kirakara separate work/song --preset bs-roformer   # 可选；预设 melband-roformer（默认）/ bs-roformer / mdx-fast / demucs-htdemucs
-kirakara calibrate work/song --mark L0001 12950    # 标记首音
-kirakara calibrate work/song --check L0030 95120   # 中段检查
-kirakara align work/song                      # --role vocals 使用人声；--lines L0005 局部重跑
-kirakara show work/song
-kirakara edit work/song <unit_id> --start 12950 --end 13120
-kirakara export work/song alignment           # alignment / prepared / project / csv / lrc-line / lrc-unit / lrc-calibrated
-kirakara mix work/song --vocal 20 --inst 100  # 人声保留 20% 的混音 WAV
-kirakara video work/song --vocal 20           # 以视频为原曲时：导出降低人声的视频
-kirakara export work/song karaoke-ass         # 卡拉OK字幕（样式在 WebUI 设置）
-kirakara burn work/song --audio mix --vocal 20   # 烧录卡拉OK字幕视频（无视频时纯黑背景；--vocal 缺省用字幕样式里的人声保留比例）
-kirakara package work/song song.kara.zip      # 便携项目包
-kirakara eval --ref ref.json --hyp base=a.json --hyp lrc=b.json   # 与人工标注比较
-kirakara serve --allow-host 192.168.1.20      # 另外接受这个主机名的请求（可重复）
+milikara init work/song --mode lrc
+milikara lyrics work/song song.lrc            # 或：cat song.lrc | milikara lyrics work/song -
+milikara fetch "https://music.163.com/#/song?id=123" --project work/song --with-track translation
+milikara audio work/song song.flac
+milikara lines work/song --readings           # 查看规则注音（! = 不确定）
+milikara readings work/song                   # 重新生成规则注音（--no-overwrite-rule 保留现有规则读音；人工/AI/已确认读音都不覆盖）
+milikara ai-prompt work/song --out prompt.txt # 粘贴到网页聊天
+milikara ai-apply work/song reply.txt         # 校验并应用注音补丁（--dry-run 仅预览）
+milikara separate work/song --preset bs-roformer   # 可选；预设 melband-roformer（默认）/ bs-roformer / mdx-fast / demucs-htdemucs
+milikara calibrate work/song --mark L0001 12950    # 标记首音
+milikara calibrate work/song --check L0030 95120   # 中段检查
+milikara align work/song                      # --role vocals 使用人声；--lines L0005 局部重跑
+milikara show work/song
+milikara edit work/song <unit_id> --start 12950 --end 13120
+milikara export work/song alignment           # alignment / prepared / project / csv / lrc-line / lrc-unit / lrc-calibrated
+milikara mix work/song --vocal 20 --inst 100  # 人声保留 20% 的混音 WAV
+milikara video work/song --vocal 20           # 以视频为原曲时：导出降低人声的视频
+milikara export work/song karaoke-ass         # 卡拉OK字幕（样式在 WebUI 设置）
+milikara burn work/song --audio mix --vocal 20   # 烧录卡拉OK字幕视频（无视频时纯黑背景；--vocal 缺省用字幕样式里的人声保留比例）
+milikara package work/song song.kara.zip      # 便携项目包
+milikara eval --ref ref.json --hyp base=a.json --hyp lrc=b.json   # 与人工标注比较
+milikara serve --allow-host 192.168.1.20      # 另外接受这个主机名的请求（可重复）
 ```
 
 ## 时间与数据约定
@@ -102,4 +102,4 @@ npm run dev        # 开发：http://localhost:5173，/api 代理到 127.0.0.1:8
 npm run build      # 类型检查并输出到 kara_align/web/static
 ```
 
-开发时另开一个终端运行 `kirakara serve --port 8799`。
+开发时另开一个终端运行 `milikara serve --port 8799`。

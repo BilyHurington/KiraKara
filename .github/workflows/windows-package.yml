@@ -1,4 +1,4 @@
-# Portable Windows builds of KiraKara: tests on Windows, then a folder with its own Python, all
+# Portable Windows builds of MiliKara: tests on Windows, then a folder with its own Python, all
 # dependencies, ffmpeg and the two default models (CPU and NVIDIA CUDA variants), checked by running a
 # whole song through the launcher, packed as 7z volumes (< 2 GB each, the release asset limit) and
 # uploaded to a GitHub release.
@@ -73,7 +73,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             tag="$GITHUB_REF_NAME"
             # (the macOS workflow may be creating the same release)
-            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "KiraKara $tag" --notes "" \
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "MiliKara $tag" --notes "" \
               || gh release view "$tag" >/dev/null
           else
             tag=windows-preview
@@ -109,7 +109,7 @@ jobs:
           $root = "$($drive.Root)kk"
           New-Item -ItemType Directory -Force "$root" | Out-Null
           "BUILD=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "APP=$root\KiraKara" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "APP=$root\MiliKara" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Python
         run: |
@@ -178,8 +178,8 @@ jobs:
       - name: Launcher, notes, licences
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          Copy-Item packaging/windows/KiraKara.bat "$env:APP\KiraKara.bat"
-          Copy-Item LICENSE "$env:APP\LICENSE-KiraKara.txt"
+          Copy-Item packaging/windows/MiliKara.bat "$env:APP\MiliKara.bat"
+          Copy-Item LICENSE "$env:APP\LICENSE-MiliKara.txt"
           if ($env:VARIANT -eq "cuda") {
             $label = "NVIDIA 显卡版"
             $note = "- 这个版本用 NVIDIA 显卡（CUDA 12.8）加速人声分离和对齐：需要 GeForce GTX 16 / RTX 20 系列或更新的显卡，`r`n  以及 570 或更新版本的显卡驱动。没有合适的显卡时自动改用 CPU（较慢）。"
@@ -199,20 +199,20 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $odd = "$env:BUILD\中文 路径"
           New-Item -ItemType Directory -Force $odd | Out-Null
-          Move-Item $env:APP "$odd\KiraKara"
+          Move-Item $env:APP "$odd\MiliKara"
           try {
-            & "$odd\KiraKara\python\python.exe" packaging/smoke_test.py "$odd\KiraKara" "$env:BUILD\smoke"
+            & "$odd\MiliKara\python\python.exe" packaging/smoke_test.py "$odd\MiliKara" "$env:BUILD\smoke"
           } finally {
-            Move-Item "$odd\KiraKara" $env:APP
+            Move-Item "$odd\MiliKara" $env:APP
           }
 
       - name: Pack (7z volumes)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          $name = "KiraKara-$env:VERSION-windows-x64-$env:VARIANT"
+          $name = "MiliKara-$env:VERSION-windows-x64-$env:VARIANT"
           New-Item -ItemType Directory -Force "$env:BUILD\dist" | Out-Null
           Push-Location $env:BUILD
-          7z a -t7z -mx=5 -mmt=on -v1900m "dist\$name.7z" KiraKara | Select-Object -Last 5
+          7z a -t7z -mx=5 -mmt=on -v1900m "dist\$name.7z" MiliKara | Select-Object -Last 5
           Pop-Location
           $vols = @(Get-ChildItem "$env:BUILD\dist" -Filter "$name.7z.*")
           if ($vols.Count -eq 1) {  # one volume: a plain .7z (opens in Windows 11 without 7-Zip)

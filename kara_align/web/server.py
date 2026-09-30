@@ -205,7 +205,7 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         tq.shutdown()
         jm.shutdown()
 
-    app = FastAPI(title="KiraKara", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="MiliKara", version=__version__, lifespan=lifespan)
     app.state.workspace = ws
     app.state.jobs = jm
     app.state.tasks = tq

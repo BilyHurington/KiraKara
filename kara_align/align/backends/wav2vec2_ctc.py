@@ -48,7 +48,7 @@ DEFAULT_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
 DEFAULT_REVISION = "2ab2b5f46539ee284703c281f286b01d2410ee12"
 # from the model card metadata of that revision
 DEFAULT_LICENSE = "cc-by-nc-sa-4.0"
-ML_HINT = "CTC 对齐后端需要 torch 和 transformers：pip install 'kirakara[ml]'"
+ML_HINT = "CTC 对齐后端需要 torch 和 transformers：pip install 'milikara[ml]'"
 
 _MODEL_CACHE: dict[tuple[str, Optional[str], str], dict[str, Any]] = {}
 _LOCK = threading.Lock()

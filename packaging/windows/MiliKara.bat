@@ -1,7 +1,7 @@
 @echo off
-rem KiraKara launcher (portable Windows build).
+rem MiliKara launcher (portable Windows build).
 rem   Double-click: starts the WebUI and opens it in the browser; close this window to stop.
-rem   KiraKara.bat <command> ...: runs the command line tool, e.g.  KiraKara.bat --help
+rem   MiliKara.bat <command> ...: runs the command line tool, e.g.  MiliKara.bat --help
 rem (ASCII only: cmd.exe reads batch files in the console code page.)
 setlocal
 set "APP=%~dp0"
@@ -22,8 +22,9 @@ set "PY=%APP%python\python.exe"
 
 if not "%~1"=="" goto cli
 
-title KiraKara
+title MiliKara
 set "OPEN=--open"
+if defined MILIKARA_NO_BROWSER set "OPEN="
 if defined KIRAKARA_NO_BROWSER set "OPEN="
 "%PY%" -m kara_align.cli serve --port auto %OPEN%
 if errorlevel 1 pause
