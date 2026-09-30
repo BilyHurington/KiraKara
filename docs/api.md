@@ -285,7 +285,7 @@ Warnings say when the result is stale or partial and how many lines were skipped
 dots above the start of the first line (`intro`) and of a line after a pause of at least `min_gap_ms` since everything before it
 was sung (`interlude`); in the last `dots` seconds one goes each second (evenly over a shorter wait), the last as the line's sweep
 starts (so with `advance_ms`). A line can override the rules: `Line.countdown` true / false (null = the rules), set with
-`PATCH …/lines/{id}` `{countdown: "on"|"off"|"auto"}`. Such a line is shown early enough for its dots. In the ASS the dots are
+`PATCH …/lines/{id}` `{countdown: "on"|"off"|"auto"}`. Such a line appears as its countdown begins (`dots` seconds before it is sung, not earlier with `early_show`), so the first dot goes a second after it appears. In the ASS the dots are
 drawings with the style `KDots`. Simple-mode tasks: `task_style.countdown_intro` / `countdown_interlude` (null = as the style says).
 
 **Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, color, color_unsung, color_sung, outline_color, glow_unsung,

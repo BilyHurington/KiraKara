@@ -473,9 +473,10 @@ def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
     for ll in lines:
         ll.show_to = ll.end + hold
 
-        # a line with countdown dots is shown early enough for all of them
-        lead_ll = max(lead, ll.countdown_ms + 300) if ll.countdown_ms else lead
-        early_ll = max(early, lead_ll)
+        # a line with countdown dots appears as its countdown begins (the first dot goes a second later),
+        # not earlier with the early show: the dots never sit still waiting
+        lead_ll = ll.countdown_ms or lead
+        early_ll = ll.countdown_ms or early
 
         def appear(slot: int) -> int:
             prev = last.get(slot)

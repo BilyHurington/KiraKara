@@ -54,13 +54,18 @@ def test_dots_in_the_subtitles(tmp_path):
     assert ",KDots," not in text
 
 
-def test_a_line_with_a_countdown_is_shown_in_time_for_it():
-    st = KaraokeStyle()
-    st.timing.early_show, st.timing.lead_in_ms = False, 1000
-    laid = _laid((10000, 12000), (30000, 32000))
+def test_a_line_with_a_countdown_appears_as_its_countdown_begins():
+    st = KaraokeStyle()  # early show on: other lines appear up to 4 s ahead
+    laid = _laid((10000, 12000), (30000, 32000), (33000, 34000))
     A.plan_countdowns(laid, st)
     A.schedule(laid, st)
-    assert [ll.show_from for ll in laid] == [10000 - 3300, 30000 - 3300]
+    # the countdown lines exactly 3 s ahead (3 dots, the first goes a second later), the other as before
+    assert [ll.start - ll.show_from for ll in laid] == [3000, 3000, 4000]
+    assert A.countdown_dots(laid[0].show_from, laid[0].start, 3) == [10000, 9000, 8000]
+    st.timing.early_show, st.timing.lead_in_ms, st.countdown.dots = False, 1000, 5
+    A.plan_countdowns(laid, st)
+    A.schedule(laid, st)
+    assert [ll.start - ll.show_from for ll in laid] == [5000, 5000, 1000]
 
 
 def test_per_line_setting(tmp_path):
