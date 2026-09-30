@@ -90,5 +90,11 @@ describe('assigning singers', () => {
     expect(caretAt(steps, 2000)).toEqual({ lineId: 'A', pos: 2, waiting: false });  // just after the line
     expect(caretAt(steps, 4000)).toEqual({ lineId: 'B', pos: 0, waiting: true });  // waits at the next line
   });
+
+  it('a selection never starts or ends on a space', () => {
+    const rows = [line('A', ['君', ' ', 'for', ' '])].map((l) => ({ line: l, words: wordsOf(l) }));
+    expect(wordRange(rows, [0, 0], [0, 3]).get('A')).toEqual([[0, 5]]);
+    expect(wordRange(rows, [0, 1], [0, 1]).get('A')).toBeUndefined();
+  });
 });
 

@@ -423,6 +423,8 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, name
           return (
             <span key={gi} style={style}>
               {g.words.map(({ w, wi }) => {
+                // a space is nobody's: never selected, highlighted or coloured on its own
+                if (!w.text.trim()) return <span key={wi} onMouseDown={(e) => e.preventDefault()}>{w.text}</span>;
                 const picked = isSelected(sel, line.id, w.start, w.end) && !full;
                 // characters within the word sung by others (only data made elsewhere splits a word)
                 const odd = [...line.text.slice(w.start, w.end)].some((_, i) => idsKey(chars[w.start + i] ?? []) !== idsKey(g.ids));

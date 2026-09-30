@@ -141,6 +141,28 @@ describe('singers page', () => {
     await waitFor(() => expect(container.querySelector('[data-row][data-playing]')?.getAttribute('data-row')).toBe('L0002'));
   });
 
+  it('a space cannot be selected', async () => {
+    const pv = fixturePV();
+    const l = pv.project.lyrics.lines[0];
+    l.text = '君と for';
+    l.segments = [l.segments[0], l.segments[1], { ...l.segments[1], id: 'sp', surface: ' ', units: [] },
+      { ...l.segments[1], id: 'en', surface: 'for', units: [] }];
+    seedStore('singers', pv);
+    server();
+    const { container } = renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    const space = [...container.querySelectorAll('[data-text="L0001"] span')].find((x) => x.textContent === ' ')!;
+    expect(space.hasAttribute('data-word')).toBe(false);
+    fireEvent.mouseDown(space, { button: 0 });
+    fireEvent.mouseUp(window);
+    expect(screen.getByRole('status')).toHaveTextContent('未选择');
+    // a drag from と to "for" takes the space between, but a selection never starts or ends on one
+    fireEvent.mouseDown(container.querySelector('[data-word="0:1"]')!, { button: 0 });
+    fireEvent.mouseUp(window);
+    fireEvent.mouseDown(container.querySelector('[data-word="0:3"]')!, { button: 0, shiftKey: true });
+    expect(space.className).not.toContain('outline');
+  });
+
   it('the singer list is saved; the step shows who sings', async () => {
     seedStore('singers');
     const { api, pv } = server();

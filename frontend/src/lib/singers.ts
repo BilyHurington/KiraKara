@@ -149,8 +149,11 @@ export function wordRange(lines: { line: Line; words: Word[] }[], a: [number, nu
   for (let li = from[0]; li <= to[0]; li++) {
     const { line, words } = lines[li];
     if (!words.length) continue;
-    const w0 = li === from[0] ? from[1] : 0;
-    const w1 = li === to[0] ? to[1] : words.length - 1;
+    let w0 = li === from[0] ? from[1] : 0;
+    let w1 = li === to[0] ? to[1] : words.length - 1;
+    // spaces at either end are not part of a selection
+    while (w0 <= w1 && !words[w0].text.trim()) w0++;
+    while (w1 >= w0 && !words[w1].text.trim()) w1--;
     if (w1 < w0) continue;
     sel.set(line.id, [[words[w0].start, words[w1].end]]);
   }
