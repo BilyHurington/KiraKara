@@ -6,9 +6,9 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
 import { isEnter, isEscape } from '@/lib/keys';
 import {
-  freeKey, idsKey, keyLabel, keyOf, mixBackground, parseCombo, singerLabel, withKey, withNewSinger, type KeyOwner,
+  freeKey, freePair, idsKey, keyLabel, keyOf, mixBackground, parseCombo, singerLabel, withKey, withNewSinger, type KeyOwner,
 } from '@/lib/singers';
-import type { KaraokeSinger, KaraokeSingers, SingerColors, SingerPreset } from '@/lib/types';
+import type { KaraokeSinger, KaraokeSingers, SingerColors, SingerCombo, SingerDirection, SingerMix, SingerPreset } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { deleteSingerPreset, loadSingerPresets, saveSingerPreset } from '@/store/singers';
 import { Button, Card, CardBody, CardHeader, ConfirmButton, Input, Segmented, Select, Tip } from '@/components/ui';
@@ -51,7 +51,14 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
   const add = () => onChange(withNewSinger(singers));
   const combos = singers.combos ?? [];
   const noKey = freeKey(singers) === null;
-  const addCombo = () => onChange({ ...singers, combos: [...combos, { key: freeKey(singers) ?? '', singers: [1, 2] }] });
+  const addCombo = () => {
+    const ids = freePair(singers);
+    if (!ids) {
+      toast('info', '每两位演唱者都已经有组合了', '可以把某个组合改成三个人，如 1+2+3');
+      return;
+    }
+    onChange({ ...singers, combos: [...combos, { key: freeKey(singers) ?? '', singers: ids }] });
+  };
   const ownerName = (o: KeyOwner) => ('singer' in o ? singerLabel(members, o.singer) : `组合 ${combos[o.combo]?.singers.join('+')}`);
   const setKey = (o: KeyOwner, k: string) => {
     const { next, swapped } = withKey(singers, o, k);
@@ -120,9 +127,17 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
             <p className="text-xs text-subtle">常一起唱的几个人可以存到一个键上，例如把 1+2 存到 {keyLabel(freeKey(singers) ?? '3')}：以后按一下就指定为两人一起唱。</p>
             {combos.map((c, ci) => (
               <ComboRow key={ci} combo={c} count={members.length} colors={c.singers.map((n) => members[n - 1]?.color).filter(Boolean) as string[]}
-                mix={singers.mix} direction={singers.direction}
+                defaults={singers}
                 keyButton={<KeyButton value={c.key} owner={`组合 ${c.singers.join('+')}`} onChange={(k) => setKey({ combo: ci }, k)} />}
-                onChange={(ids) => onChange({ ...singers, combos: combos.map((x, j) => (j === ci ? { ...x, singers: ids } : x)) })}
+                onLook={(look) => onChange({ ...singers, combos: combos.map((x, j) => (j === ci ? { ...x, ...look } : x)) })}
+                onChange={(ids) => {
+                  if (combos.some((x, j) => j !== ci && idsKey(x.singers) === idsKey(ids))) {
+                    toast('info', `组合 ${ids.join('+')} 已经有了`, '同一组演唱者（同样的顺序）只能有一个组合');
+                    return false;
+                  }
+                  onChange({ ...singers, combos: combos.map((x, j) => (j === ci ? { ...x, singers: ids } : x)) });
+                  return true;
+                }}
                 onRemove={() => onChange({ ...singers, combos: combos.filter((_, j) => j !== ci) })} />
             ))}
             <Button size="xs" variant="outline" icon={<Plus className="size-3.5" />} onClick={addCombo}>添加组合</Button>
@@ -130,7 +145,7 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
         )}
 
         <div className="space-y-2.5 border-t border-line pt-3">
-          <div className="text-[13px] font-medium">几个人一起唱的部分</div>
+          <div className="text-[13px] font-medium">几个人一起唱的部分（默认）</div>
           <div className="flex flex-wrap items-center gap-2">
             <Segmented size="sm" label="一起唱的效果" value={singers.mix} onChange={(v) => onChange({ ...singers, mix: v })}
               options={[{ value: 'split', label: '分色' }, { value: 'gradient', label: '渐变' }]} />
@@ -147,9 +162,21 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
           </div>
           <p className="text-xs text-subtle">
             {singers.direction === 'vertical'
-              ? `每个字${singers.mix === 'split' ? '上下分成几段' : '从上到下渐变'}：第一个人在上，依次往下（如 1+2：上半 1 号、下半 2 号）。注音字小，用最上面那个人的颜色。`
-              : `一起唱的一整段${singers.mix === 'split' ? '从左到右分成几段' : '从左到右渐变'}：第一个人在左，依次往右；注音跟着所在的位置。`}
-            翻译用第一个人的颜色。
+              ? `每个字${singers.mix === 'split' ? '上下分成几段' : '从上到下渐变'}：第一个人在上，依次往下（如 1+2：上半 1 号、下半 2 号）。`
+              : `一起唱的一整段${singers.mix === 'split' ? '从左到右分成几段' : '从左到右渐变'}：第一个人在左，依次往右。`}
+            组合可以有自己的效果（在上面的组合里选）。翻译用第一个人的颜色。
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted">注音</span>
+            <Segmented size="sm" label="一起唱时注音的颜色" value={singers.ruby ?? 'auto'} onChange={(v) => onChange({ ...singers, ruby: v })}
+              options={[{ value: 'auto', label: '自动' }, { value: 'split', label: '跟着分色' }, { value: 'first', label: '第一位的颜色' }]} />
+          </div>
+          <p className="text-xs text-subtle">
+            {{
+              auto: '上下分色时注音字太小，整个用第一位（最上面那个人）的颜色；左右分色时跟着所在的位置。',
+              split: '注音和歌词一样分色：上下分色时注音也分成上下几段，左右时跟着所在的位置。',
+              first: '注音整个用第一位演唱者的颜色，不分色。',
+            }[singers.ruby ?? 'auto']}
           </p>
         </div>
       </CardBody>
@@ -158,25 +185,43 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
 }
 
 /** One saved combination: its key and who sings together (edited as "1+2"). */
-function ComboRow({ combo, count, colors, mix, direction, keyButton, onChange, onRemove }: {
-  combo: { key: string; singers: number[] }; count: number; colors: string[];
-  mix: 'split' | 'gradient'; direction: 'vertical' | 'horizontal'; keyButton: React.ReactNode;
-  onChange: (ids: number[]) => void; onRemove: () => void;
+const LOOKS: { value: string; label: string }[] = [
+  { value: 'split-vertical', label: '上下分色' }, { value: 'split-horizontal', label: '左右分色' },
+  { value: 'gradient-vertical', label: '上下渐变' }, { value: 'gradient-horizontal', label: '左右渐变' },
+];
+const lookName = (mix: SingerMix, direction: SingerDirection) => LOOKS.find((l) => l.value === `${mix}-${direction}`)!.label;
+
+function ComboRow({ combo, count, colors, defaults, keyButton, onChange, onLook, onRemove }: {
+  combo: SingerCombo; count: number; colors: string[]; defaults: KaraokeSingers; keyButton: React.ReactNode;
+  /** false: refused (the text goes back) */
+  onChange: (ids: number[]) => boolean;
+  onLook: (look: { mix: SingerMix | null; direction: SingerDirection | null }) => void;
+  onRemove: () => void;
 }) {
   const [text, setText] = useState(combo.singers.join('+'));
   useEffect(() => { setText(combo.singers.join('+')); }, [idsKey(combo.singers)]); // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
     const ids = parseCombo(text, count);
-    if (ids.length >= 2 && idsKey(ids) !== idsKey(combo.singers)) onChange(ids);
-    else setText(combo.singers.join('+'));
+    if (!(ids.length >= 2 && idsKey(ids) !== idsKey(combo.singers) && onChange(ids))) setText(combo.singers.join('+'));
   };
+  const own = combo.mix || combo.direction ? `${combo.mix || defaults.mix}-${combo.direction || defaults.direction}` : '';
+  const mix = combo.mix || defaults.mix;
+  const direction = combo.direction || defaults.direction;
   return (
     <div className="flex items-center gap-2">
       <span className="size-6 shrink-0 rounded-md shadow-sm" aria-hidden
         style={{ background: colors.length ? mixBackground(colors, mix, direction) : 'var(--color-line)' }} />
-      <Input className="h-8 w-28" value={text} aria-label={`组合 ${combo.singers.join('+')} 的演唱者`} placeholder="如 1+2"
+      <Input className="h-8 w-20" value={text} aria-label={`组合 ${combo.singers.join('+')} 的演唱者`} placeholder="如 1+2"
         onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
-      <span className="ml-auto">{keyButton}</span>
+      <Select className="h-8 min-w-0 flex-1 text-xs" aria-label={`组合 ${combo.singers.join('+')} 的效果`} value={own}
+        onChange={(e) => {
+          const [m, d] = e.target.value ? e.target.value.split('-') : [null, null];
+          onLook({ mix: m as SingerMix | null, direction: d as SingerDirection | null });
+        }}>
+        <option value="">默认（{lookName(defaults.mix, defaults.direction)}）</option>
+        {LOOKS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+      </Select>
+      <span>{keyButton}</span>
       <button type="button" className="focus-ring rounded-md p-1 text-muted hover:bg-surface-2 hover:text-fg"
         aria-label={`删除组合 ${combo.singers.join('+')}`} onClick={onRemove}>
         <X className="size-4" />

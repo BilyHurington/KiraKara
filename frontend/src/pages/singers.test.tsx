@@ -161,6 +161,35 @@ describe('singers page', () => {
       .toBe('2a13456789b');
   });
 
+  it('a combination gets its own look; the reading colour is a setting of all parts sung together', async () => {
+    seedStore('singers');
+    const { api, pv } = server();
+    pv.project.karaoke!.singers!.combos = [{ key: '3', singers: [1, 2] }];
+    renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    const look = screen.getByRole('combobox', { name: '组合 1+2 的效果' });
+    expect(look).toHaveValue('');  // follows the default
+    expect(screen.getByRole('option', { name: '默认（上下分色）' })).toBeInTheDocument();
+    fireEvent.change(look, { target: { value: 'gradient-horizontal' } });
+    fireEvent.click(screen.getByRole('radio', { name: '跟着分色' }));
+    await act(() => flushSingers());
+    const sent = api.find('PUT', '/karaoke/singers').at(-1)!.body;
+    expect(sent.combos).toEqual([{ key: '3', singers: [1, 2], mix: 'gradient', direction: 'horizontal' }]);
+    expect(sent.ruby).toBe('split');
+    fireEvent.change(look, { target: { value: '' } });
+    await act(() => flushSingers());
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.combos[0]).toMatchObject({ mix: null, direction: null });
+    // a new combination takes two singers without one yet (here: 2 on top of 1); the same singers twice are refused
+    fireEvent.click(screen.getByRole('button', { name: '添加组合' }));
+    const second = screen.getByRole('textbox', { name: '组合 2+1 的演唱者' });
+    fireEvent.change(second, { target: { value: '1+2' } });
+    fireEvent.blur(second);
+    expect(second).toHaveValue('2+1');
+    await waitFor(() => expect(useApp.getState().toasts.map((t) => t.title)).toContain('组合 1+2 已经有了'));
+    fireEvent.click(screen.getByRole('button', { name: '添加组合' }));
+    await waitFor(() => expect(useApp.getState().toasts.map((t) => t.title)).toContain('每两位演唱者都已经有组合了'));
+  });
+
   it('a saved set of singers is saved and loaded', async () => {
     seedStore('singers');
     const { pv } = server();

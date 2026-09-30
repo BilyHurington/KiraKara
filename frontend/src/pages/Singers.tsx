@@ -10,7 +10,7 @@ import { api } from '@/lib/api';
 import { cn, fmtMs } from '@/lib/format';
 import { ignoreShortcut, isEnter, MOD_KEY } from '@/lib/keys';
 import {
-  caretAt, caretTimeline, effective, freeKey, idsKey, isSelected, keyIds, keyLabel, keyOf, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
+  caretAt, caretTimeline, effective, freeKey, idsKey, isSelected, keyIds, keyLabel, keyOf, lineSingers, lookOf, mixBackground, parseCombo, rangeSingers, singerLabel, union,
   usage, withCombo, wordRange, wordsOf, type CaretStep, type Selection, type Word,
 } from '@/lib/singers';
 import type { KaraokeSingers, KaraokeStyle, Line } from '@/lib/types';
@@ -351,7 +351,7 @@ export function SingersPage() {
                 <Button key={`c${ci}`} size="xs" variant="outline" disabled={!nLines} onClick={() => pressIds(c.singers)}
                   title={`指定为 ${label(c.singers)} 一起唱${c.key ? `（按 ${keyLabel(c.key)}）` : ''}`}>
                   <span className="size-4 rounded" aria-hidden
-                    style={{ background: mixBackground(c.singers.map((n) => colorOf(n) ?? '#888'), singers.mix, singers.direction) }} />
+                    style={{ background: mixBackground(c.singers.map((n) => colorOf(n) ?? '#888'), lookOf(singers, c.singers).mix, lookOf(singers, c.singers).direction) }} />
                   <span className="max-w-28 truncate">{c.singers.join('+')}</span>
                   {c.key && <Kbd>{keyLabel(c.key)}</Kbd>}
                 </Button>
@@ -421,7 +421,8 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, name
     const cols = ids.map(colorOf).filter((c): c is string => !!c);
     if (!cols.length) return undefined;
     if (cols.length === 1) return { color: cols[0] };
-    return { backgroundImage: mixBackground(cols, singers.mix, singers.direction), WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' };
+    const look = lookOf(singers, ids);
+    return { backgroundImage: mixBackground(cols, look.mix, look.direction), WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' };
   };
   return (
     <div data-row={line.id} className={cn('group flex scroll-mt-32 scroll-mb-8 items-start gap-2 rounded-lg px-2 py-1',
@@ -431,7 +432,7 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, name
         {index}
       </button>
       <span aria-hidden className="mt-1.5 h-5 w-1.5 shrink-0 rounded-full"
-        style={{ background: own.length ? mixBackground(own.map((n) => colorOf(n)!), singers.mix, 'vertical') : 'var(--color-line)' }} />
+        style={{ background: own.length ? mixBackground(own.map((n) => colorOf(n)!), lookOf(singers, own).mix, 'vertical') : 'var(--color-line)' }} />
       <div data-text={line.id} className="min-w-0 flex-1 cursor-text text-[17px] leading-8 font-medium select-none">
         {groups.map((g, gi) => {
           // a run of words with the same singers is painted as one piece (side by side: left to right across it)

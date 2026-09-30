@@ -912,12 +912,19 @@ class KaraokeSinger(_KaraokeBase):
     glow_sung: str = _color("", follow=True)
 
 
+SingerMix = Literal["split", "gradient"]
+SingerDirection = Literal["vertical", "horizontal"]
+
+
 class KaraokeSingerCombo(_KaraokeBase):
-    """A shortcut for singers who often sing together: key ``key`` on the 演唱者 page assigns
-    ``singers`` (e.g. 3 = 1+2).  A key no singer and no other combination has."""
+    """Singers who often sing together: key ``key`` on the 演唱者 page assigns ``singers`` (e.g.
+    3 = 1+2; a key no singer and no other combination has).  Parts sung by these singers look as
+    ``mix`` / ``direction`` say (None: as the singers' own setting, KaraokeSingers.look)."""
 
     key: str = Field(default="", max_length=1)
     singers: list[int] = Field(default_factory=list)
+    mix: Optional[SingerMix] = None
+    direction: Optional[SingerDirection] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -934,12 +941,16 @@ class KaraokeSingers(_KaraokeBase):
     kept in the lyrics (``Line.singers``, ``Line.singer_spans``), by number."""
 
     members: list[KaraokeSinger] = Field(default_factory=list)
-    # parts sung together: each singer's colours in its own band (split) or blended (gradient)
-    mix: Literal["split", "gradient"] = "split"
-    # vertical: top to bottom (upper half 1, lower half 2; a reading takes the top singer's colours);
-    # horizontal: left to right across each run sung together
-    direction: Literal["vertical", "horizontal"] = "vertical"
-    # keys for singers who sing together
+    # parts sung together (unless a combination of the same singers says otherwise): each singer's
+    # colours in its own band (split) or blended (gradient)
+    mix: SingerMix = "split"
+    # vertical: top to bottom (upper half 1, lower half 2); horizontal: left to right across each run
+    # sung together
+    direction: SingerDirection = "vertical"
+    # the reading over a part sung together: "split" like its lyric, "first" in the first singer's
+    # colours, "auto": the first singer's when split top to bottom (too small for bands), else split
+    ruby: Literal["auto", "split", "first"] = "auto"
+    # singers who sing together: a key, and their own look
     combos: list[KaraokeSingerCombo] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -982,15 +993,33 @@ class KaraokeSingers(_KaraokeBase):
         members = [m.model_copy(update={"key": check(m.key, f"第 {i + 1} 位演唱者")}) for i, m in enumerate(self.members)]
         n = len(members)
         keep = []
+        combos_seen: set[tuple[int, ...]] = set()
         for c in self.combos:
             ids = [i for i in c.singers if i <= n]
-            if len(ids) < 2:
+            name = "组合 " + "+".join(map(str, ids))
+            problem = (f"组合 {c.key.upper() or '（无快捷键）'} 至少要有两位演唱者" if len(ids) < 2
+                       else f"{name}已经有了" if tuple(ids) in combos_seen else None)
+            if problem:
                 if strict:
-                    raise ValueError(f"组合 {c.key.upper() or '（无快捷键）'} 至少要有两位演唱者")
+                    raise ValueError(problem)
                 continue
-            keep.append(c.model_copy(update={"singers": ids, "key": check(c.key, "组合 " + "+".join(map(str, ids)))}))
+            combos_seen.add(tuple(ids))
+            keep.append(c.model_copy(update={"singers": ids, "key": check(c.key, name)}))
         self.members, self.combos = members, keep
         return self
+
+    def look(self, ids: tuple[int, ...] | list[int]) -> tuple[str, str]:
+        """(mix, direction) of a part sung by ``ids``: a combination of exactly these singers (in this
+        order, else in any order) sets its own, the rest as the singers' setting."""
+        ids = tuple(ids)
+        combo = next((c for c in self.combos if tuple(c.singers) == ids), None) \
+            or next((c for c in self.combos if sorted(c.singers) == sorted(ids)), None)
+        return ((combo.mix if combo and combo.mix else self.mix),
+                (combo.direction if combo and combo.direction else self.direction))
+
+    def ruby_split(self, direction: str) -> bool:
+        """Is the reading over a part sung together split like its lyric (else: the first singer's)?"""
+        return self.ruby == "split" or (self.ruby == "auto" and direction == "horizontal")
 
     def free_key(self) -> str:
         """The first key (in SINGER_KEYS order) no singer or combination has; "" when all are taken."""

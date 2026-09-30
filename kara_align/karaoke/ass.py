@@ -1141,35 +1141,35 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     def bands_for(ids: tuple[int, ...], cx: float, width: float, bottom_y: float, size: float,
                   ink: tuple[float, float], run: Optional[tuple[float, float]],
                   ruby: bool = False) -> tuple[list[Band], list[Band]]:
-        """The bands of a chunk's text and of its glow.  The glow of a part sung together always blends
-        (a blurred edge cut sharp between two colours shows as a seam beside the glyphs).  Top to
-        bottom, a reading is too small to split: it takes the top singer's colours."""
+        """The bands of a chunk's text and of its glow, in the look of these singers (their combination's
+        or the singers' setting).  The glow of a part sung together always blends (a blurred edge cut
+        sharp between two colours shows as a seam beside the glyphs).  A reading is split like its
+        lyric, or takes the first singer's colours (KaraokeSingers.ruby)."""
         ids = live(ids)
-        if len(ids) < 2 or (ruby and sg.direction == "vertical"):
-            one = plan_bands(ids[:1], scol, sg.mix, sg.direction, 0, 0, None, W, H, k)
+        mix, direction = sg.look(ids)
+        if len(ids) < 2 or (ruby and not sg.ruby_split(direction)):
+            one = plan_bands(ids[:1], scol, mix, direction, 0, 0, None, W, H, k)
             return one, one
         top = bottom_y - size
         y0, y1 = top + size * ink[0], top + size * ink[1]
-        span = run if sg.direction == "horizontal" else None
+        span = run if direction == "horizontal" else None
         reach = (cx - width / 2 - edge, cx + width / 2 + edge)
-        fill = plan_bands(ids, scol, sg.mix, sg.direction, y0, y1, span, W, H, k, reach)
-        if not glow.enabled or sg.mix == "gradient":
+        fill = plan_bands(ids, scol, mix, direction, y0, y1, span, W, H, k, reach)
+        if not glow.enabled or mix == "gradient":
             return fill, fill
-        return fill, plan_bands(ids, scol, "gradient", sg.direction, y0, y1, span, W, H, k, reach)
+        return fill, plan_bands(ids, scol, "gradient", direction, y0, y1, span, W, H, k, reach)
 
     def runs_of(ll: LaidLine, cxs: list[float], scale: float) -> list[Optional[tuple[float, float]]]:
         """For each chunk sung together (side by side): the x range of its whole run, the neighbouring
         chunks with the same singers (their lyric and readings)."""
         out: list[Optional[tuple[float, float]]] = [None] * len(ll.chunks)
-        if sg.direction != "horizontal":
-            return out
         i = 0
         while i < len(ll.chunks):
             ids = live(ll.chunks[i].singers)
             j = i
             while j + 1 < len(ll.chunks) and live(ll.chunks[j + 1].singers) == ids:
                 j += 1
-            if len(ids) >= 2:
+            if len(ids) >= 2 and sg.look(ids)[1] == "horizontal":
                 lo, hi = float("inf"), float("-inf")
                 for c, cx in zip(ll.chunks[i:j + 1], cxs[i:j + 1]):
                     half = max(m_main.width(c.base_text), m_ruby.width(c.ruby_text) if (c.ruby and m_ruby) else 0) * scale / 2

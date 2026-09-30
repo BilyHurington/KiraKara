@@ -5,7 +5,7 @@
 // selection is a set of character ranges per line; assigning replaces what the selected
 // characters had (a whole line: the line's own singers, its parts cleared).
 
-import type { KaraokeSinger, KaraokeSingers, Line, SingerSpan } from './types';
+import type { KaraokeSinger, KaraokeSingers, Line, SingerDirection, SingerMix, SingerSpan } from './types';
 
 /** A new singer's colour: the first of these no other singer has (as the server picks them). */
 export const SINGER_SWATCHES = ['#ED35B3', '#2F80ED', '#F5C400', '#3CC46A', '#FF8A1E', '#8B5CF6', '#1FB5C9', '#FF4D6D', '#8A8A8A'];
@@ -205,6 +205,16 @@ export function newSinger(members: KaraokeSinger[], key = ''): KaraokeSinger {
 
 export const singerLabel = (members: KaraokeSinger[], n: number) => members[n - 1]?.name?.trim() || `演唱者 ${n}`;
 
+/** The look of a part sung by `ids`: a combination of exactly these singers (this order, else any
+ *  order) has its own, the rest the singers' setting (as KaraokeSingers.look). */
+export function lookOf(sg: KaraokeSingers, ids: readonly number[]): { mix: SingerMix; direction: SingerDirection } {
+  const key = idsKey(ids);
+  const sorted = idsKey([...ids].sort((a, b) => a - b));
+  const combo = sg.combos?.find((c) => idsKey(c.singers) === key)
+    ?? sg.combos?.find((c) => idsKey([...c.singers].sort((a, b) => a - b)) === sorted);
+  return { mix: combo?.mix || sg.mix, direction: combo?.direction || sg.direction };
+}
+
 /** CSS background drawing parts sung together the way the subtitles do (for text with background-clip: text). */
 export function mixBackground(colors: string[], mix: 'split' | 'gradient', direction: 'vertical' | 'horizontal') {
   const dir = direction === 'vertical' ? 'to bottom' : 'to right';
@@ -271,6 +281,22 @@ export function withKey(sg: KaraokeSingers, o: KeyOwner, k: string): { next: Kar
 /** A new singer gets the next number and the first free key. */
 export function withNewSinger(sg: KaraokeSingers): KaraokeSingers {
   return { ...sg, members: [...sg.members, newSinger(sg.members, freeKey(sg) ?? '')] };
+}
+
+/** The first two singers without a combination yet: 1+2, 1+3 … then the other way round (2+1: 2 on
+ *  top / left); null when every pair has one. */
+export function freePair(sg: KaraokeSingers): number[] | null {
+  const n = sg.members.length;
+  const have = new Set((sg.combos ?? []).map((c) => idsKey(c.singers)));
+  for (const flip of [false, true]) {
+    for (let a = 1; a <= n; a++) {
+      for (let b = a + 1; b <= n; b++) {
+        const ids = flip ? [b, a] : [a, b];
+        if (!have.has(idsKey(ids))) return ids;
+      }
+    }
+  }
+  return null;
 }
 
 /** Save singers sung together on the first free key (the same combination again: its key). */

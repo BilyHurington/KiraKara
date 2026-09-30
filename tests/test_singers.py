@@ -11,7 +11,7 @@ from kara_align import service as S
 from kara_align.karaoke import ass as A
 from kara_align.lyrics import singers as SG
 from kara_align.lyrics.pairing import merge_lines, split_line
-from kara_align.models import KaraokeSinger, KaraokeStyle, Line, LyricsDoc, SingerSpan
+from kara_align.models import KaraokeSinger, KaraokeSingerCombo, KaraokeStyle, Line, LyricsDoc, SingerSpan
 
 from .test_karaoke import _home, _project, needs_ffmpeg  # noqa: F401  (the fixture is used by name)
 
@@ -266,6 +266,55 @@ def test_readings_take_the_top_singer_when_split_top_to_bottom(tmp_path):
     # 舞 (both) has the reading ま: one copy, singer 1's
     ruby = [e for e in text.splitlines() if ",KRuby_" in e and e.endswith("ま")]
     assert ruby and {e.split(",")[3] for e in ruby} == {"KRuby_1"} and not any("\\clip" in e for e in ruby)
+
+
+
+def _ruby(text, body):
+    return [e for e in text.splitlines() if ",KRuby_" in e and e.endswith(body)]
+
+
+def test_readings_split_or_first_as_chosen(tmp_path):
+    h = _project(tmp_path)
+    _two_singers(h)
+    h.project.karaoke.singers.ruby = "split"  # top to bottom, the reading split too
+    text, _ = S.karaoke_ass(h)
+    ma = _ruby(text, "ま")
+    assert [e.split(",")[3] for e in ma] == ["KRuby_1", "KRuby_2"] and all("\\clip(0," in e for e in ma)
+    # side by side: by default the reading follows its place; "first": the first singer's colours
+    _two_singers(h, direction="horizontal")
+    text, _ = S.karaoke_ass(h)
+    ma = _ruby(text, "ま")
+    rects = [tuple(map(int, re.search(r"\\clip\((\d+),(\d+),(\d+),(\d+)\)", e).groups())) for e in ma]
+    assert rects and all(r[1] == 0 and r[3] == 1080 for r in rects)  # cut by where it is, the whole height
+    h.project.karaoke.singers.ruby = "first"
+    text, _ = S.karaoke_ass(h)
+    assert {e.split(",")[3] for e in _ruby(text, "ま")} == {"KRuby_1"} and not any("\\clip" in e for e in _ruby(text, "ま"))
+
+
+def test_a_combination_has_its_own_look(tmp_path):
+    from kara_align.models import KaraokeSingers
+
+    h = _project(tmp_path)
+    _two_singers(h)  # the default: split top to bottom
+    sg = h.project.karaoke.singers
+    sg.combos = [KaraokeSingerCombo(key="3", singers=[1, 2], mix="gradient", direction="horizontal")]
+    assert sg.look((1, 2)) == ("gradient", "horizontal") and sg.look((2, 1)) == ("gradient", "horizontal")
+    assert sg.look((1, 3)) == ("split", "vertical")
+    text, _ = S.karaoke_ass(h)
+    ni = [e for e in _events(text, "}に") if ",KMain_" in e]
+    # 「に舞う」 blended from left to right: strips side by side, the whole height each
+    rects = [tuple(map(int, re.search(r"\\clip\((\d+),(\d+),(\d+),(\d+)\)", e).groups())) for e in ni]
+    assert rects and all(r[1] == 0 and r[3] == 1080 for r in rects) and len(rects) >= 2
+    # a combination that only sets the direction keeps the default mix
+    sg.combos = [KaraokeSingerCombo(key="3", singers=[2, 1], direction="horizontal")]
+    assert sg.look((1, 2)) == ("split", "horizontal")
+    # the same singers twice in the same order: refused when saved, dropped when loaded
+    two = [{"key": "3", "singers": [1, 2]}, {"key": "4", "singers": [1, 2], "mix": "gradient"}]
+    members = [{"color": "#ED35B3"}, {"color": "#2F80ED"}]
+    assert len(KaraokeSingers.model_validate({"members": members, "combos": two}).combos) == 1
+    with pytest.raises(Exception):
+        KaraokeSingers.model_validate({"members": members, "combos": two}, context={"strict": True})
+    assert KaraokeSingers.model_validate({"members": members, "ruby": "bad"}).ruby == "auto"
 
 
 def test_saved_combinations(tmp_path):

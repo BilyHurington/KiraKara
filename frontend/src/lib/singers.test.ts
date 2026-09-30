@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Line } from './types';
 import {
   assign, caretAt, caretTimeline, coversLine, effective, freeKey, keyIds, keyOf, mergeRanges, mixBackground, newSinger, newSingerColor, parseCombo,
-  rangeSingers, SINGER_KEYS, SINGER_SWATCHES, union, withCombo, withKey, withNewSinger, wordRange, wordsOf, type LineSingers,
+  lookOf, rangeSingers, SINGER_KEYS, SINGER_SWATCHES, union, withCombo, withKey, withNewSinger, wordRange, wordsOf, type LineSingers,
 } from './singers';
 
 const ls = (text: string, singers: number[] = [], spans: LineSingers['spans'] = []): LineSingers => ({ line_id: 'L', text, singers, spans });
@@ -82,6 +82,17 @@ describe('assigning singers', () => {
     expect(keyOf('Q')).toBe('q');
     expect(keyOf('l')).toBe('');
     expect(keyOf('Enter')).toBe('');
+  });
+
+  it('a combination has its own look; other parts sung together follow the default', () => {
+    const sg = {
+      members: [newSinger([]), newSinger([newSinger([])]), newSinger([])], mix: 'split' as const, direction: 'vertical' as const,
+      combos: [{ key: '4', singers: [1, 2], mix: 'gradient' as const, direction: 'horizontal' as const }, { key: '5', singers: [1, 3], direction: 'horizontal' as const }],
+    };
+    expect(lookOf(sg, [1, 2])).toEqual({ mix: 'gradient', direction: 'horizontal' });
+    expect(lookOf(sg, [2, 1])).toEqual({ mix: 'gradient', direction: 'horizontal' });  // the same singers in another order
+    expect(lookOf(sg, [1, 3])).toEqual({ mix: 'split', direction: 'horizontal' });  // only the direction set
+    expect(lookOf(sg, [2, 3])).toEqual({ mix: 'split', direction: 'vertical' });
   });
 
   it('any number of singers: colours past the swatches are all different', () => {

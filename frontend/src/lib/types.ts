@@ -54,11 +54,18 @@ export interface KaraokeSinger {
   color: string; color_unsung: string; color_sung: string; outline_color: string; glow_unsung: string; glow_sung: string;
 }
 /** Singers for songs with several voices; parts sung together: split into bands or blended, top-to-bottom or side by side */
-/** A key for singers who sing together (e.g. key 3 = 1+2); no singer and no other combination has it */
-export interface SingerCombo { key: string; singers: number[] }
+export type SingerMix = 'split' | 'gradient';
+export type SingerDirection = 'vertical' | 'horizontal';
+/** Singers who sing together: a key (e.g. 3 = 1+2; no singer and no other combination has it) and
+ *  their own look (null: the singers' setting) */
+export interface SingerCombo { key: string; singers: number[]; mix?: SingerMix | null; direction?: SingerDirection | null }
 export interface KaraokeSingers {
-  members: KaraokeSinger[]; mix: 'split' | 'gradient'; direction: 'vertical' | 'horizontal';
-  /** vertical: top to bottom (readings take the top singer); horizontal: left to right across each run sung together */
+  /** the look of parts sung together, unless a combination of the same singers has its own;
+   *  vertical: top to bottom; horizontal: left to right across each run sung together */
+  members: KaraokeSinger[]; mix: SingerMix; direction: SingerDirection;
+  /** the reading over a part sung together: split like the lyric, the first singer's colours, or
+   *  'auto' (the first singer's when split top to bottom) */
+  ruby?: 'auto' | 'split' | 'first';
   combos?: SingerCombo[];
 }
 /** A saved set of singers (演唱者预设): names, colours, keys, combinations, how parts sung together look */

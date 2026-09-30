@@ -294,8 +294,11 @@ drawings with the style `KDots`. Simple-mode tasks: `task_style.countdown_intro`
 
 **Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, key, color, color_unsung, color_sung, outline_color, glow_unsung,
 glow_sung}] (any number; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal",
-combos: [{key, singers}]}` (vertical: every character top to bottom, a reading in the first singer's colours; horizontal: each run
-sung together left to right; `combos`: singers who sing together). `key`: the key that assigns a singer / combination on the
+ruby: "auto"|"split"|"first", combos: [{key, singers, mix?, direction?}]}` (vertical: every character top to bottom; horizontal:
+each run sung together left to right; `ruby`: the reading over a part sung together split like its lyric, in the first singer's
+colours, or "auto" = the first singer's when split top to bottom, else split; `combos`: singers who sing together, with their own
+`mix` / `direction` (null: the singers' setting) — a part sung by exactly a combination's singers, in its order or else in any
+order, takes the combination's look; the same singers in the same order twice is refused when saved, dropped when loaded). `key`: the key that assigns a singer / combination on the
 演唱者 page, one character of `123456789abcdefghijkmnoqrstuvwxyz` (1–9, then a–z without l and p) or "" (none); new ones take
 the first free one in that order. A key that is not usable or used twice, or a combination of fewer than two singers, is
 refused when saved; when loaded the key is cleared (the combination dropped). Saved before keys existed: singer n has key n
