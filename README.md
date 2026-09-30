@@ -1,6 +1,21 @@
-# MiliKara
+<p align="center">
+  <img src="docs/images/icon.png" alt="MiliKara icon" width="128" height="128">
+</p>
 
-**用一首歌和它的歌词，做出逐字扫光的日语卡拉OK视频。**
+<h1 align="center">MiliKara</h1>
+
+<p align="center">
+  用一首歌和它的歌词，做出逐字扫光的日语卡拉OK视频。
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-1BA8D8.svg"></a>
+  <a href="https://github.com/BilyHurington/MiliKara/releases"><img alt="Release" src="https://img.shields.io/github/v/release/BilyHurington/MiliKara?include_prereleases&color=1BA8D8&label=Release"></a>
+  <img alt="Platform: Windows" src="https://img.shields.io/badge/Platform-Windows-1BA8D8.svg">
+  <img alt="Platform: macOS" src="https://img.shields.io/badge/Platform-macOS-1BA8D8.svg">
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-1BA8D8.svg">
+  <img alt="Runs locally" src="https://img.shields.io/badge/Runs-locally-1BA8D8.svg">
+</p>
 
 > 本软件受 [StrangeUtaGame](https://github.com/karaoke-studio/StrangeUtaGame) 启发。MiliKara 是自动对齐工具，不是卡拉OK手动打轴软件；如果需要手动打轴，请使用 StrangeUtaGame 原软件。
 

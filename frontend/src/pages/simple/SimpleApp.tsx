@@ -1,7 +1,7 @@
 // 极简模式外壳：只有“制作”和“设置”两页，没有工作流侧栏和播放器。
 // 需要精细调整时切到详细模式（完成的任务点开也会进入详细模式）。
 
-import { AudioWaveform, Moon, Settings2, SlidersHorizontal, Sparkles, Sun } from 'lucide-react';
+import { Moon, Settings2, SlidersHorizontal, Sparkles, Sun } from 'lucide-react';
 import { useEffect } from 'react';
 import { cn } from '@/lib/format';
 import { run, setTheme, useApp } from '@/store/app';
@@ -28,9 +28,7 @@ export function SimpleApp() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-line bg-surface px-4 py-3 sm:px-6">
-        <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-sm">
-          <AudioWaveform className="size-4.5" />
-        </div>
+        <img src="/logo.png" alt="" aria-hidden className="size-9 shrink-0 object-contain" />
         <div className="mr-2 hidden sm:block">
           <div className="text-[15px] leading-5 font-semibold tracking-tight">MiliKara</div>
           <div className="text-[11px] text-muted">一键卡拉OK</div>

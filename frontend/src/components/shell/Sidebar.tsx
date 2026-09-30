@@ -1,6 +1,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
-  AudioWaveform, Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Plus, TriangleAlert,
+  Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Plus, TriangleAlert,
 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/format';
 import { closeProject, loadProjects, openProject, run, setStep, STEPS, useApp, type Step } from '@/store/app';
@@ -21,9 +21,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-16 shrink-0 flex-col border-r border-line bg-surface lg:w-64">
       <div className="flex items-center justify-center gap-2.5 px-3 pt-4 pb-3 lg:justify-start lg:px-4">
-        <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-sm">
-          <AudioWaveform className="size-4.5" />
-        </div>
+        <img src="/logo.png" alt="" aria-hidden className="size-9 shrink-0 object-contain" />
         <div className="hidden lg:block">
           <div className="text-[15px] leading-5 font-semibold tracking-tight">MiliKara</div>
           <div className="text-[11px] text-muted">已知歌词时间戳对齐</div>
