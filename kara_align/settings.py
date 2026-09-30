@@ -127,6 +127,8 @@ class AppSettings(_Base):
     version: int = 1
     ai: AiSettings = Field(default_factory=AiSettings)
     simple: SimpleSettings = Field(default_factory=SimpleSettings)
+    # look for a newer version (the latest GitHub release) when the app is opened
+    check_updates: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -231,6 +233,8 @@ def update(patch: dict) -> AppSettings:
             ai_patch.pop("api_key", None)
         for key, sub in (("ai", ai_patch), ("simple", simple_patch)):
             cur[key] = _merge(cur[key], sub)
+        if "check_updates" in patch:
+            cur["check_updates"] = bool(patch["check_updates"])
         if clear:
             cur["ai"]["api_key"] = ""
         s = AppSettings.model_validate(cur)

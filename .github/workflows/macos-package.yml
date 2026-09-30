@@ -157,7 +157,10 @@ jobs:
           cp packaging/macos/MiliKara.command "$APP/MiliKara.command"
           chmod +x "$APP/MiliKara.command"
           cp LICENSE "$APP/LICENSE-MiliKara.txt"
-          sed "s/@VERSION@/$VERSION/" packaging/macos/使用说明.txt > "$APP/使用说明.txt"
+          # the notes (as the updater writes them) and the updater: 更新.command + version.json
+          "$APP/python/bin/python3" packaging/notes.py macos - "$VERSION" "$APP/使用说明.txt"
+          "$APP/python/bin/python3" packaging/updater/build.py package "$APP" --platform macos
+          "$APP/更新.command" --version | grep -q "MiliKara updater"
           "$APP/python/bin/python3" -m compileall -q -j 0 "$APP/python/lib" >/dev/null 2>&1 || true
           du -sh "$APP"
 

@@ -1,11 +1,13 @@
 // 设置页：极简模式的一键流程用到的全部选项。每项修改立即保存到本机。
 
-import { Bot, Crosshair, Film, Scissors, Subtitles } from 'lucide-react';
+import { ArrowUpCircle, Bot, Crosshair, Film, Scissors, Subtitles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, FontFamily, KaraokeStyle } from '@/lib/types';
 import { loadProjects, run, toast, useApp } from '@/store/app';
 import { loadSettings, saveSettings, useSimple } from '@/store/simple';
+import { loadUpdate, useUpdate } from '@/store/update';
+import { updateHowTo } from '@/components/shell/UpdateBadge';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
@@ -114,7 +116,39 @@ export function SimpleSettings() {
           )}
         </CardBody>
       </Card>
+
+      <UpdateCard enabled={settings.check_updates ?? true} />
     </div>
+  );
+}
+
+/** The version, and whether a newer one is out (asked from GitHub; can be turned off). */
+function UpdateCard({ enabled }: { enabled: boolean }) {
+  const info = useUpdate((s) => s.info);
+  const current = useApp((s) => s.info?.version);
+  const [checking, setChecking] = useState(false);
+  const checkNow = () => run(async () => {
+    setChecking(true);
+    try {
+      const r = await loadUpdate(true);
+      if (r.error && !r.latest) toast('warn', '无法检查新版本', '连不上 GitHub，稍后再试');
+      else toast(r.newer ? 'info' : 'ok', r.newer ? `有新版本 ${r.latest}` : '已经是最新版本', r.newer ? updateHowTo(r) : undefined, r.newer ? 8000 : 3000);
+    } finally {
+      setChecking(false);
+    }
+  }, '检查失败');
+  return (
+    <Card>
+      <CardHeader icon={<ArrowUpCircle className="size-4" />} title="更新" description={`当前版本 v${current ?? '…'}${info?.newer && info.latest ? ` · 最新 v${info.latest}` : ''}`} />
+      <CardBody className="space-y-3">
+        <Switch checked={enabled} onChange={(v) => void run(() => saveSettings({ check_updates: v }), '保存设置失败')}
+          label="打开时检查新版本（只读取 GitHub 上最新版本的版本号）" />
+        <div className="flex flex-wrap items-center gap-3">
+          <Button size="sm" variant="secondary" loading={checking} onClick={() => void checkNow()}>立即检查</Button>
+          {info?.newer && <span className="text-xs text-muted">{updateHowTo(info)}</span>}
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 

@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { cn } from '@/lib/format';
 import { run, setTheme, useApp } from '@/store/app';
 import { loadSettings, setSimplePage, setUi, useSimple, type SimplePage } from '@/store/simple';
+import { UpdateBadge } from '@/components/shell/UpdateBadge';
 import { ErrorBoundary } from '@/components/shell/ErrorBoundary';
 import { SimpleHome } from './SimpleHome';
 import { SimpleSettings } from './SimpleSettings';
@@ -44,6 +45,7 @@ export function SimpleApp() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-1">
+          <UpdateBadge className="mr-1" />
           <button onClick={() => setUi('pro')} title="切换到详细模式：逐步操作、人工检查、精细调整字幕"
             className="focus-ring flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-muted transition hover:bg-surface-2 hover:text-fg">
             <SlidersHorizontal className="size-4" />详细模式

@@ -6,6 +6,7 @@ import { cn, fmtRelative } from '@/lib/format';
 import { closeProject, loadProjects, openProject, run, setStep, STEPS, useApp, type Step } from '@/store/app';
 import { stepStatus, type StepState } from '@/store/steps';
 import { Badge } from '@/components/ui';
+import { UpdateBadge } from './UpdateBadge';
 
 export function Sidebar() {
   const pv = useApp((s) => s.pv);
@@ -64,6 +65,7 @@ export function Sidebar() {
 
       <div className="border-t border-line px-4 py-3 text-center lg:text-left">
         <span className="hidden text-[11px] text-subtle lg:inline">v{version ?? '…'} · 本地运行</span>
+        <UpdateBadge className="mt-1 hidden lg:inline-flex" />
       </div>
     </aside>
   );

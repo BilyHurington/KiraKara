@@ -5,6 +5,7 @@ import { useConnection } from '@/lib/api';
 import { ignoreShortcut } from '@/lib/keys';
 import { loadInfo, loadProjects, openProject, refreshProject, run, toast, useApp } from '@/store/app';
 import { redo, undo } from '@/store/edits';
+import { loadUpdate } from '@/store/update';
 import { Sidebar } from '@/components/shell/Sidebar';
 import { StudioDock } from '@/components/shell/StudioDock';
 import { ErrorBoundary } from '@/components/shell/ErrorBoundary';
@@ -55,6 +56,7 @@ export default function App() {
 
   useEffect(() => {
     void run(startup, '无法连接本地服务');
+    void loadUpdate().catch(() => undefined);  // (quietly: offline, or the check turned off)
   }, []);
 
   useEffect(() => {

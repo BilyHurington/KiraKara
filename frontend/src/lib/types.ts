@@ -402,6 +402,8 @@ export type AiProviderId = 'manual' | 'claude' | 'codex' | 'openai';
 
 export interface AppSettings {
   version: number;
+  /** look for a newer version (the latest GitHub release) when the app is opened */
+  check_updates?: boolean;
   ai: {
     /** AI readings on / off (tasks and the one-click button) */
     enabled: boolean;
@@ -451,6 +453,7 @@ export interface ThemePreview { palette: Record<string, string>; style: KaraokeS
 export interface SettingsPatch {
   ai?: Partial<AppSettings['ai']> & { api_key?: string; clear_api_key?: boolean };
   simple?: Partial<AppSettings['simple']> & { reset_karaoke?: boolean };
+  check_updates?: boolean;
 }
 
 export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }
@@ -488,4 +491,17 @@ export interface PipelineTask {
   /** the subtitle style and video settings bound to this task */
   style_label?: string; style_colors?: string[];
   video?: { auto_export: boolean; video_audio: 'original' | 'mix' | 'none'; vocal_keep_pct: number; quality: 'standard' | 'high' } | null;
+}
+
+/** GET /api/update: a newer version? (``enabled`` false: the check is off in the settings) */
+export interface UpdateInfo {
+  enabled?: boolean;
+  current: string;
+  latest?: string | null;
+  newer?: boolean;
+  /** a portable package (updated with its 更新.bat / 更新.command) */
+  portable?: boolean;
+  updater?: string | null;
+  url?: string;
+  error?: string | null;
 }

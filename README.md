@@ -43,6 +43,8 @@
 
 **macOS 离线版**（Apple 芯片，macOS 14.8.5 或更新）：下载 `MiliKara-…-macos-arm64.zip`，解压后第一次在访达里右键点 `MiliKara.command` →“打开”，以后双击即可。
 
+**更新离线版**：关闭 MiliKara 后双击文件夹里的 `更新.bat`（macOS：`更新.command`），只下载有变化的部分（通常约 1 MB），模型、依赖和项目都不用重新下载，出问题可以退回上一版。v1.1.0 之前的旧版（KiraKara）没有这个文件：在 Releases 里下载 `MiliKara-updater-windows.bat`（macOS：`MiliKara-updater-macos.zip`，解压）放进原来的文件夹，双击即可。访问 GitHub 慢时，也可以把程序更新包 `MiliKara-版本-app.zip` 放进文件夹，更新程序会直接用它。
+
 离线版都由 GitHub Actions 构建（`.github/workflows/windows-package.yml`、`macos-package.yml`；打包脚本在 `packaging/`）。
 
 **从源码安装**：需要 Python 3.11+、[uv](https://docs.astral.sh/uv/)，以及带 libass 的 `ffmpeg`（macOS：`brew install ffmpeg-full`）。目前主要在 macOS（Apple 芯片）上使用和测试；Linux / Windows 上可以用 CPU 或 NVIDIA 显卡运行。
@@ -87,5 +89,5 @@ uv pip install -e ".[ml,separation]"    # 对齐模型（torch + transformers）
 
 - MiliKara 本身的代码以 [MIT 协议](LICENSE) 发布。它使用的第三方依赖、模型和工具（如 PyTorch、transformers、python-audio-separator、ffmpeg 等）各自遵循它们自己的许可。
 - 默认的对齐模型 [`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn) 的许可是 **CC-BY-NC-SA-4.0（非商用）**；人声分离使用 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 和它的模型，许可以上游为准。
-- 音频、视频和项目文件只保存在本机。只有这些情况会联网：第一次下载模型、从音乐链接获取歌词、以及 AI 注音（歌词会发给你选择的 AI 服务）。
+- 音频、视频和项目文件只保存在本机。只有这些情况会联网：第一次下载模型、从音乐链接获取歌词、AI 注音（歌词会发给你选择的 AI 服务），以及检查新版本（只读取 GitHub 上最新版本的版本号，可以在设置里关闭）。
 - 请只处理你有权使用的音视频和歌词。

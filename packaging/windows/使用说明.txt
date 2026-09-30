@@ -25,7 +25,14 @@ MiliKara（Windows · @VARIANT_LABEL@）离线版  @VERSION@
 - 整个文件夹可以放在任何位置；移动后照样双击运行。
 - 命令行：在这个文件夹里打开终端，运行 MiliKara.bat --help。
 
-三、许可
+三、更新
+- 双击 更新.bat：检查新版本，只下载有变化的部分（通常约 1 MB），不用重新下载整个离线包；
+  模型、依赖和你的项目都保持不变。更新前请先关闭 MiliKara。
+- 访问 GitHub 很慢时：从网盘下载程序更新包（MiliKara-版本-app.zip），放到这个文件夹里再双击 更新.bat，
+  会直接用它更新，不用联网。
+- 新版本有问题时：再次双击 更新.bat，选择“退回上一版”。
+
+四、许可
 - MiliKara 本身：MIT（见 LICENSE-MiliKara.txt）。
 - 对齐模型：CC-BY-NC-SA-4.0（非商用）。
 - 自带字体 Noto Sans CJK：SIL Open Font License 1.1（见 fonts/LICENSE-NotoSansCJK.txt）。

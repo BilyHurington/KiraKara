@@ -339,6 +339,16 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         except ValueError as e:
             raise HTTPException(400, f"设置无效：{e}") from e
 
+    @app.get("/api/update")
+    def update_check(refresh: int = 0):
+        """A newer version?  Only asks GitHub when the settings allow it (or when asked to now)."""
+        from .. import settings as app_settings
+        from .. import updates
+
+        if not refresh and not app_settings.load().check_updates:
+            return {"enabled": False, "current": updates.__version__}
+        return {"enabled": True, **updates.check(force=bool(refresh))}
+
     @app.get("/api/ai/providers")
     def ai_providers(refresh: int = 0):
         from ..reading.llm import detect_all

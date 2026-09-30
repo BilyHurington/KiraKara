@@ -1,0 +1,49 @@
+# The files a release needs for updating an existing MiliKara folder (packaging/updater/build.py):
+# the program package, the fonts package, the updater on its own (for folders from before it) and
+# manifest.json, which the updater (更新.bat / 更新.command) reads from the latest release.
+# Platform independent: built once, next to the packages the two packaging workflows upload.
+#
+#   git push origin v1.2.0                          → uploaded to release "v1.2.0"
+#   Actions → Update files → Run workflow (tag)     → built again for an existing tag
+name: Update files
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 发布的标签（如 v1.1.0）
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update-files:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          uv python install 3.12
+          uv run --no-project --python 3.12 python packaging/updater/build.py release dist --tag "$TAG"
+
+      - name: Upload to release ${{ env.TAG }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # (the packaging workflows may be creating the same release)
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "MiliKara $TAG" --notes "" \
+            || gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" dist/* --clobber

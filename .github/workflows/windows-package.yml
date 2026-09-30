@@ -180,16 +180,9 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           Copy-Item packaging/windows/MiliKara.bat "$env:APP\MiliKara.bat"
           Copy-Item LICENSE "$env:APP\LICENSE-MiliKara.txt"
-          if ($env:VARIANT -eq "cuda") {
-            $label = "NVIDIA 显卡版"
-            $note = "- 这个版本用 NVIDIA 显卡（CUDA 12.8）加速人声分离和对齐：需要 GeForce GTX 16 / RTX 20 系列或更新的显卡，`r`n  以及 570 或更新版本的显卡驱动。没有合适的显卡时自动改用 CPU（较慢）。"
-          } else {
-            $label = "CPU 版"
-            $note = "- 这个版本只用 CPU 计算：人声分离比显卡版慢（一首歌约需几分钟到十几分钟）。有 NVIDIA 显卡时建议用显卡版。"
-          }
-          $text = (Get-Content -Raw -Encoding utf8 "packaging/windows/使用说明.txt").Replace("@VERSION@", $env:VERSION).Replace("@VARIANT_LABEL@", $label).Replace("@VARIANT_NOTE@", $note)
-          $text = $text -replace "`r?`n", "`r`n"
-          [IO.File]::WriteAllText("$env:APP\使用说明.txt", $text, [Text.UTF8Encoding]::new($true))
+          # the notes (as the updater writes them) and the updater: 更新.bat + version.json
+          & "$env:APP\python\python.exe" packaging/notes.py windows $env:VARIANT $env:VERSION "$env:APP\使用说明.txt"
+          & "$env:APP\python\python.exe" packaging/updater/build.py package "$env:APP" --platform windows --variant $env:VARIANT
           & "$env:APP\python\python.exe" -m compileall -q -j 0 "$env:APP\python\Lib"
           $global:LASTEXITCODE = 0  # a few files of some packages do not compile (tests, templates)
           "{0:N1} GB" -f ((Get-ChildItem -Recurse -File $env:APP | Measure-Object Length -Sum).Sum / 1GB)
@@ -205,6 +198,12 @@ jobs:
           } finally {
             Move-Item "$odd\MiliKara" $env:APP
           }
+
+      - name: Updater runs (更新.bat --version)
+        run: |
+          $out = cmd /c "`"$env:APP\更新.bat`" --version" 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch "MiliKara updater") { throw "更新.bat did not run" }
 
       - name: Pack (7z volumes)
         run: |
