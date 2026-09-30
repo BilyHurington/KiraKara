@@ -287,7 +287,8 @@ combos: [{key, singers}]}` (vertical: every character top to bottom, a reading i
 sung together left to right; `combos`: number keys of the 演唱者 page for singers who sing together, keys after the singers' own —
 a combination on a singer's key, a repeated key or one with fewer than two singers is refused when saved, dropped when loaded).
 Who sings is kept in the lyrics: `Line.singers` (numbers, 1-based; several = together; empty = the style's own colours) and
-`Line.singer_spans: [{start, end, singers}]` (character ranges of `Line.text` sung by others than the line's singers). They
+`Line.singer_spans: [{start, end, singers}]` (character ranges of `Line.text` sung by others than the line's singers;
+blanks belong to nobody: inside a part they join it, between parts they keep the line's own singers). They
 only change the subtitles' colours, never an alignment; text edits, merging and splitting lines carry them along. In the
 ASS, each singer has styles `KMain_n` / `KRuby_n` / `KTrans_n` and its name in the events' Name field; a part sung together
 is drawn once per singer, each copy cut to its band (`\clip`), or in thin blended strips (gradient). The project view's

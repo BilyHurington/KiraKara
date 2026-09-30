@@ -260,7 +260,7 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
             return ()
         from ..lyrics.singers import range_singers
 
-        return range_singers(chars, pos, pos + n)
+        return range_singers(chars, pos, pos + n, line.text if len(line.text) == len(chars) else None)
 
     for seg in line.segments:
         if not seg.units:

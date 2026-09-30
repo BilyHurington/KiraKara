@@ -282,3 +282,20 @@ def test_saved_combinations(tmp_path):
     S.set_singers(h, {"members": members, "combos": [{"key": 4, "singers": [1, 3]}, {"key": 5, "singers": [1, 2]}]})
     S.remove_singer(h, 2)  # 1+3 becomes 1+2; 1+2 has one singer left and goes
     assert [(c.key, c.singers) for c in h.project.karaoke.singers.combos] == [(4, [1, 2])]
+
+
+def test_blanks_are_nobodys():
+    # a space inside a part sung together joins it; between two different parts it is the line's own
+    ln = Line(text="あい うえ　お", singers=[1], singer_spans=[SingerSpan(start=0, end=6, singers=[1, 2])])
+    SG.normalize(ln)
+    assert _spans(ln) == [(0, 5, [1, 2])]  # the full-width space before お (singer 1 alone) is not part of it
+    ln = Line(text="あい うえ", singers=[], singer_spans=[SingerSpan(start=0, end=2, singers=[1]),
+                                                        SingerSpan(start=2, end=5, singers=[2])])
+    SG.normalize(ln)
+    assert _spans(ln) == [(0, 2, [1]), (3, 5, [2])]  # the space belongs to nobody
+    ln = Line(text="あい うえ", singers=[1], singer_spans=[SingerSpan(start=2, end=3, singers=[2])])
+    SG.normalize(ln)
+    assert _spans(ln) == []  # a space alone is never a part
+    chars = SG.effective(Line(text="a b", singers=[], singer_spans=[SingerSpan(start=0, end=3, singers=[2])]))
+    assert SG.range_singers([(), (2,), (2,)], 0, 3, " bb") == (2,)
+    assert chars == [(2,), (2,), (2,)]

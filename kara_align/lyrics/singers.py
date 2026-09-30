@@ -17,7 +17,7 @@ from typing import Any, Iterable, Optional
 
 from ..models import Line, LyricsDoc, SingerSpan, _singer_ids
 
-__all__ = ["clean_ids", "normalize", "effective", "range_singers", "remap", "merged", "split", "shift_numbers",
+__all__ = ["clean_ids", "fill_blanks", "normalize", "effective", "range_singers", "remap", "merged", "split", "shift_numbers",
            "Marker", "detect_markers", "ALL_WORDS"]
 
 
@@ -25,20 +25,42 @@ def clean_ids(value: Any) -> list[int]:
     return _singer_ids(value)
 
 
+def fill_blanks(text: str, chars: list[tuple[int, ...]], own: tuple[int, ...]) -> list[tuple[int, ...]]:
+    """Blanks (spaces, full-width spaces) are nobody's: a run of them takes the singers of the characters
+    on both sides when those agree (so it never splits a part), else the line's own."""
+    out = list(chars)
+    i, n = 0, len(out)
+    while i < n:
+        if not text[i].isspace():
+            i += 1
+            continue
+        j = i
+        while j < n and text[j].isspace():
+            j += 1
+        left = out[i - 1] if i > 0 else None
+        right = out[j] if j < n else None
+        fill = left if left is not None and left == right else own
+        out[i:j] = [fill] * (j - i)
+        i = j
+    return out
+
+
 def normalize(line: Line) -> None:
     """Spans inside the text, sorted, not overlapping (a later one wins), neighbours with the same
-    singers joined; a span that says the same as the line itself is dropped."""
+    singers joined; a span that says the same as the line itself is dropped; blanks follow
+    fill_blanks()."""
     n = len(line.text)
     line.singers = clean_ids(line.singers)
-    per_char: list[Optional[tuple[int, ...]]] = [None] * n
+    own = tuple(line.singers)
+    per_char: list[tuple[int, ...]] = [own] * n
     for sp in line.singer_spans:
         ids = tuple(clean_ids(sp.singers))
         for i in range(max(0, sp.start), min(n, sp.end)):
             per_char[i] = ids
-    own = tuple(line.singers)
+    per_char = fill_blanks(line.text, per_char, own)
     out: list[SingerSpan] = []
     for i, ids in enumerate(per_char):
-        if ids is None or ids == own:
+        if ids == own:
             continue
         if out and out[-1].end == i and tuple(out[-1].singers) == ids:
             out[-1].end = i + 1
@@ -48,18 +70,21 @@ def normalize(line: Line) -> None:
 
 
 def effective(line: Line) -> list[tuple[int, ...]]:
-    """The singers of every character of the line."""
+    """The singers of every character of the line (blanks: fill_blanks())."""
     out = [tuple(line.singers)] * len(line.text)
     for sp in line.singer_spans:
         for i in range(max(0, sp.start), min(len(out), sp.end)):
             out[i] = tuple(sp.singers)
-    return out
+    return fill_blanks(line.text, out, tuple(line.singers))
 
 
-def range_singers(chars: list[tuple[int, ...]], a: int, b: int) -> tuple[int, ...]:
+def range_singers(chars: list[tuple[int, ...]], a: int, b: int, text: Optional[str] = None) -> tuple[int, ...]:
     """The singers of characters [a, b): the ones most of them have (ties: the first character's).
-    Blank characters count only when the whole range is blank."""
+    With ``text``, blank characters count only when the whole range is blank."""
     part = chars[max(0, a):max(a, b)]
+    if text is not None:
+        inked = [ids for ids, ch in zip(part, text[max(0, a):max(a, b)]) if not ch.isspace()]
+        part = inked or part
     if not part:
         return ()
     counts: dict[tuple[int, ...], int] = {}

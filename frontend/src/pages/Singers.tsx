@@ -4,20 +4,20 @@
 // Assignments are saved at once (one undo step each); the singer list lives in the style.
 
 import { ArrowRight, Eraser, Keyboard, Loader2, Play, Subtitles, Tags, Users } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs } from '@/lib/format';
 import { ignoreShortcut, isEnter, MOD_KEY } from '@/lib/keys';
 import {
-  effective, freeKey, idsKey, isSelected, keyIds, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
-  usage, withCombo, wordRange, wordsOf, type Selection, type Word,
+  caretAt, caretTimeline, effective, freeKey, idsKey, isSelected, keyIds, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
+  usage, withCombo, wordRange, wordsOf, type CaretStep, type Selection, type Word,
 } from '@/lib/singers';
 import type { KaraokeSingers, KaraokeStyle, Line } from '@/lib/types';
-import { player } from '@/audio/player';
+import { player, usePlayhead } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { run, setStep, toast, useActiveResult, useApp, useProject } from '@/store/app';
 import { assignSingers, flushSingers, removeSinger, saveSingers } from '@/store/singers';
-import { Badge, Button, Callout, Card, CardBody, CardHeader, Input, Kbd, PageHeader, Segmented } from '@/components/ui';
+import { Badge, Button, Callout, Card, CardBody, CardHeader, Input, Kbd, PageHeader, Segmented, Switch } from '@/components/ui';
 import { MarkersDialog } from './singers/MarkersDialog';
 import { SingerList } from './singers/SingerList';
 
@@ -202,6 +202,18 @@ export function SingersPage() {
     }
     return a < b ? [a, b] : null;
   }, [sel, rows, times]);
+  // the playhead on the lyrics (a caret moving with the singing); double-click a word to go there
+  const steps = useMemo(() => caretTimeline(rows.map((r) => r.line), times), [rows, times]);
+  const lyricsRef = useRef<HTMLDivElement>(null);
+  const [follow, setFollow] = useState(true);
+  const seekWord = (li: number, wi: number) => {
+    const r = rows[li];
+    const w = r?.words[wi];
+    const st = w && steps.find((x) => x.lineId === r.line.id && x.c1 > w.start);
+    if (!st) return;
+    player.seek(st.start);
+    revealOnWaveform(st.start);
+  };
   const listen = () => {
     if (!selTimes) {
       toast('info', result ? '选中的部分还没有时间' : '还没有对齐结果', result ? undefined : '对齐后可以试听和预览');
@@ -310,6 +322,7 @@ export function SingersPage() {
                   把 {combo.ids.join('+')} 存到 {freeKey(singers) ?? '…'}
                 </Button>
               )}
+              {steps.length > 0 && <Switch checked={follow} onChange={setFollow} label={<span className="text-xs text-muted">跟随播放</span>} />}
               <Button size="xs" variant="ghost" icon={<Play className="size-3.5" />} onClick={listen} disabled={!nLines}>试听</Button>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -342,13 +355,16 @@ export function SingersPage() {
             <p className="px-2 pb-2 text-xs leading-5 text-subtle">
               <Kbd>1</Kbd>–<Kbd>9</Kbd> 指定（演唱者或存好的组合）· 先按 <Kbd>1</Kbd> 再按 <Kbd>+</Kbd> <Kbd>2</Kbd> 为 1+2 一起唱，可以存到空着的数字键 · <Kbd>0</Kbd> 清除 ·
               {' '}<Kbd>P</Kbd> 试听 · <Kbd>Esc</Kbd> 取消选择 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>A</Kbd> 全选 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>Z</Kbd> 撤销；
-              行号 Shift / {MOD_KEY} 点选多行，在歌词上按住 {MOD_KEY} 拖动可以追加
+              行号 Shift / {MOD_KEY} 点选多行，在歌词上按住 {MOD_KEY} 拖动可以追加；<Kbd>Space</Kbd> 播放时竖线标出正在唱的位置，双击歌词从那里播放
             </p>
             {rows.length === 0 && <p className="px-2 py-6 text-center text-sm text-muted">还没有歌词</p>}
-            {rows.map((r, li) => (
-              <LyricRow key={r.line.id} row={r} li={li} sel={sel} colorOf={colorOf} singers={singers}
-                onLine={clickLine} onWord={downOnWord} names={(ids) => label(ids)} />
-            ))}
+            <div ref={lyricsRef} className="relative space-y-0.5">
+              {rows.map((r, li) => (
+                <LyricRow key={r.line.id} row={r} li={li} sel={sel} colorOf={colorOf} singers={singers}
+                  onLine={clickLine} onWord={downOnWord} onSeek={seekWord} names={(ids) => label(ids)} />
+              ))}
+              {steps.length > 0 && <PlayCaret steps={steps} host={lyricsRef} follow={follow} />}
+            </div>
           </CardBody>
         </Card>
 
@@ -368,9 +384,10 @@ export function SingersPage() {
 
 // ------------------------------------------------------------------ one line of the lyrics
 
-function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
+function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, names }: {
   row: Row; li: number; sel: Selection; colorOf: (n: number) => string | undefined; singers: KaraokeSingers;
   onLine: (li: number, e: ReactMouseEvent) => void; onWord: (li: number, wi: number, e: ReactMouseEvent) => void;
+  onSeek: (li: number, wi: number) => void;
   names: (ids: number[]) => string;
 }) {
   const { line, words, index } = row;
@@ -379,7 +396,7 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
   const full = (sel.get(line.id) ?? []).some(([a, b]) => a <= 0 && b >= line.text.length);
   const groups: { ids: number[]; words: { w: Word; wi: number }[] }[] = [];
   words.forEach((w, wi) => {
-    const ids = rangeSingers(chars, w.start, w.end);
+    const ids = rangeSingers(chars, w.start, w.end, line.text);
     const last = groups[groups.length - 1];
     if (last && idsKey(last.ids) === idsKey(ids)) last.words.push({ w, wi });
     else groups.push({ ids, words: [{ w, wi }] });
@@ -391,14 +408,15 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
     return { backgroundImage: mixBackground(cols, singers.mix, singers.direction), WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' };
   };
   return (
-    <div className={cn('group flex scroll-mt-32 items-start gap-2 rounded-lg px-2 py-1', full ? 'bg-accent-soft' : 'hover:bg-surface-2/60')}>
+    <div data-row={line.id} className={cn('group flex scroll-mt-32 scroll-mb-8 items-start gap-2 rounded-lg px-2 py-1',
+      full ? 'bg-accent-soft' : 'hover:bg-surface-2/60 data-[playing]:bg-surface-2/70')}>
       <button type="button" onClick={(e) => onLine(li, e)} aria-pressed={full} aria-label={`选择第 ${index} 行`}
         className="focus-ring mt-1 w-8 shrink-0 rounded text-right font-mono text-xs text-subtle hover:text-fg">
         {index}
       </button>
       <span aria-hidden className="mt-1.5 h-5 w-1.5 shrink-0 rounded-full"
         style={{ background: own.length ? mixBackground(own.map((n) => colorOf(n)!), singers.mix, 'vertical') : 'var(--color-line)' }} />
-      <div className="min-w-0 flex-1 cursor-text text-[17px] leading-8 font-medium select-none">
+      <div data-text={line.id} className="min-w-0 flex-1 cursor-text text-[17px] leading-8 font-medium select-none">
         {groups.map((g, gi) => {
           // a run of words with the same singers is painted as one piece (side by side: left to right across it)
           const style = paint(g.ids);
@@ -409,7 +427,7 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
                 // characters within the word sung by others (only data made elsewhere splits a word)
                 const odd = [...line.text.slice(w.start, w.end)].some((_, i) => idsKey(chars[w.start + i] ?? []) !== idsKey(g.ids));
                 return (
-                  <span key={wi} data-word={`${li}:${wi}`} onMouseDown={(e) => onWord(li, wi, e)}
+                  <span key={wi} data-word={`${li}:${wi}`} onMouseDown={(e) => onWord(li, wi, e)} onDoubleClick={() => onSeek(li, wi)}
                     className={cn('rounded-[3px] py-0.5', picked && 'outline-2 outline-accent/70', picked && g.ids.length < 2 && 'bg-accent/15')}>
                     {odd
                       ? [...line.text.slice(w.start, w.end)].map((ch, ci) => <span key={ci} style={paint(chars[w.start + ci] ?? [])}>{ch}</span>)
@@ -424,6 +442,77 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
       {own.length > 0 && <span className="mt-1.5 max-w-40 shrink-0 truncate text-xs text-subtle">{names(own)}</span>}
     </div>
   );
+}
+
+// ------------------------------------------------------------------ the playhead
+
+/** Where character position `pos` (fractional: part way through a character) is drawn inside `text`. */
+function caretRect(text: Element, pos: number): { x: number; top: number; height: number } | null {
+  const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  const total = nodes.reduce((a, n) => a + n.length, 0);
+  if (!total || typeof document.createRange !== 'function') return null;
+  const i = Math.max(0, Math.min(total - 1, Math.floor(pos)));
+  const f = pos >= total ? 1 : pos - Math.floor(pos);
+  let off = i;
+  for (const n of nodes) {
+    if (off < n.length) {
+      const range = document.createRange();
+      range.setStart(n, off);
+      range.setEnd(n, off + 1);
+      const r = range.getClientRects?.()[0] ?? range.getBoundingClientRect?.();
+      if (!r || (!r.width && !r.height)) return null;
+      return { x: r.left + r.width * Math.max(0, Math.min(1, f)), top: r.top, height: r.height };
+    }
+    off -= n.length;
+  }
+  return null;
+}
+
+/** A caret on the lyrics at the playing position; the row being sung is marked and (while playing, with
+ * `follow`) kept in view.  Drawn by moving one element every frame, the lyrics never re-render for it. */
+function PlayCaret({ steps, host, follow }: { steps: CaretStep[]; host: RefObject<HTMLDivElement | null>; follow: boolean }) {
+  const t = usePlayhead();
+  const bar = useRef<HTMLDivElement>(null);
+  const last = useRef<string | null>(null);
+  const wasPlaying = useRef(false);
+  // the lyrics' layout changed (width, wrapped lines): place it again, also while paused
+  const [layout, setLayout] = useState(0);
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setLayout((n) => n + 1));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [host]);
+  useLayoutEffect(() => {
+    const el = host.current;
+    const b = bar.current;
+    if (!el || !b) return;
+    const at = caretAt(steps, t);
+    const row = at ? el.querySelector(`[data-row="${at.lineId}"]`) : null;
+    if ((at?.lineId ?? null) !== last.current) {
+      el.querySelectorAll('[data-row][data-playing]').forEach((x) => x.removeAttribute('data-playing'));
+      row?.setAttribute('data-playing', '');
+    }
+    // keep the row being sung in view: when it changes and when playing starts
+    if (at && follow && player.playing && (at.lineId !== last.current || !wasPlaying.current)) row?.scrollIntoView?.({ block: 'nearest' });
+    last.current = at?.lineId ?? null;
+    wasPlaying.current = player.playing;
+    const text = at ? el.querySelector(`[data-text="${at.lineId}"]`) : null;
+    const r = text && at ? caretRect(text, at.pos) : null;
+    if (!at || !r) {
+      b.style.display = 'none';
+      return;
+    }
+    const box = el.getBoundingClientRect();
+    b.style.display = 'block';
+    b.style.transform = `translate(${r.x - box.left - 1}px, ${r.top - box.top - 2}px)`;
+    b.style.height = `${r.height + 4}px`;
+    b.style.opacity = at.waiting ? '0.4' : '1';
+  }, [t, steps, follow, host, layout]);
+  return <div ref={bar} aria-hidden className="pointer-events-none absolute top-0 left-0 hidden w-0.5 rounded-full bg-accent shadow-[0_0_6px_var(--color-accent)]" />;
 }
 
 // ------------------------------------------------------------------ preview

@@ -42,11 +42,32 @@ export function cleanIds(ids: readonly number[]): number[] {
 export function effective(ls: LineSingers): number[][] {
   const out: number[][] = Array.from({ length: ls.text.length }, () => ls.singers);
   for (const sp of ls.spans) for (let i = Math.max(0, sp.start); i < Math.min(out.length, sp.end); i++) out[i] = sp.singers;
+  return fillBlanks(ls.text, out, ls.singers);
+}
+
+const isBlank = (ch: string) => /\s/.test(ch);
+
+/** Blanks (spaces, full-width spaces) are nobody's: a run of them takes the singers on both sides when
+ * those agree (it never splits a part), else the line's own (as kara_align.lyrics.singers.fill_blanks). */
+export function fillBlanks(text: string, chars: number[][], own: number[]): number[][] {
+  const out = [...chars];
+  let i = 0;
+  while (i < out.length) {
+    if (!isBlank(text[i] ?? '')) { i++; continue; }
+    let j = i;
+    while (j < out.length && isBlank(text[j] ?? '')) j++;
+    const left = i > 0 ? out[i - 1] : null;
+    const right = j < out.length ? out[j] : null;
+    const fill = left && right && idsKey(left) === idsKey(right) ? left : own;
+    for (let x = i; x < j; x++) out[x] = fill;
+    i = j;
+  }
   return out;
 }
 
 /** Spans from per-character singers: joined, and none where the line's own singers apply. */
 function fromChars(ls: LineSingers, chars: number[][]): LineSingers {
+  chars = fillBlanks(ls.text, chars, ls.singers);
   const own = idsKey(ls.singers);
   const spans: SingerSpan[] = [];
   chars.forEach((ids, i) => {
@@ -58,9 +79,14 @@ function fromChars(ls: LineSingers, chars: number[][]): LineSingers {
   return { ...ls, singers: cleanIds(ls.singers), spans };
 }
 
-/** The singers most characters of [a, b) have (ties: the first character's). */
-export function rangeSingers(chars: number[][], a: number, b: number): number[] {
-  const part = chars.slice(Math.max(0, a), Math.max(a, b));
+/** The singers most characters of [a, b) have (ties: the first character's); with `text`, blanks count
+ * only when the whole range is blank. */
+export function rangeSingers(chars: number[][], a: number, b: number, text?: string): number[] {
+  let part = chars.slice(Math.max(0, a), Math.max(a, b));
+  if (text) {
+    const inked = part.filter((_, i) => !isBlank(text[Math.max(0, a) + i] ?? ''));
+    if (inked.length) part = inked;
+  }
   if (!part.length) return [];
   const count = new Map<string, number>();
   for (const ids of part) count.set(idsKey(ids), (count.get(idsKey(ids)) ?? 0) + 1);
@@ -203,4 +229,54 @@ export function withCombo(sg: KaraokeSingers, ids: number[]): { next: KaraokeSin
   if (key === null || ids.length < 2) return { next: sg, key: null };
   const combos: SingerCombo[] = [...(sg.combos ?? []), { key, singers: ids }].sort((a, b) => a.key - b.key);
   return { next: { ...sg, combos }, key };
+}
+
+// ------------------------------------------------------------------ the playhead on the lyrics
+
+/** When each sung unit is heard and where it is in its line's text (character positions, fractional
+ * where several units share characters, e.g. 桜 = さ く ら). Sorted by time. */
+export interface CaretStep { lineId: string; start: number; end: number; c0: number; c1: number }
+
+export function caretTimeline(lines: Line[], times: Map<string, [number, number]>): CaretStep[] {
+  const out: CaretStep[] = [];
+  for (const l of lines) {
+    let pos = 0;
+    for (const seg of l.segments) {
+      const a = pos;
+      const b = pos + seg.surface.length;
+      pos = b;
+      const units = seg.units;
+      if (!units.length) continue;
+      const own = units.every((u) => u.surface) && units.map((u) => u.surface).join('') === seg.surface;
+      let at = a;
+      units.forEach((u, k) => {
+        const c0 = own ? at : a + ((b - a) * k) / units.length;
+        const c1 = own ? at + (u.surface?.length ?? 0) : a + ((b - a) * (k + 1)) / units.length;
+        at = c1;
+        const t = times.get(u.id);
+        if (t) out.push({ lineId: l.id, start: t[0], end: t[1], c0, c1 });
+      });
+    }
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+
+/** Where the caret is at `t`: inside the unit being sung (moving with it), after the last one of a line
+ * while that line pauses, or waiting before the next line (`waiting`). null: before the first line. */
+export function caretAt(steps: CaretStep[], t: number): { lineId: string; pos: number; waiting: boolean } | null {
+  if (!steps.length) return null;
+  let lo = 0;
+  let hi = steps.length - 1;
+  if (t < steps[0].start) return { lineId: steps[0].lineId, pos: steps[0].c0, waiting: true };
+  while (lo < hi) {  // the last step starting at or before t
+    const mid = (lo + hi + 1) >> 1;
+    if (steps[mid].start <= t) lo = mid; else hi = mid - 1;
+  }
+  const s = steps[lo];
+  if (t < s.end) return { lineId: s.lineId, pos: s.c0 + (s.c1 - s.c0) * ((t - s.start) / Math.max(1, s.end - s.start)), waiting: false };
+  const next = steps[lo + 1];
+  if (next && next.lineId === s.lineId) return { lineId: s.lineId, pos: s.c1, waiting: false };
+  // after a line: stays at its end a moment, then waits at the start of the next line
+  if (!next || t - s.end < 1200) return { lineId: s.lineId, pos: s.c1, waiting: !next };
+  return { lineId: next.lineId, pos: next.c0, waiting: true };
 }

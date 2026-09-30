@@ -130,6 +130,17 @@ describe('singers page', () => {
     expect(screen.getByRole('textbox', { name: '快捷键 3 的演唱者' })).toHaveValue('1+2');
   });
 
+  it('double-clicking a word goes there; the row being sung is marked', async () => {
+    seedStore('singers');
+    server();
+    const { container } = renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    // 星 in line 2 (夜空に星が光る) is sung from 6180 ms
+    fireEvent.doubleClick(container.querySelector('[data-word="1:2"]')!);
+    expect(player.positionMs()).toBe(6180);
+    await waitFor(() => expect(container.querySelector('[data-row][data-playing]')?.getAttribute('data-row')).toBe('L0002'));
+  });
+
   it('the singer list is saved; the step shows who sings', async () => {
     seedStore('singers');
     const { api, pv } = server();
