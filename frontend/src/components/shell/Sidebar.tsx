@@ -1,11 +1,13 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
-  Check, ChevronsUpDown, CircleDashed, FolderOpen, Loader2, Plus, TriangleAlert,
+  Check, ChevronsUpDown, CircleDashed, FolderOpen, HardDrive, Loader2, Plus, TriangleAlert,
 } from 'lucide-react';
+import { useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
 import { closeProject, loadProjects, openProject, run, setStep, STEPS, useApp, type Step } from '@/store/app';
 import { stepStatus, type StepState } from '@/store/steps';
 import { Badge } from '@/components/ui';
+import { StorageDialog } from '@/components/StorageDialog';
 import { UpdateBadge } from './UpdateBadge';
 
 export function Sidebar() {
@@ -14,6 +16,7 @@ export function Sidebar() {
   const version = useApp((s) => s.info?.version);
   const pid = useApp((s) => s.pid);
   const history = useApp((s) => s.jobHistory);
+  const [storageOpen, setStorageOpen] = useState(false);
   // only the open project's operations mark its steps as running
   const running = new Set(Object.values(history)
     .filter((j) => j.project_id === pid && (j.status === 'queued' || j.status === 'running')).map((j) => j.kind));
@@ -61,10 +64,17 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className="border-t border-line px-4 py-3 text-center lg:text-left">
-        <span className="hidden text-[11px] text-subtle lg:inline">v{version ?? '…'} · 本地运行</span>
-        <UpdateBadge className="mt-1 hidden lg:inline-flex" />
+      <div className="border-t border-line px-2 py-2 lg:px-3">
+        <button type="button" onClick={() => setStorageOpen(true)} title="存储空间：项目、缓存占用多大，删除不需要的"
+          className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-muted transition hover:bg-surface-2 hover:text-fg lg:justify-start">
+          <HardDrive className="size-4 shrink-0" /><span className="hidden lg:inline">存储空间</span>
+        </button>
+        <div className="px-2 pt-1 text-center lg:text-left">
+          <span className="hidden text-[11px] text-subtle lg:inline">v{version ?? '…'} · 本地运行</span>
+          <UpdateBadge className="mt-1 hidden lg:inline-flex" />
+        </div>
       </div>
+      <StorageDialog open={storageOpen} onOpenChange={(v) => { setStorageOpen(v); if (!v) void loadProjects().catch(() => undefined); }} />
     </aside>
   );
 }

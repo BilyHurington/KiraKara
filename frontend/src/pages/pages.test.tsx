@@ -423,7 +423,7 @@ describe('karaoke subtitles page', () => {
 
     // turning on translations refreshes the preview (it used to look unchanged: no translation stored)
     const n0 = api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length;
-    await userEvent.click(screen.getByRole('button', { name: /翻译.*关闭/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '翻译' }));
     await userEvent.click(screen.getByRole('switch', { name: /显示翻译字幕/ }));
     await waitFor(() => expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).length).toBeGreaterThan(n0), { timeout: 2000 });
     expect(api.calls.filter((c) => c.url.endsWith('/karaoke/preview')).at(-1)!.body.style.translation.enabled).toBe(true);
@@ -450,9 +450,11 @@ describe('karaoke subtitles page', () => {
     expect(screen.queryByText('自定义')).toBeNull();
     expect(screen.getByRole('radio', { name: '荧光' })).toBeChecked();
     // a layout change keeps the template …
+    await userEvent.click(screen.getByRole('tab', { name: '歌词' }));
     await userEvent.click(screen.getAllByRole('switch', { name: '粗体' })[0]);
     expect(screen.queryByText('自定义')).toBeNull();
     // … a colour changed by hand does not
+    await userEvent.click(screen.getByRole('tab', { name: '配色' }));
     fireEvent.change(screen.getByLabelText('已唱（扫光）'), { target: { value: '#00ff00' } });
     expect(await screen.findByText('自定义')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '荧光' })).not.toBeChecked();
@@ -466,7 +468,7 @@ describe('karaoke subtitles page', () => {
     (URL as any).revokeObjectURL = vi.fn();
     const { KaraokePage } = await import('./Karaoke');
     renderUI(<KaraokePage />);
-    await userEvent.click(await screen.findByRole('button', { name: /歌曲信息.*关闭/ }));
+    await userEvent.click(await screen.findByRole('tab', { name: '歌曲信息' }));
     await userEvent.click(screen.getByRole('switch', { name: '显示歌曲信息（开头，以及结尾）' }));
     // the song data shows next to each line; the text follows the ticks
     expect(screen.getByText('STARLIGHT MASTER 13')).toBeInTheDocument();

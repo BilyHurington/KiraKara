@@ -20,6 +20,7 @@ import { StylePanel } from '@/components/karaoke/StylePanel';
 import { BACKGROUND_ACCEPT } from '@/pages/input/AudioCard';
 import { setSimpleDefault } from '@/store/simple';
 import { countdownPlan } from '@/lib/countdown';
+import { useFitHeight } from '@/lib/useFitHeight';
 import { singersSettled } from '@/store/singers';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number; countdown: boolean | null }
@@ -36,6 +37,7 @@ export function KaraokePage() {
   const [attempt, setAttempt] = useState(0);
   const dirty = useRef(false);
   const pid = project.id;
+  const styleCol = useFitHeight();
 
   useEffect(() => { void resumeJobs(pid); }, [pid]);  // a video made while this page was closed keeps its download link
 
@@ -181,8 +183,8 @@ export function KaraokePage() {
           <BurnCard style={style} patch={patch} beforeBurn={flush} />
         </div>
         {/* next to the preview from 1024 px on (not below the burn card), sticky while scrolling */}
-        <div className="min-w-0 space-y-6 lg:sticky lg:top-4">
-          <Card>
+        <div ref={styleCol} className="min-w-0 space-y-6 lg:sticky lg:top-4 lg:flex lg:max-h-[var(--fit-h)] lg:flex-col">
+          <Card className="lg:flex lg:min-h-0 lg:flex-col">
             <CardHeader title="字幕样式" actions={
               <Tip content="极简模式之后的任务完整使用这套样式（配色、布局、注音、翻译、时间与特效）：第 4 步会切到“设置里的样式”，注音、翻译、歌曲信息跟随这套样式">
                 <Button size="xs" variant="ghost" icon={<Sparkles className="size-3.5" />}
@@ -191,9 +193,9 @@ export function KaraokePage() {
                 </Button>
               </Tip>
             } />
-            <CardBody className="pt-3">
+            <CardBody className="pt-3 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
               <StylePanel style={style} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
-                defaultOpen={['colors', 'text']} storageKey="detail"
+                storageKey="detail" fill
                 translation={{ lines: translated, onFetch: canFetch ? fetchTranslation : undefined }}
                 countdownLines={{ overrides: lines.filter((l) => l.countdown !== null).length, onReset: resetCountdowns }}
                 songInfo={{ data: songInfo, onText: (t) => void saveInfoText(t) }} />

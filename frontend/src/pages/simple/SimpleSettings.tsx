@@ -4,7 +4,7 @@ import { ArrowUpCircle, Bot, Crosshair, Film, HardDrive, Scissors, Subtitles } f
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { AppSettings, FontFamily, KaraokeStyle, StorageInfo } from '@/lib/types';
-import { fmtBytes } from '@/lib/format';
+import { cn, fmtBytes } from '@/lib/format';
 import { loadProjects, run, toast, useApp } from '@/store/app';
 import { loadSettings, saveSettings, useSimple } from '@/store/simple';
 import { loadUpdate, useUpdate } from '@/store/update';
@@ -13,15 +13,57 @@ import { AiSettingsForm } from '@/components/AiSettingsForm';
 import { DiagnosticsButton } from '@/components/DiagnosticsButton';
 import { loadStorage, StorageDialog } from '@/components/StorageDialog';
 import { StylePanel } from '@/components/karaoke/StylePanel';
-import { Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
+import { arrowNav, Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
 
 type Simple = AppSettings['simple'];
+
+// one category at a time (a menu on the left, tabs on a narrow screen): the page is never one long list
+const TABS = [
+  { id: 'ai', label: 'AI 注音', icon: <Bot className="size-4" /> },
+  { id: 'separation', label: '人声分离', icon: <Scissors className="size-4" /> },
+  { id: 'calibration', label: '开头对齐', icon: <Crosshair className="size-4" /> },
+  { id: 'style', label: '字幕样式', icon: <Subtitles className="size-4" /> },
+  { id: 'output', label: '输出视频', icon: <Film className="size-4" /> },
+  { id: 'storage', label: '存储空间', icon: <HardDrive className="size-4" /> },
+  { id: 'about', label: '更新与反馈', icon: <ArrowUpCircle className="size-4" /> },
+] as const;
+type Tab = (typeof TABS)[number]['id'];
+const TAB_KEY = 'kara.settings.tab';
+
+function storedTab(): Tab {
+  try {
+    const v = localStorage.getItem(TAB_KEY);
+    if (TABS.some((t) => t.id === v)) return v as Tab;
+  } catch { /* ignore */ }
+  return 'ai';
+}
+
+function SettingsNav({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
+  return (
+    <nav role="tablist" aria-label="设置分类" aria-orientation="vertical" onKeyDown={(e) => arrowNav(e, 'tab')}
+      className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:sticky md:top-0 md:mx-0 md:flex-col md:overflow-visible md:px-0 md:pb-0">
+      {TABS.map((t) => (
+        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} tabIndex={value === t.id ? 0 : -1}
+          onClick={() => onChange(t.id)}
+          className={cn('focus-ring flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium whitespace-nowrap transition',
+            value === t.id ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2 hover:text-fg')}>
+          {t.icon}{t.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export function SimpleSettings() {
   const settings = useSimple((s) => s.settings);
   const settingsError = useSimple((s) => s.settingsError);
   const info = useApp((s) => s.info);
   const [retrying, setRetrying] = useState(false);
+  const [tab, setTabState] = useState<Tab>(storedTab);
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    try { localStorage.setItem(TAB_KEY, t); } catch { /* ignore */ }
+  };
   if (!settings) {
     const retry = async () => {
       setRetrying(true);
@@ -50,84 +92,97 @@ export function SimpleSettings() {
         <p className="mt-1 text-sm text-muted">“开始制作”会按这里的选项自动完成每一步。修改立即保存，只对之后添加的任务生效（已在队列里的任务按添加时的选项完成）。</p>
       </div>
 
-      <Card>
-        <CardHeader icon={<Bot className="size-4" />} title="AI 注音" description="用 AI 检查每个字的读音（例如「今君」读 いま きみ，「真新」读 まっさら）。读音越准，对齐越准。" />
-        <CardBody className="space-y-4">
-          <AiSettingsForm />
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardHeader icon={<Scissors className="size-4" />} title="人声分离" description="先把人声和伴奏分开：对齐更准，也能生成降低人声的伴唱视频。最耗时的一步（GPU / Apple 芯片约 1–3 分钟）。" />
-        <CardBody className="space-y-4">
-          {info && !info.separation_available && (
-            <Callout tone="warn" title="未安装分离组件">会跳过这一步，使用原曲对齐。安装后重启服务：<code className="font-mono text-xs">uv pip install -e ".[separation]"</code></Callout>
+      <div className="grid items-start gap-6 md:grid-cols-[168px_minmax(0,1fr)]">
+        <SettingsNav value={tab} onChange={setTab} />
+        <div className="min-w-0 space-y-6">
+          {tab === 'ai' && (
+            <Card>
+              <CardHeader icon={<Bot className="size-4" />} title="AI 注音" description="用 AI 检查每个字的读音（例如「今君」读 いま きみ，「真新」读 まっさら）。读音越准，对齐越准。" />
+              <CardBody className="space-y-4">
+                <AiSettingsForm />
+              </CardBody>
+            </Card>
           )}
-          <Switch checked={s.separate} onChange={(v) => save({ separate: v })} label="分离人声" />
-          {s.separate && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="模型">
-                <Select value={s.separation_preset} disabled={!info} onChange={(e) => save({ separation_preset: e.target.value })}>
-                  {/* the saved choice is always listed, also while the list loads or when it is no longer offered */}
-                  {!info?.separation_presets.some((p) => p.name === s.separation_preset) && (
-                    <option value={s.separation_preset}>{s.separation_preset}{info ? '（不可用）' : '（读取模型列表中…）'}</option>
-                  )}
-                  {(info?.separation_presets ?? []).map((p) => <option key={p.name} value={p.name}>{p.name}（{p.architecture}）</option>)}
-                </Select>
-              </Field>
-              <Group label="运行设备">
-                <Segmented<'auto' | 'cpu'> label="运行设备" value={s.separation_device} onChange={(v) => save({ separation_device: v })}
-                  options={[{ value: 'auto', label: '自动（GPU / MPS）' }, { value: 'cpu', label: '仅 CPU' }]} />
-              </Group>
-            </div>
+          {tab === 'separation' && (
+            <Card>
+              <CardHeader icon={<Scissors className="size-4" />} title="人声分离" description="先把人声和伴奏分开：对齐更准，也能生成降低人声的伴唱视频。最耗时的一步（GPU / Apple 芯片约 1–3 分钟）。" />
+              <CardBody className="space-y-4">
+                {info && !info.separation_available && (
+                  <Callout tone="warn" title="未安装分离组件">会跳过这一步，使用原曲对齐。安装后重启服务：<code className="font-mono text-xs">uv pip install -e ".[separation]"</code></Callout>
+                )}
+                <Switch checked={s.separate} onChange={(v) => save({ separate: v })} label="分离人声" />
+                {s.separate && (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="模型">
+                      <Select value={s.separation_preset} disabled={!info} onChange={(e) => save({ separation_preset: e.target.value })}>
+                        {/* the saved choice is always listed, also while the list loads or when it is no longer offered */}
+                        {!info?.separation_presets.some((p) => p.name === s.separation_preset) && (
+                          <option value={s.separation_preset}>{s.separation_preset}{info ? '（不可用）' : '（读取模型列表中…）'}</option>
+                        )}
+                        {(info?.separation_presets ?? []).map((p) => <option key={p.name} value={p.name}>{p.name}（{p.architecture}）</option>)}
+                      </Select>
+                    </Field>
+                    <Group label="运行设备">
+                      <Segmented<'auto' | 'cpu'> label="运行设备" value={s.separation_device} onChange={(v) => save({ separation_device: v })}
+                        options={[{ value: 'auto', label: '自动（GPU / MPS）' }, { value: 'cpu', label: '仅 CPU' }]} />
+                    </Group>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
           )}
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardHeader icon={<Crosshair className="size-4" />} title="歌词开头对齐" description="视频的声音经常和 LRC 歌词里的时间差一段（片头、不同版本）。每个 LRC 任务需要先找出这段偏移。" />
-        <CardBody className="space-y-3">
-          <Group label="偏移怎么确定">
-            <Segmented<Simple['calibration']> label="偏移怎么确定" value={s.calibration} onChange={(v) => save({ calibration: v })}
-              options={[{ value: 'manual', label: '手动标记第一句' }, { value: 'auto', label: '自动检测' }]} />
-          </Group>
-          <p className="text-xs text-muted">
-            {s.calibration === 'manual'
-              ? '添加任务后马上请你在波形上标出第一句开始唱的位置，最准。'
-              : '人声分离后先试对齐整首歌，用大多数歌词行一致的偏移，不需要原曲音频。没把握时（行数太少、只有部分行对得上、视频是别的速度或剪辑过）仍会请你确认，标记会放在检测到的位置。'}
-          </p>
-          {s.calibration === 'auto' && !s.separate && (
-            <Callout tone="warn">没有分离人声时，自动检测在原曲上进行，伴奏会让它更容易没把握。</Callout>
+          {tab === 'calibration' && (
+            <Card>
+              <CardHeader icon={<Crosshair className="size-4" />} title="歌词开头对齐" description="视频的声音经常和 LRC 歌词里的时间差一段（片头、不同版本）。每个 LRC 任务需要先找出这段偏移。" />
+              <CardBody className="space-y-3">
+                <Group label="偏移怎么确定">
+                  <Segmented<Simple['calibration']> label="偏移怎么确定" value={s.calibration} onChange={(v) => save({ calibration: v })}
+                    options={[{ value: 'manual', label: '手动标记第一句' }, { value: 'auto', label: '自动检测' }]} />
+                </Group>
+                <p className="text-xs text-muted">
+                  {s.calibration === 'manual'
+                    ? '添加任务后马上请你在波形上标出第一句开始唱的位置，最准。'
+                    : '人声分离后先试对齐整首歌，用大多数歌词行一致的偏移，不需要原曲音频。没把握时（行数太少、只有部分行对得上、视频是别的速度或剪辑过）仍会请你确认，标记会放在检测到的位置。'}
+                </p>
+                {s.calibration === 'auto' && !s.separate && (
+                  <Callout tone="warn">没有分离人声时，自动检测在原曲上进行，伴奏会让它更容易没把握。</Callout>
+                )}
+              </CardBody>
+            </Card>
           )}
-        </CardBody>
-      </Card>
-
-      <DefaultStyleCard style={s.karaoke} />
-
-      <Card>
-        <CardHeader icon={<Film className="size-4" />} title="输出视频" description="任务完成后自动把字幕烧录进视频（没有视频时生成纯黑背景的视频）。" />
-        <CardBody className="space-y-4">
-          <Switch checked={s.auto_export} onChange={(v) => save({ auto_export: v })} label="完成后自动生成视频" />
-          {s.auto_export && (
-            <>
-              <p className="text-xs text-muted">视频里的声音（原声 / 降低人声 / 无声）每首歌在“制作”页第 4 步选择，并会记住上次的选择。</p>
-              <Group label="画质">
-                <Segmented<Simple['quality']> label="画质" value={s.quality} onChange={(v) => save({ quality: v })}
-                  options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
-              </Group>
-            </>
+          {tab === 'style' && (
+            <DefaultStyleCard style={s.karaoke} />
           )}
-          <div>
-            <Switch checked={settings.hardware_encoding ?? true} onChange={(v) => void run(() => saveSettings({ hardware_encoding: v }), '保存设置失败')}
-              label="使用显卡编码（更快）" />
-            <p className="mt-1 text-xs text-muted">有可用的显卡编码器（NVIDIA / Intel / AMD，Mac 上烧录进视频时）就用它，否则或失败时自动改用 CPU。对画质不满意可以关掉。详细模式导出的视频也使用这个设置。</p>
-          </div>
-        </CardBody>
-      </Card>
-
-      <StorageCard />
-
-      <UpdateCard enabled={settings.check_updates ?? true} />
+          {tab === 'output' && (
+            <Card>
+              <CardHeader icon={<Film className="size-4" />} title="输出视频" description="任务完成后自动把字幕烧录进视频（没有视频时生成纯黑背景的视频）。" />
+              <CardBody className="space-y-4">
+                <Switch checked={s.auto_export} onChange={(v) => save({ auto_export: v })} label="完成后自动生成视频" />
+                {s.auto_export && (
+                  <>
+                    <p className="text-xs text-muted">视频里的声音（原声 / 降低人声 / 无声）每首歌在“制作”页第 4 步选择，并会记住上次的选择。</p>
+                    <Group label="画质">
+                      <Segmented<Simple['quality']> label="画质" value={s.quality} onChange={(v) => save({ quality: v })}
+                        options={[{ value: 'standard', label: '标准（较快）' }, { value: 'high', label: '高' }]} />
+                    </Group>
+                  </>
+                )}
+                <div>
+                  <Switch checked={settings.hardware_encoding ?? true} onChange={(v) => void run(() => saveSettings({ hardware_encoding: v }), '保存设置失败')}
+                    label="使用显卡编码（更快）" />
+                  <p className="mt-1 text-xs text-muted">有可用的显卡编码器（NVIDIA / Intel / AMD，Mac 上烧录进视频时）就用它，否则或失败时自动改用 CPU。对画质不满意可以关掉。详细模式导出的视频也使用这个设置。</p>
+                </div>
+              </CardBody>
+            </Card>
+          )}
+          {tab === 'storage' && (
+            <StorageCard />
+          )}
+          {tab === 'about' && (
+            <UpdateCard enabled={settings.check_updates ?? true} />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -218,7 +273,7 @@ function DefaultStyleCard({ style }: { style: KaraokeStyle }) {
         description="第 4 步选“设置里的样式”时完整使用这套样式；选“模版配色”时使用它的布局、字号、时间等，配色和荧光由模版决定。可以保存成预设，随时切换。" />
       <CardBody className="space-y-3 pt-3">
         <StylePanel style={draft} onChange={change} fonts={fonts.families} defaultFont={fonts.default}
-          defaultOpen={['colors']} storageKey="simple" />
+          storageKey="simple" />
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-3 text-[13px]">
           <span className="text-muted">使用某个项目调好的样式</span>
           <Select aria-label="从项目复制样式" value="" className="max-w-72" onChange={(e) => e.target.value && copyFrom(e.target.value)}>

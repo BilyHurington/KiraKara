@@ -86,7 +86,8 @@ describe('detailed mode ↔ simple-mode tasks', () => {
     (URL as any).revokeObjectURL = vi.fn();
     const { KaraokePage } = await import('./Karaoke');
     const view = renderUI(<KaraokePage />);
-    await userEvent.click((await screen.findAllByRole('switch', { name: '粗体' }))[0]);  // 歌词 is open by default
+    await userEvent.click(await screen.findByRole('tab', { name: '歌词' }));
+    await userEvent.click(screen.getAllByRole('switch', { name: '粗体' })[0]);
     // burning right away: the edit is saved before the burn starts
     await userEvent.click(screen.getByRole('button', { name: /一键烧录/ }));
     await waitFor(() => expect(api.find('POST', '/karaoke/burn')).toHaveLength(1));

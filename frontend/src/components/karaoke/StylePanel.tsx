@@ -5,21 +5,22 @@
 // style; the parent decides how to save it.
 
 import {
-  Check, ChevronDown, Download, Languages, Music, Palette, Plus, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
+  Check, Download, Languages, Music, Palette, Plus, RotateCcw, Save, Sparkles, Timer, Trash2, Type, X,
   LayoutTemplate, CaseSensitive,
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { cn } from '@/lib/format';
 import { isEnter, isEscape } from '@/lib/keys';
 import { api } from '@/lib/api';
 import type { EffectKind, FontFamily, KaraokeStyle, SongInfo, SongInfoField, ThemePreview } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { deleteStyle, loadSavedStyles, sameLook, saveStyle, useLibrary } from '@/store/styles';
-import { Badge, Button, Input, Segmented, Select, SliderField, Switch, Textarea } from '@/components/ui';
+import { arrowNav, Badge, Button, Input, Segmented, Select, SliderField, Switch, Textarea, Tip } from '@/components/ui';
 import { ColorRow, TEMPLATE_LABEL } from './ThemeColors';
 import { COUNTDOWN_DEFAULTS } from '@/lib/countdown';
 
 export type SectionId = 'colors' | 'text' | 'ruby' | 'translation' | 'info' | 'layout' | 'timing' | 'effects';
+const SECTION_IDS: SectionId[] = ['colors', 'text', 'ruby', 'translation', 'info', 'layout', 'timing', 'effects'];
 type Patch = (fn: (s: KaraokeStyle) => void) => void;
 
 export interface TranslationInfo {
@@ -92,20 +93,47 @@ function FontSelect({ label, value, fonts, fallback, onChange, followLabel }: {
   );
 }
 
-function Section({ id, icon, title, summary, open, onToggle, children }: {
-  id: SectionId; icon: ReactNode; title: string; summary: ReactNode; open: boolean; onToggle: () => void; children: ReactNode;
-}) {
+interface SectionProps { id: SectionId; icon: ReactNode; title: string; summary: ReactNode; children: ReactNode }
+
+/** One category of the panel (shown when its tab is chosen). */
+function Section({ id, title, children }: SectionProps) {
   return (
-    <section className="border-b border-line last:border-b-0" data-section={id}>
-      <button type="button" onClick={onToggle} aria-expanded={open}
-        className="focus-ring flex w-full items-center gap-2.5 px-1 py-3 text-left">
-        <span className={cn('grid size-7 shrink-0 place-items-center rounded-lg', open ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-muted')}>{icon}</span>
-        <span className="text-[14px] font-semibold">{title}</span>
-        {!open && <span className="min-w-0 flex-1 truncate text-xs text-muted">{summary}</span>}
-        <ChevronDown className={cn('ml-auto size-4 shrink-0 text-subtle transition', open && 'rotate-180')} />
-      </button>
-      {open && <div className="space-y-4 px-1 pb-5">{children}</div>}
+    <section role="tabpanel" aria-label={title} data-section={id} className="space-y-4 px-1 pt-4 pb-2">
+      {children}
     </section>
+  );
+}
+
+/** The categories as a menu (8 tabs, their current values on hover) and the chosen one below it:
+ *  the whole style is never one long list.  The tabs are read from the <Section> children. */
+function SectionTabs({ active, onSelect, fill, children }: {
+  active: SectionId; onSelect: (id: SectionId) => void; fill?: boolean; children: ReactNode;
+}) {
+  const items = Children.toArray(children).filter(isValidElement) as ReactElement<SectionProps>[];
+  const current = items.find((c) => c.props.id === active) ?? items[0];
+  return (
+    <>
+      <div role="tablist" aria-label="样式分类" onKeyDown={(e) => arrowNav(e, 'tab')}
+        className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1 @xl:grid-cols-8">
+        {items.map((c) => {
+          const on = c === current;
+          return (
+            <Tip key={c.props.id} content={on ? null : c.props.summary} keep>
+              <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} onClick={() => onSelect(c.props.id)}
+                className={cn('focus-ring flex flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[12px] font-medium transition',
+                  on ? 'bg-surface text-accent shadow-sm' : 'text-muted hover:text-fg')}>
+                {c.props.icon}{c.props.title}
+              </button>
+            </Tip>
+          );
+        })}
+      </div>
+      {/* every category stays mounted (hidden): one still busy (a colour template on its way, a draft
+          being typed) keeps working with the current style while another is shown */}
+      <div className={cn(fill && '-mx-1 min-h-0 flex-1 overflow-y-auto px-1')}>
+        {items.map((c) => <div key={c.props.id} hidden={c !== current}>{c}</div>)}
+      </div>
+    </>
   );
 }
 
@@ -113,32 +141,32 @@ const Dot = ({ c }: { c: string }) => <span className="inline-block size-2.5 rou
 
 // ------------------------------------------------------------------ the panel
 
-export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = ['colors'], storageKey, translation, songInfo, countdownLines }: {
+export function StylePanel({ style, onChange, fonts, defaultFont, defaultSection = 'colors', storageKey, translation, songInfo, countdownLines, fill }: {
   style: KaraokeStyle;
   onChange: (next: KaraokeStyle) => void;
   fonts: FontFamily[];
   defaultFont: string;
-  defaultOpen?: SectionId[];
-  /** remember which sections are open (per place the panel is used) */
+  defaultSection?: SectionId;
+  /** remember the category shown (per place the panel is used) */
   storageKey?: string;
   translation?: TranslationInfo;
   /** the detailed page edits the card's text; the simple mode only picks the lines */
   songInfo?: SongInfoEditing;
   countdownLines?: CountdownLines;
+  /** fill a height-limited parent (a flex column): the tabs stay put, the chosen category scrolls */
+  fill?: boolean;
 }) {
-  const [open, setOpen] = useState<Set<SectionId>>(() => {
+  const [active, setActive] = useState<SectionId>(() => {
     try {
-      const v = storageKey ? localStorage.getItem(`kara.style.${storageKey}`) : null;
-      if (v) return new Set(JSON.parse(v) as SectionId[]);
+      const v = storageKey ? localStorage.getItem(`kara.style.${storageKey}.tab`) : null;
+      if (v && SECTION_IDS.includes(v as SectionId)) return v as SectionId;
     } catch { /* ignore */ }
-    return new Set(defaultOpen);
+    return defaultSection;
   });
-  const toggle = (id: SectionId) => setOpen((o) => {
-    const n = new Set(o);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    try { if (storageKey) localStorage.setItem(`kara.style.${storageKey}`, JSON.stringify([...n])); } catch { /* ignore */ }
-    return n;
-  });
+  const select = (id: SectionId) => {
+    setActive(id);
+    try { if (storageKey) localStorage.setItem(`kara.style.${storageKey}.tab`, id); } catch { /* ignore */ }
+  };
   const patch: Patch = (fn) => {
     const next = structuredClone(style);
     fn(next);
@@ -150,12 +178,13 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
   const C = style.countdown ?? COUNTDOWN_DEFAULTS;
   const setCd = (fn: (c: NonNullable<KaraokeStyle['countdown']>) => void) => patch((s) => { s.countdown = { ...C }; fn(s.countdown); });
   const posLabel = { opposite: L.position === 'bottom' ? '画面顶部' : '画面底部', block: '歌词旁', line: '每行下方' };
-  const sec = (id: SectionId) => ({ id, open: open.has(id), onToggle: () => toggle(id) });
+  const sec = (id: SectionId) => ({ id });
 
   return (
-    <div className="@container">
+    <div className={cn('@container', fill && 'flex min-h-0 flex-1 flex-col')}>
       <PresetBar style={style} onChange={onChange} />
-      <div className="mt-2">
+      <div className={cn('mt-3', fill && 'flex min-h-0 flex-1 flex-col')}>
+        <SectionTabs active={active} onSelect={select} fill={fill}>
         <Section {...sec('colors')} icon={<Palette className="size-4" />} title="配色"
           summary={<span className="flex items-center gap-1.5">{style.theme ? `${TEMPLATE_LABEL[style.theme.template]}模版 · ` : ''}歌词 <Dot c={T.color_unsung} /><Dot c={T.color_sung} /><Dot c={T.outline_color} />
             {G.enabled && <>· 荧光 <Dot c={G.color_unsung} /><Dot c={G.color_sung} /></>}</span>}>
@@ -370,6 +399,7 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultOpen = 
           summary={E.kind === 'none' ? '无' : `${EFFECTS[E.kind].label}${E.ruby ? ' · 注音也有' : ''}`}>
           <EffectsEditor style={style} patch={patch} />
         </Section>
+        </SectionTabs>
       </div>
     </div>
   );

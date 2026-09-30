@@ -3,7 +3,7 @@
 // 并自动记住，下一首从同样的选择开始。
 
 import {
-  AlertTriangle, ArrowRight, Check, CircleDashed, ClipboardPaste, Crosshair, Download, Film, Hand, Image as ImageIcon, Link2, ListMusic,
+  AlertTriangle, ArrowRight, Check, ChevronDown, ChevronRight, CircleDashed, ClipboardPaste, Crosshair, Download, Film, Hand, Image as ImageIcon, Link2, ListMusic,
   Loader2, Music2, Play, RotateCcw, Settings2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -156,6 +156,9 @@ export function SimpleHome() {
     }
   }, [tasks, calibrating, own]);
   // the dialog for what the task waits for: where the first line starts, or the AI readings by hand
+  // the newest few (and every unfinished one); older ones on request
+  const [allTasks, setAllTasks] = useState(false);
+  const shownTasks = allTasks ? tasks : tasks.filter((t, i) => i < RECENT_TASKS || !FINAL.has(t.status));
   const calTask = tasks.find((t) => t.id === calibrating && waitingFor(t) === 'calibrate' && t.calibration);
   const readTask = tasks.find((t) => t.id === calibrating && waitingFor(t) === 'readings' && t.readings_request);
 
@@ -310,10 +313,18 @@ export function SimpleHome() {
           {tasks.length === 0 ? (
             <EmptyState className="m-4 py-10" title="还没有任务" description="上面放入视频和歌词，点“开始制作”" />
           ) : (
-            <ul className="divide-y divide-line">
-              {tasks.map((t) => <TaskRow key={t.id} task={t} onCalibrate={() => setCalibrating(t.id)}
-                ahead={tasks.filter((x) => (x.status === 'queued' || x.status === 'running') && x.created < t.created).length} />)}
-            </ul>
+            <>
+              <ul className="divide-y divide-line">
+                {shownTasks.map((t) => <TaskRow key={t.id} task={t} onCalibrate={() => setCalibrating(t.id)}
+                  ahead={tasks.filter((x) => (x.status === 'queued' || x.status === 'running') && x.created < t.created).length} />)}
+              </ul>
+              {tasks.length > shownTasks.length && (
+                <button className="focus-ring flex w-full items-center justify-center gap-1.5 border-t border-line py-2.5 text-[13px] text-muted hover:bg-surface-2 hover:text-fg"
+                  onClick={() => setAllTasks(true)}>
+                  <ChevronDown className="size-4" />显示更早的 {tasks.length - shownTasks.length} 个任务
+                </button>
+              )}
+            </>
           )}
         </CardBody>
       </Card>
@@ -335,6 +346,9 @@ function StepBlock({ n, title, children }: { n: number; title: string; children:
   );
 }
 
+const RECENT_TASKS = 5;
+const FINAL = new Set<PipelineTask['status']>(['succeeded', 'failed', 'cancelled', 'interrupted']);
+
 const STATUS: Record<PipelineTask['status'], { label: string; tone: 'accent' | 'ok' | 'danger' | 'neutral' | 'warn' }> = {
   preparing: { label: '读取中', tone: 'accent' },
   waiting: { label: '等待确认', tone: 'warn' },
@@ -352,6 +366,12 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
   const canOpen = !!t.project_id && !t.project_deleted && t.status !== 'running' && t.status !== 'preparing' && t.status !== 'waiting';
   const act = (a: 'cancel' | 'retry' | 'delete') => run(() => taskAction(t.id, a), '操作失败');
   const [confirmDel, setConfirmDel] = useState(false);
+  // a finished task shows what needs a look; its steps and notes on request
+  const [details, setDetails] = useState(false);
+  const folded = t.status === 'succeeded' && !details;
+  const actionable = (w: string) => w.includes('人工检查');
+  const warnings = folded ? t.warnings.filter(actionable) : t.warnings;
+  const hidden = t.warnings.length - warnings.length;
   const open = () => t.project_id && openInDetail(t.project_id, t.outputs.video ? 'karaoke' : 'review');
   return (
     <li className="px-5 py-4">
@@ -426,9 +446,22 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
               <span className="tabular w-10 text-right text-xs text-muted">{Math.round(t.progress * 100)}%</span>
             </div>
           )}
-          <ol className="mt-3 flex flex-wrap gap-1.5" aria-label="处理步骤">
-            {t.stages.map((s) => <StageChip key={s.key} s={s} />)}
-          </ol>
+          {folded ? (
+            <button className="focus-ring mt-2 flex items-center gap-1 rounded text-xs text-muted hover:text-fg" onClick={() => setDetails(true)} aria-expanded={false}>
+              <ChevronRight className="size-3.5" />处理详情（{t.stages.filter((s) => s.status === 'done').length} 步完成{hidden ? ` · ${hidden} 条说明` : ''}）
+            </button>
+          ) : (
+            <>
+              <ol className="mt-3 flex flex-wrap gap-1.5" aria-label="处理步骤">
+                {t.stages.map((s) => <StageChip key={s.key} s={s} />)}
+              </ol>
+              {t.status === 'succeeded' && (
+                <button className="focus-ring mt-2 flex items-center gap-1 rounded text-xs text-muted hover:text-fg" onClick={() => setDetails(false)} aria-expanded>
+                  <ChevronDown className="size-3.5" />收起
+                </button>
+              )}
+            </>
+          )}
           {(t.status === 'running' || t.status === 'preparing') && t.message && <div className="mt-2 text-xs text-muted">{t.message}</div>}
         </>
       )}
@@ -439,12 +472,12 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
           {t.status === 'failed' && <div className="mt-1 -mb-1"><DiagnosticsButton taskId={t.id} /></div>}
         </div>
       )}
-      {t.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <ul className="mt-2 space-y-0.5">
-          {t.warnings.map((w) => (
+          {warnings.map((w) => (
             <li key={w} className="flex items-start gap-1.5 text-xs text-warn">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              {canOpen && w.includes('人工检查') ? (
+              {canOpen && actionable(w) ? (
                 <button className="focus-ring rounded text-left underline decoration-dotted underline-offset-2 hover:text-accent"
                   onClick={() => openInDetail(t.project_id!, 'review', { issues: true })} title="在详细模式的“人工检查”中打开">{w}</button>
               ) : w}

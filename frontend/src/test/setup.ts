@@ -5,6 +5,7 @@ import { cleanup } from '@testing-library/react';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  try { localStorage.clear(); } catch { /* ignore */ }  // remembered tabs / sizes do not leak into the next test
 });
 
 // jsdom lacks these browser APIs used by Radix / the waveform

@@ -431,7 +431,7 @@ describe('colour template requests (F-M12)', () => {
     function Host() {
       const [s, setS] = useState(base);
       latest = s;
-      return <StylePanel style={s} onChange={setS} fonts={[]} defaultFont="" defaultOpen={['colors', 'text']} />;
+      return <StylePanel style={s} onChange={setS} fonts={[]} defaultFont="" />;
     }
     renderUI(<Host />);
     // a quick series of clicks: one request
@@ -445,6 +445,7 @@ describe('colour template requests (F-M12)', () => {
     await tick(300);
     expect(pending).toHaveLength(2);
     // meanwhile the lyric size changes
+    await userEvent.click(screen.getByRole('tab', { name: '歌词' }));
     const size = screen.getByRole('textbox', { name: '字号（输入数值）' });
     fireEvent.focus(size);
     fireEvent.change(size, { target: { value: '120' } });

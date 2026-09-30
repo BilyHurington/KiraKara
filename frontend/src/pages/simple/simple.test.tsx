@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup as cleanupRender, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AppSettings, KaraokeStyle, PipelineTask } from '@/lib/types';
@@ -162,6 +162,31 @@ describe('simple mode home', () => {
   });
 });
 
+describe('a long task list', () => {
+  it('shows the newest five with their steps folded; older ones on request', async () => {
+    seed();
+    const done = Array.from({ length: 7 }, (_, i) => task({ id: `t${i}`, name: `歌 ${i}`, status: 'succeeded', project_id: `p${i}`, stages: stages(7),
+      warnings: i === 0 ? ['歌词里有 2 行没有翻译', '有 3 处建议检查（在“人工检查”的“有问题”里查看）'] : [] }));
+    const running = task({ id: 'tr', name: '进行中的歌', status: 'running', stages: stages(3, true) });
+    useSimple.setState({ tasks: [running, ...done] });
+    mockApi({ 'GET /api/tasks': () => useSimple.getState().tasks });
+    renderUI(<SimpleHome />);
+    expect(screen.getByText('进行中的歌')).toBeInTheDocument();
+    expect(screen.getByText('歌 3')).toBeInTheDocument();
+    expect(screen.queryByText('歌 4')).toBeNull();
+    // a finished task: what needs a look stays, the steps and other notes fold
+    const row = screen.getByText('歌 0').closest('li')!;
+    expect(within(row).getByRole('button', { name: /有 3 处建议检查/ })).toBeInTheDocument();
+    expect(within(row).queryByText('歌词里有 2 行没有翻译')).toBeNull();
+    expect(within(row).queryByRole('list', { name: '处理步骤' })).toBeNull();
+    await userEvent.click(within(row).getByRole('button', { name: /处理详情（7 步完成 · 1 条说明）/ }));
+    expect(within(row).getByText('歌词里有 2 行没有翻译')).toBeInTheDocument();
+    expect(within(row).getByRole('list', { name: '处理步骤' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '显示更早的 3 个任务' }));
+    expect(screen.getByText('歌 6')).toBeInTheDocument();
+  });
+});
+
 describe('simple mode settings', () => {
   it('saves each change and never shows the API key', async () => {
     seed();
@@ -197,9 +222,16 @@ describe('simple mode settings', () => {
     await waitFor(() => expect(api.find('PUT', '/api/settings').some((c) => c.body.ai?.api_key === 'sk-test')).toBe(true));
     expect(key).toHaveValue('');
     expect(await screen.findByPlaceholderText('••••••••（已保存）')).toBeInTheDocument();
-    // the video's sound is chosen per song on the task form (one place), not here
+    // one category at a time; the video's sound is chosen per song on the task form (one place), not here
+    expect(screen.queryByText(/每首歌在“制作”页第 4 步选择/)).toBeNull();
+    await userEvent.click(screen.getByRole('tab', { name: '输出视频' }));
+    expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
     expect(screen.queryByRole('radio', { name: /降低人声/ })).toBeNull();
     expect(screen.getByText(/每首歌在“制作”页第 4 步选择/)).toBeInTheDocument();
+    // the category is remembered
+    cleanupRender();
+    renderUI(<SimpleSettings />);
+    expect(screen.getByRole('tab', { name: '输出视频' })).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -225,16 +257,17 @@ describe('subtitle style panel in the simple-mode settings', () => {
     useApp.setState({ projects: [{ id: 'p1', name: '初恋组曲 Karaoke', mode: 'lrc', updated: 'z' }] });
     const api = settingsServer();
     renderUI(<SimpleSettings />);
-    // the built-in 默认 preset is selected; colours are open, other sections folded with a summary
+    await userEvent.click(screen.getByRole('tab', { name: '字幕样式' }));
+    // the built-in 默认 preset is selected; the colours are shown, the other categories are tabs
     expect(await screen.findByRole('combobox', { name: '预设' })).toHaveValue('default');
-    expect(screen.getByRole('button', { name: /配色/ })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: /特效.*无/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('tab', { name: '配色' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: '特效' })).toHaveAttribute('aria-selected', 'false');
     // the glow edge is part of the lyric style; effects fire around each sung syllable
-    await userEvent.click(screen.getByRole('button', { name: /歌词/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '歌词' }));
     await userEvent.click(screen.getByRole('switch', { name: /荧光边缘/ }));
     expect(screen.getByLabelText('荧光大小（输入数值）')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /特效/ }));
-    expect(screen.queryByRole('switch', { name: /荧光边缘/ })).toBeInTheDocument(); // only the one in 歌词
+    await userEvent.click(screen.getByRole('tab', { name: '特效' }));
+    expect(screen.queryByRole('switch', { name: /荧光边缘/ })).toBeNull(); // it lives in 歌词 only
     await userEvent.click(screen.getByRole('radio', { name: '花瓣飘落' }));
     // particles sit behind the text unless asked otherwise
     expect(screen.getByRole('switch', { name: /放在字幕后面/ })).toBeChecked();
@@ -247,12 +280,12 @@ describe('subtitle style panel in the simple-mode settings', () => {
       expect(k?.effects.behind).toBe(false);
     }, { timeout: 2000 });
     // ruby swept together with the lyric below it
-    await userEvent.click(screen.getByRole('button', { name: /注音/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '注音' }));
     await userEvent.click(screen.getByRole('radio', { name: '与歌词对齐' }));
     expect(screen.getByText(/上下一条竖线扫过/)).toBeInTheDocument();
     await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)?.body.simple.karaoke as KaraokeStyle).ruby.sweep).toBe('base'), { timeout: 2000 });
     // song info card: a switch and the lines to show (no free text without a song)
-    await userEvent.click(screen.getByRole('button', { name: /歌曲信息/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '歌曲信息' }));
     await userEvent.click(screen.getByRole('switch', { name: '显示歌曲信息（开头，以及结尾）' }));
     await userEvent.click(screen.getByRole('checkbox', { name: '显示作词' }));
     await userEvent.click(screen.getByRole('radio', { name: '右上角' }));
@@ -278,7 +311,8 @@ describe('subtitle style panel in the simple-mode settings', () => {
     seed();
     const api = settingsServer();
     renderUI(<SimpleSettings />);
-    await userEvent.click(await screen.findByRole('button', { name: /翻译.*关闭/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '字幕样式' }));
+    await userEvent.click(await screen.findByRole('tab', { name: '翻译' }));
     await userEvent.click(screen.getByRole('switch', { name: /显示翻译字幕/ }));
     await userEvent.click(screen.getByRole('radio', { name: '歌词旁' }));
     await waitFor(() => {
@@ -286,7 +320,7 @@ describe('subtitle style panel in the simple-mode settings', () => {
       expect(k?.translation).toMatchObject({ enabled: true, position: 'block', size_pct: 60 });
     }, { timeout: 2000 });
     expect(screen.getByRole('combobox', { name: '翻译字体' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /时间/ }));
+    await userEvent.click(screen.getByRole('tab', { name: '时间' }));
     expect(screen.getByRole('textbox', { name: '淡入（输入数值）' })).toHaveValue('200');
     await userEvent.click(screen.getByRole('switch', { name: /歌词提前显示/ }));
     await waitFor(() => expect((api.find('PUT', '/api/settings').at(-1)!.body.simple.karaoke as KaraokeStyle).timing.advance_ms).toBe(150), { timeout: 2000 });
