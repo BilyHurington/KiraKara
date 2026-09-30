@@ -448,6 +448,12 @@ class TaskQueue:
         self._submit_prep(t)
         return t
 
+    def snapshot(self) -> list[PipelineTask]:
+        """The tasks as they are now (read from tasks.json first when another server owns the queue)."""
+        self._refresh()
+        with self._lock:
+            return list(self.tasks)
+
     def active_for_project(self, pid: str) -> Optional[PipelineTask]:
         """The unfinished task working on a project, if any (the detailed mode must not run heavy
         jobs on it meanwhile)."""

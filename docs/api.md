@@ -113,11 +113,11 @@ they are gone (the UI shows an operation that was running as failed: the local s
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/projects` | – | `[{id, name, mode, updated}]` newest first (unreadable projects are left out) |
+| GET | `/api/projects` | – | `[{id, name, mode, updated, size}]` newest first (`size`: bytes of the project folder; unreadable projects are left out) |
 | POST | `/api/projects` | `{name, mode: "plain"\|"lrc"}` | `ProjectView` |
 | GET | `/api/projects/{pid}` | – | `ProjectView` |
 | PATCH | `/api/projects/{pid}` | `{name?, mode?, config?: AlignConfig (partial ok), mix?: MixSettings (partial ok)}` | `ProjectView`; every value is checked before anything changes (NaN / ∞ → 400) |
-| DELETE | `/api/projects/{pid}` | – | `{ok}`; deletes the project folder (audio, stems, exports). 409 while a simple-mode task or a job works on it |
+| DELETE | `/api/projects/{pid}` | – | `{ok}`; deletes the project folder (audio, stems, exports) and the playback / waveform cache of audio no other project has. 409 while a simple-mode task or a job works on it |
 | POST | `/api/projects/import` | multipart `file` (project.json or .kara.zip) | `ProjectView`; the imported project always gets a **new id** (an id in the file is never used as a folder name) |
 | GET | `/api/projects/{pid}/package?include_audio=1` | – | zip download (built in a temporary folder, not kept in `exports/`) |
 
@@ -185,7 +185,7 @@ and the last `PatchReport`.
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | PUT | `/api/projects/{pid}/background` | multipart `file`: a picture (PNG / JPG / WebP / BMP) or a video (MP4 / MOV / MKV / WebM / GIF …, ≤ 4 GiB) | `ProjectView`. Stored as `project.background` `{id, sha256, path, filename, kind: "image"\|"video", width, height, duration_ms}`; from then on preview and burn (`background: "auto"`) show it instead of the project's video / black: a picture held for the whole song, a video looped (its own sound never used), scaled to cover a frame of its aspect ratio with the longer side 1920 px; the audio is the project's (timeline from the audio start). 400 for anything else (checked by extension, content and ffprobe); 409 while a task works on the project |
-| DELETE | `/api/projects/{pid}/background` | – | `ProjectView` (back to the video / black; the file stays in `assets/`) |
+| DELETE | `/api/projects/{pid}/background` | – | `ProjectView` (back to the video / black; the file is deleted) |
 | GET | `/api/projects/{pid}/background/file` | – | the background file (404 without one) |
 | POST | `/api/projects/{pid}/audio` | multipart `file`, form `role: original\|vocals\|instrumental` | `ProjectView` (+ stems get `sync_report`). The file may be a **video**: its first audio track is extracted losslessly (FLAC) and used; a video uploaded as the original is kept as `project.video` (with `audio_offset_s`) for re-muxing. |
 | GET | `/api/projects/{pid}/audio/{asset_id}/playback.wav` | – | decoded PCM WAV (same decoder as alignment → identical time origin). Supports Range. |
@@ -311,6 +311,9 @@ unknown values → default).
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
 | GET | `/api/update` | `?refresh=1` | `{enabled, current, latest, newer, portable, updater, url, error}`: is a newer version out (the latest GitHub release's `manifest.json`, asked at most every 6 h; `refresh=1` asks now). With `check_updates: false` in the settings (and no `refresh`): `{enabled: false, current}`, nothing is asked. `portable`: running from a portable package, updated with its `updater` (`更新.bat` / `更新.command`) |
+| GET | `/api/storage` | – | `{root, disk: {total, free}, projects: [{id, name, mode, updated, size, parts: {media, stems, background, exports, unused, other}, exports: [{filename, size, modified}], stems, busy}], projects_size, cache: {size, parts}, models: {size, path}, leftovers: {size, parts: {asset?, upload?, folder?, deleted?}}, working}` (bytes; projects largest first). `unused`: files in `assets/` no entry points to; leftovers also count a task's staged upload once it is imported, project folders without a project file and `.deleted-*` folders (files younger than 10 min are left out) |
+| POST | `/api/storage/clean` | `{cache?, leftovers?}` | the same view plus `freed`. The cache is refused (409) while a task or operation runs; leftovers skip projects something is working on |
+| POST | `/api/projects/{pid}/storage/clean` | `{exports?: true \| [filename…], stems?: true}` | the same view plus `freed`: exported files (all or the ones named), the separated stems (their entries and files). 409 while a task or operation works on the project |
 | GET | `/api/diagnostics` | `?task=&job=` | `{text}`: a report to paste into a bug report (version, system, Python, torch / GPU, ffmpeg + libass, the video encoder, the main settings, the task's / job's error, stages and traceback when given, the end of `~/.kara_align/logs/milikara.log`); the home folder is shown as `~`, never an API key |
 | GET | `/api/settings` | – | `AppSettings` (`check_updates`: look for a newer version when the app is opened; `hardware_encoding` (default true): burn videos with a working GPU encoder, falling back to libx264; `ai.api_key` is never returned; `ai.has_api_key`, `ai.env_key_present` instead). `ai.enabled`: AI readings on / off (simple-mode tasks); `ai.provider`: `manual` (copy the prompt into any web chat and paste the reply) \| `claude` \| `codex` \| `openai`. Settings from before the switch are read as: `provider: "none"` → off + `manual`; a CLI / API provider → on, unless the old `simple.ai_readings` was false |
 | PUT | `/api/settings` | partial `{ai?, simple?}` (nested merge); `ai.api_key` replaces the key only when non-empty, `ai.clear_api_key: true` removes it, `simple.reset_karaoke: true` resets the simple mode's style to the built-in 暖阳 | `AppSettings`; 400 `设置无效：…` for an invalid value |

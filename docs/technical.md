@@ -91,6 +91,8 @@ milikara serve --allow-host 192.168.1.20      # 另外接受这个主机名的�
 
 诊断：`milikara serve` 把失败的任务 / 操作（含 traceback）和服务的错误写到 `~/.kara_align/logs/milikara.log`（1 MB 轮换，保留 3 份）；`/api/diagnostics` 生成一份可以直接粘贴的报告（版本、系统、Python、torch / CUDA / MPS、ffmpeg 与 libass、视频编码器、主要设置、失败任务的步骤和详情、日志末尾），用户目录替换为 `~`，不含 API Key。
 
+磁盘空间（`kara_align/storage.py`）：项目文件夹按条目分成原曲和视频、分轨、背景、导出、没有条目指向的文件（`unused`）和其他；残留文件还包括已导入任务的上传副本、没有项目文件的项目文件夹、`.deleted-*` 文件夹（10 分钟内的新文件不算，可能正在上传或导入）。替换原曲、视频、分轨或背景时，旧文件在没有别的条目指向时立即删除；删除项目时一起删除只属于它的播放缓存和波形缓存（按音频 sha256，别的项目用到的保留）。有任务或操作在处理的项目不能清理，缓存在有任何任务运行时不能清理。
+
 烧录的视频编码：设置 `hardware_encoding`（默认开）时依次尝试 `h264_nvenc`、`h264_qsv`、`h264_amf`、`h264_videotoolbox`，每个先编码几帧确认可用（结果缓存）；NVENC / QSV / AMF 用恒定质量，VideoToolbox 按画面面积给码率（1080p 标准 10 Mbit/s、高 16 Mbit/s）。macOS 上只在需要解码原视频 / 背景视频时用 VideoToolbox（实测 Apple Silicon 上纯色背景 libx264 更快，60 秒 1080p：6.4 s 对 8.6 s；有 MV 时 10.3 s 对 8.7 s）。显卡编码烧录失败时自动用 libx264 重来。
 
 ## 开发与测试

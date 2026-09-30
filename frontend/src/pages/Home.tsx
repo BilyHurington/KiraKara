@@ -3,11 +3,12 @@
 import { ArrowRight, FileMusic, FolderInput, Clock, ListMusic, Timer, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { cn, fmtRelative } from '@/lib/format';
+import { cn, fmtBytes, fmtRelative } from '@/lib/format';
 import { isEnter } from '@/lib/keys';
-import type { Mode, ProjectView } from '@/lib/types';
+import type { Mode, ProjectListItem, ProjectView } from '@/lib/types';
 import { adoptProject, deleteProject, loadProjects, openProject, run, toast, useApp } from '@/store/app';
 import { Badge, Button, Card, CardBody, CardHeader, DropZone, EmptyState, Input, Tip } from '@/components/ui';
+import { StorageButton } from '@/components/StorageDialog';
 import { ModeChoice } from './Mode';
 
 export function HomePage() {
@@ -88,7 +89,7 @@ export function HomePage() {
           </Card>
 
           <Card>
-            <CardHeader title="最近项目" icon={<Clock className="size-4" />} />
+            <CardHeader title="最近项目" icon={<Clock className="size-4" />} actions={<StorageButton />} />
             <div className="p-2">
               {projects.length === 0 ? (
                 <EmptyState className="m-2 py-8" title="还没有项目" description="新建一个项目开始对齐" />
@@ -105,7 +106,7 @@ export function HomePage() {
   );
 }
 
-function ProjectRow({ p }: { p: { id: string; name: string; mode: Mode; updated: string } }) {
+function ProjectRow({ p }: { p: ProjectListItem }) {
   const [confirm, setConfirm] = useState(false);
   if (confirm) {
     return (
@@ -131,7 +132,7 @@ function ProjectRow({ p }: { p: { id: string; name: string; mode: Mode; updated:
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium">{p.name}</div>
-          <div className="text-xs text-muted">{fmtRelative(p.updated)}</div>
+          <div className="text-xs text-muted">{fmtRelative(p.updated)}{p.size != null && <> · {fmtBytes(p.size)}</>}</div>
         </div>
         <Badge tone={p.mode === 'lrc' ? 'accent' : 'neutral'}>{p.mode === 'lrc' ? 'LRC 增强' : '普通'}</Badge>
         <ArrowRight className="size-4 text-subtle opacity-0 transition group-hover:opacity-100" />

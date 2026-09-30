@@ -1,15 +1,17 @@
 // 设置页：极简模式的一键流程用到的全部选项。每项修改立即保存到本机。
 
-import { ArrowUpCircle, Bot, Crosshair, Film, Scissors, Subtitles } from 'lucide-react';
+import { ArrowUpCircle, Bot, Crosshair, Film, HardDrive, Scissors, Subtitles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import type { AppSettings, FontFamily, KaraokeStyle } from '@/lib/types';
+import type { AppSettings, FontFamily, KaraokeStyle, StorageInfo } from '@/lib/types';
+import { fmtBytes } from '@/lib/format';
 import { loadProjects, run, toast, useApp } from '@/store/app';
 import { loadSettings, saveSettings, useSimple } from '@/store/simple';
 import { loadUpdate, useUpdate } from '@/store/update';
 import { updateHowTo } from '@/components/shell/UpdateBadge';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
 import { DiagnosticsButton } from '@/components/DiagnosticsButton';
+import { loadStorage, StorageDialog } from '@/components/StorageDialog';
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
 
@@ -123,8 +125,33 @@ export function SimpleSettings() {
         </CardBody>
       </Card>
 
+      <StorageCard />
+
       <UpdateCard enabled={settings.check_updates ?? true} />
     </div>
+  );
+}
+
+/** How much the projects and the cache take; the dialog cleans them up. */
+function StorageCard() {
+  const [info, setInfo] = useState<StorageInfo | null>(null);
+  const [open, setOpen] = useState(false);
+  const refresh = () => void loadStorage().then(setInfo, () => undefined);
+  useEffect(refresh, []);
+  const total = info ? info.projects_size + info.cache.size + info.leftovers.size : null;
+  return (
+    <Card>
+      <CardHeader icon={<HardDrive className="size-4" />} title="存储空间"
+        description="每首歌的项目里有视频、分离出的人声和伴奏、生成的视频，一首通常几百 MB。不需要的可以删掉。" />
+      <CardBody className="flex flex-wrap items-center gap-3">
+        <span className="text-[13px] text-muted">
+          {info ? <>共占用 <b className="tabular text-fg">{fmtBytes(total)}</b>（{info.projects.length} 个项目）
+            {info.disk.free != null && <> · 磁盘剩余 <b className="tabular text-fg">{fmtBytes(info.disk.free)}</b></>}</> : '读取中…'}
+        </span>
+        <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setOpen(true)}>查看和清理</Button>
+        <StorageDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) refresh(); }} />
+      </CardBody>
+    </Card>
   );
 }
 

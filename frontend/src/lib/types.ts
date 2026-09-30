@@ -326,7 +326,29 @@ export interface ProjectView {
   [extra: string]: any;
 }
 
-export interface ProjectListItem { id: string; name: string; mode: Mode; updated: string }
+export interface ProjectListItem { id: string; name: string; mode: Mode; updated: string; /** bytes of the project's folder */ size?: number }
+
+/** GET /api/storage: what MiliKara keeps on disk (bytes). */
+export interface StorageProject extends ProjectListItem {
+  size: number;
+  parts: { media: number; stems: number; background: number; exports: number; unused: number; other: number };
+  exports: { filename: string; size: number; modified: number }[];
+  stems: boolean;
+  /** a task or operation is working on it: nothing can be deleted meanwhile */
+  busy: boolean;
+}
+export interface StorageInfo {
+  root: string;
+  disk: { total: number | null; free: number | null };
+  projects: StorageProject[];
+  projects_size: number;
+  cache: { size: number; parts: Record<string, number> };
+  models: { size: number; path: string | null };
+  leftovers: { size: number; parts: Partial<Record<'asset' | 'upload' | 'folder' | 'deleted', number>> };
+  /** something is running (the cache cannot be cleared) */
+  working: boolean;
+  freed?: number;
+}
 
 export interface Job {
   id: string;

@@ -38,6 +38,17 @@ export function fmtDate(iso: string | null | undefined): string {
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Bytes as B / KB / MB / GB (1024-based, as file managers on Windows show them). */
+export function fmtBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
 export function fmtRelative(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso).getTime();

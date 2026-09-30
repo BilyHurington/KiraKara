@@ -23,6 +23,7 @@ from .models import (
 )
 from .project import store
 from .project.store import ProjectError
+from .storage import drop_replaced
 
 
 class ServiceError(ValueError):
@@ -931,6 +932,7 @@ def add_audio(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
                 asset.sync_checked = True
                 asset.source.parent_sha256 = orig.sha256
         # a new original invalidates stems derived from another original
+        replaced = [a.path for a in p.audio if a.role == role]
         p.audio = [a for a in p.audio if a.role != role]
         if role == "original":
             for a in p.audio:
@@ -938,6 +940,7 @@ def add_audio(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
                     a.source.notes.append("原曲已更换：此音轨对应旧原曲")
         p.audio.append(asset)
         h.save()
+        drop_replaced(h, replaced)
     return asset
 
 
@@ -960,8 +963,10 @@ def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
         asset = add_audio(h, src_path, role, filename=name, source_kind=source_kind)
         if role == "original" and h.project.video is not None:
             with h.lock:
+                old = h.project.video.path
                 h.project.video = None
                 h.save()
+                drop_replaced(h, [old])
         return asset
 
     info = probe_media(src_path)
@@ -984,9 +989,11 @@ def add_media(h: ProjectHandle, src_path: Path, role: str, filename: Optional[st
             audio_offset_s=audio_offset_s(info), audio_sha256=asset.sha256, upright=True,
         )
     with h.lock:
+        old = h.project.video.path if role == "original" and h.project.video is not None else None
         if role == "original":
             h.project.video = video
         h.save()
+        drop_replaced(h, [old])
     return asset
 
 
@@ -1272,16 +1279,20 @@ def set_background(h: ProjectHandle, src_path: Path, filename: Optional[str] = N
         tmp.replace(dest)
     bg = BackgroundAsset(sha256=sha, path=f"assets/{dest.name}", filename=name, kind=kind, **info)
     with h.lock:
+        old = h.project.background.path if h.project.background is not None else None
         h.project.background = bg
         h.save()
+        drop_replaced(h, [old])
     return bg
 
 
 def clear_background(h: ProjectHandle) -> None:
-    """Back to the video (or black); the file stays in the project's assets."""
+    """Back to the video (or black); the file is deleted."""
     with h.lock:
+        old = h.project.background.path if h.project.background is not None else None
         h.project.background = None
         h.save()
+        drop_replaced(h, [old])
 
 
 def _background_file(h: ProjectHandle) -> Optional[tuple[BackgroundAsset, Path]]:
@@ -1570,6 +1581,7 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
     with h.lock:
+        replaced = [a.path for a in h.project.audio if a.role in ("vocals", "instrumental")]
         h.project.audio = [a for a in h.project.audio if a.role not in ("vocals", "instrumental")]
         sync = report.get("sync") if isinstance(report.get("sync"), dict) else {}
         for a in assets:
@@ -1578,6 +1590,7 @@ def run_separation(h: ProjectHandle, preset: str, cancel: Optional[CancelToken] 
             a.sync_checked = a.sync_report is not None
             h.project.audio.append(a)
         h.save()
+        drop_replaced(h, replaced)
     return {"report": report, "assets": [a.id for a in assets]}
 
 

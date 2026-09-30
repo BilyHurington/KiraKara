@@ -6,7 +6,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -174,6 +174,16 @@ class LockBody(BaseModel):
 
 class RestoreBody(BaseModel):
     manual: Optional[dict] = None
+
+
+class CleanProjectBody(BaseModel):
+    exports: Union[bool, list[str]] = False  # all exported files, or the ones named
+    stems: bool = False
+
+
+class CleanBody(BaseModel):
+    cache: bool = False
+    leftovers: bool = False
 
 
 class AdoptBody(BaseModel):
@@ -524,7 +534,9 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
 
     @app.get("/api/projects")
     def list_projects():
-        return ws.list()
+        from ..storage import size_of
+
+        return [{**p, "size": size_of(Path(ws.root) / p["id"])} for p in ws.list()]
 
     @app.post("/api/projects")
     def create_project(body: CreateBody):
@@ -536,17 +548,98 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
     def get_project(pid: str):
         return view(handle(pid))
 
-    @app.delete("/api/projects/{pid}")
-    def delete_project(pid: str):
-        handle(pid)
+    def project_busy(pid: str, doing: str = "删除") -> None:
         t = tq.active_for_project(pid)
         if t is not None:
             raise HTTPException(409, f"极简模式任务「{t.name or t.media_filename}」正在处理这个项目，请先取消该任务")
         if any(j.status in ("queued", "running") for j in jm.list(pid)):
-            raise HTTPException(409, "这个项目还有正在进行的操作，请等它完成或取消后再删除")
+            raise HTTPException(409, f"这个项目还有正在进行的操作，请等它完成或取消后再{doing}")
+
+    def audio_shas(skip: str = "") -> set[str]:
+        out: set[str] = set()
+        for p in ws.list():
+            if p["id"] != skip:
+                try:
+                    out |= {a.sha256 for a in ws.get(p["id"]).project.audio}
+                except ProjectError:
+                    pass
+        return out
+
+    @app.delete("/api/projects/{pid}")
+    def delete_project(pid: str):
+        from .. import storage
+
+        h = handle(pid)
+        project_busy(pid)
+        shas = {a.sha256 for a in h.project.audio}
         ws.delete(pid)
         tq.forget_project(pid)  # its tasks stay listed, without links to the deleted project
+        storage.drop_cache_of(shas, audio_shas())  # its decoded audio and waveforms, unless another project has them
         return {"ok": True}
+
+    # ------------------------------------------------------------------ storage
+
+    def busy_projects() -> set[str]:
+        busy = {j.project_id for j in jm.list() if j.status in ("queued", "running") and j.project_id}
+        busy |= {t.project_id for t in tq.snapshot() if t.project_id and t.status in ("preparing", "waiting", "queued", "running")}
+        return busy
+
+    def storage_view() -> dict:
+        from .. import storage
+
+        busy = busy_projects()
+        projects = []
+        for p in ws.list():
+            try:
+                u = storage.project_usage(ws.get(p["id"]))
+            except ProjectError:
+                continue
+            projects.append({**p, **u, "busy": p["id"] in busy})
+        projects.sort(key=lambda p: p["size"], reverse=True)
+        left = storage.leftovers(ws, tq, busy)
+        kinds: dict[str, int] = {}
+        for i in left:
+            kinds[i["kind"]] = kinds.get(i["kind"], 0) + i["size"]
+        return {
+            "root": str(ws.root), "disk": storage.disk(), "projects": projects,
+            "projects_size": sum(p["size"] for p in projects),
+            "cache": storage.cache_usage(), "models": storage.models_usage(),
+            "leftovers": {"size": sum(kinds.values()), "parts": kinds},
+            "working": bool(busy) or any(j.status in ("queued", "running") for j in jm.list()),
+        }
+
+    @app.get("/api/storage")
+    def get_storage():
+        return storage_view()
+
+    @app.post("/api/storage/clean")
+    def clean_storage(body: CleanBody):
+        """The cache (made again when needed) and / or leftovers (never needed again)."""
+        from .. import storage
+
+        freed = 0
+        if body.cache:
+            if any(j.status in ("queued", "running") for j in jm.list()) or \
+                    any(t.status in ("preparing", "running") for t in tq.snapshot()):
+                raise HTTPException(409, "有任务或操作正在进行，它们会用到缓存；请等它们完成后再清理缓存")
+            freed += storage.clear_cache()
+        if body.leftovers:
+            freed += storage.clean_leftovers(storage.leftovers(ws, tq, busy_projects()))
+        return {"freed": freed, **storage_view()}
+
+    @app.post("/api/projects/{pid}/storage/clean")
+    def clean_project_storage(pid: str, body: CleanProjectBody):
+        """Exported files (all or some) and / or the separated stems (made again by separating)."""
+        from .. import storage
+
+        h = handle(pid)
+        project_busy(pid, "清理")
+        freed = 0
+        if body.exports:
+            freed += storage.drop_exports(h, None if body.exports is True else body.exports)
+        if body.stems:
+            freed += storage.drop_stems(h)
+        return {"freed": freed, **storage_view()}
 
     @app.patch("/api/projects/{pid}")
     def patch_project(pid: str, body: PatchProjectBody):
