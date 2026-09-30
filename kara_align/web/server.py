@@ -392,6 +392,22 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
     def list_tasks():
         return tq.list()
 
+    @app.get("/api/diagnostics")
+    def diagnostics(task: str = "", job: str = ""):
+        """A report to copy into a bug report: the system, and a failed task's / job's details."""
+        from ..diagnostics import report
+
+        t = j = None
+        if task:
+            try:
+                t = tq.get(task).model_dump(mode="json", exclude={"karaoke"})
+            except KeyError:
+                raise HTTPException(404, "没有该任务") from None
+        if job:
+            jj = job_or_404(job)
+            j = {**jj.to_dict(), "detail": jj.detail}
+        return {"text": report(task=t, job=j)}
+
     @app.post("/api/tasks")
     async def add_task(file: UploadFile = File(...), lyrics: str = Form(...), mode: str = Form("lrc"),
                        name: str = Form(""), style: str = Form(""), background: Optional[UploadFile] = File(None)):

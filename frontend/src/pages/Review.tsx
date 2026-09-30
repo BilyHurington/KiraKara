@@ -29,7 +29,8 @@ export function ReviewPage() {
   const result = useResult();
   const selLineId = useApp((s) => s.selLineId);
   const selUnitId = useApp((s) => s.selUnitId);
-  const [filter, setFilter] = useState<LineFilter>('all');
+  const filter = useApp((s) => s.reviewFilter);
+  const setFilter = (f: LineFilter) => useApp.setState({ reviewFilter: f });
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [tab, setTab] = useState('units');
   const rerunBusy = useJobRunning('align');

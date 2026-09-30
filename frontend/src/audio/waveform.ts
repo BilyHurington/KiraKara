@@ -67,6 +67,7 @@ export class Waveform {
   durationMs = 0;
   viewStart = 0;
   msPerPx = 20;
+  /** keep the playhead in view while playing; off once the user scrolls, on again when playback starts */
   follow = true;
   dirty = true;
   /** drawing happens only while active (dock open, page visible) */
@@ -75,6 +76,7 @@ export class Waveform {
   frames = 0;
   private raf = 0;
   private lastPlayhead = -1;
+  private wasPlaying = false;
   private colors: Record<string, string> | null = null;
   private drag: Drag | null = null;
   private hoverX: number | null = null;
@@ -219,6 +221,7 @@ export class Waveform {
     const span = Math.max(b - a, 200);
     if (span * 1.3 > this.spanMs) this.msPerPx = (span * 1.6) / this.width;
     if (a < this.viewStart || b > this.viewStart + this.spanMs) this.viewStart = a - this.spanMs * 0.2;
+    this.follow = true;
     this.clampView();
     this.invalidate();
   }
@@ -387,6 +390,12 @@ export class Waveform {
     this.frames += 1;
     const playhead = this.cb.getPlayhead();
     this.lastPlayhead = playhead.ms;
+    if (playhead.playing && !this.wasPlaying) this.follow = true;  // (re)started: follow again
+    this.wasPlaying = playhead.playing;
+    if (this.follow && playhead.playing && (playhead.ms > this.viewStart + this.spanMs * 0.92 || playhead.ms < this.viewStart)) {
+      this.viewStart = playhead.ms - this.spanMs * 0.08;
+      this.clampView();
+    }
     const ctx = this.canvas.getContext('2d');
     if (!ctx) {
       this.dirty = false;
@@ -400,10 +409,6 @@ export class Waveform {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    if (this.follow && playhead.playing && (playhead.ms > this.viewStart + this.spanMs * 0.92 || playhead.ms < this.viewStart)) {
-      this.viewStart = playhead.ms - this.spanMs * 0.08;
-      this.clampView();
-    }
 
     const waveTop = RULER_H;
     const waveH = H - RULER_H - UNIT_H;

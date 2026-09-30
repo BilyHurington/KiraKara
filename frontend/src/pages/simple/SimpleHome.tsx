@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn, fmtRelative } from '@/lib/format';
+import { errorHint } from '@/lib/errorHints';
+import { DiagnosticsButton } from '@/components/DiagnosticsButton';
 import type { Mode, PipelineStage, PipelineTask, TaskStyleOptions } from '@/lib/types';
 import { run, toast, useApp } from '@/store/app';
 import { usePageDraft } from '@/store/drafts';
@@ -61,6 +63,22 @@ export function musicPlatform(url: string): 'netease' | 'qq' | null {
   return null;
 }
 
+/** An album / playlist rather than a song (the URL forms lyrics/fetch/links.py reads; short links
+ *  are only known once the server follows them). */
+export function isCollectionLink(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  const host = u.hostname.toLowerCase();
+  if (host.endsWith('music.163.com')) {
+    const path = u.hash.startsWith('#/') ? u.hash.slice(1) : u.pathname;
+    return /\/(album|playlist)\b/.test(path) && !/\/song\b/.test(path);
+  }
+  if (host.endsWith('y.qq.com')) return /\/(albumDetail|album|playlist)\/|taoge/.test(u.pathname);
+  return false;
+}
+
+const COLLECTION = '这是专辑或歌单链接：请打开其中一首歌，粘贴那首歌的链接';
+
 /** What the pasted text looks like (mirrors the server's link detection: pipeline.is_music_link). */
 export function detectLyrics(text: string): { kind: 'empty' | 'link' | 'badlink' | 'lrc' | 'text'; label: string } {
   const t = text.trim();
@@ -69,6 +87,7 @@ export function detectLyrics(text: string): { kind: 'empty' | 'link' | 'badlink'
   const timed = lines.filter((l) => /^\s*\[\d+:\d+/.test(l)).length;
   const explicit = EXPLICIT.exec(t);
   if (explicit) {
+    if (explicit[2] && explicit[2].toLowerCase() !== 'song') return { kind: 'badlink', label: COLLECTION };
     const where = explicit[1].toLowerCase().startsWith('qq') ? 'QQ 音乐' : '网易云音乐';
     return { kind: 'link', label: `${where}歌曲 ID · 会自动获取歌词` };
   }
@@ -76,6 +95,7 @@ export function detectLyrics(text: string): { kind: 'empty' | 'link' | 'badlink'
   if (urls.length && lines.length <= 3 && !timed) {
     const platform = urls.map(musicPlatform).find(Boolean);
     if (!platform) return { kind: 'badlink', label: '只支持网易云音乐 / QQ 音乐的链接；其他网站请直接粘贴歌词文字' };
+    if (urls.every((u) => !musicPlatform(u) || isCollectionLink(u))) return { kind: 'badlink', label: COLLECTION };
     return { kind: 'link', label: `${platform === 'qq' ? 'QQ 音乐' : '网易云音乐'}链接 · 会自动获取歌词` };
   }
   if (timed > 0) return { kind: 'lrc', label: `LRC 歌词 · ${timed} 行带时间` };
@@ -167,7 +187,7 @@ export function SimpleHome() {
   // why “开始制作” cannot be used yet (shown on the button and next to it)
   const blocked = !file ? '先放入视频或音频（第 2 步）'
     : detected.kind === 'empty' ? '先粘贴歌词或音乐链接（第 3 步）'
-      : detected.kind === 'badlink' ? '这个链接不能获取歌词：只支持网易云音乐 / QQ 音乐'
+      : detected.kind === 'badlink' ? (detected.label === COLLECTION ? '这是专辑或歌单链接：请粘贴单曲链接' : '这个链接不能获取歌词：只支持网易云音乐 / QQ 音乐')
         : styleOpts?.source === 'saved' && !styleOpts.saved_id ? '第 4 步选了“保存的预设”，请选择一个预设'
           : null;
 
@@ -412,11 +432,23 @@ function TaskRow({ task: t, ahead, onCalibrate }: { task: PipelineTask; ahead: n
           {(t.status === 'running' || t.status === 'preparing') && t.message && <div className="mt-2 text-xs text-muted">{t.message}</div>}
         </>
       )}
-      {t.error && <div className="mt-2 rounded-lg bg-danger-soft px-3 py-2 text-xs break-words text-danger">{t.error}</div>}
+      {t.error && (
+        <div className="mt-2 rounded-lg bg-danger-soft px-3 py-2 text-xs break-words text-danger">
+          <div>{t.error}</div>
+          {errorHint(t.error) && <div className="mt-1 text-fg/80">{errorHint(t.error)}</div>}
+          {t.status === 'failed' && <div className="mt-1 -mb-1"><DiagnosticsButton taskId={t.id} /></div>}
+        </div>
+      )}
       {t.warnings.length > 0 && (
         <ul className="mt-2 space-y-0.5">
           {t.warnings.map((w) => (
-            <li key={w} className="flex items-start gap-1.5 text-xs text-warn"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{w}</li>
+            <li key={w} className="flex items-start gap-1.5 text-xs text-warn">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              {canOpen && w.includes('人工检查') ? (
+                <button className="focus-ring rounded text-left underline decoration-dotted underline-offset-2 hover:text-accent"
+                  onClick={() => openInDetail(t.project_id!, 'review', { issues: true })} title="在详细模式的“人工检查”中打开">{w}</button>
+              ) : w}
+            </li>
           ))}
         </ul>
       )}

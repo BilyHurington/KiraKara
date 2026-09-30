@@ -110,6 +110,9 @@ class JobManager:
             except Exception as e:  # report the real failure reason
                 job.error = f"{type(e).__name__}: {e}"
                 job.detail = traceback.format_exc(limit=8)
+                from ..diagnostics import failure
+
+                failure(f"操作 {job.kind} {job.id}", job.error, job.detail)
                 self._finish(job, "failed", message="失败")
 
         (self._heavy if heavy else self._light).submit(run)

@@ -4,6 +4,7 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { api, ApiError, readableError } from '@/lib/api';
+import { errorHint } from '@/lib/errorHints';
 import type { AlignmentResult, Info, Job, ManualEdit, ProjectListItem, ProjectView } from '@/lib/types';
 import type { LineSingers } from '@/lib/singers';
 
@@ -44,6 +45,8 @@ interface State {
   /** more units selected together with selUnitId (Shift / ⌘ click); only counts while it contains selUnitId */
   selUnitIds: string[];
   calibLineId: string | null;
+  /** the review page's line filter (simple mode's "建议检查" opens it on 有问题) */
+  reviewFilter: 'all' | 'issues' | 'manual';
   compareWithId: string | null;
   candidateId: string | null;
   undo: UndoEntry[];
@@ -91,6 +94,7 @@ export const useApp = create<State>(() => ({
   selUnitId: null,
   selUnitIds: [],
   calibLineId: null,
+  reviewFilter: 'all',
   compareWithId: null,
   candidateId: null,
   undo: [],
@@ -110,7 +114,7 @@ const get = useApp.getState;
 /** Everything that belongs to one open project (selection, undo …). */
 const PROJECT_RESET = {
   resultId: null, undo: [], redo: [], selLineId: null, selUnitId: null, selUnitIds: [], calibLineId: null,
-  compareWithId: null, candidateId: null,
+  reviewFilter: 'all', compareWithId: null, candidateId: null,
 } satisfies Partial<State>;
 
 // ------------------------------------------------------------------ selectors
@@ -359,7 +363,10 @@ export function trackJob(job: Job, opts: {
       const where = j.project_id && !isOpenProject(j.project_id) ? projectName(j.project_id) : null;
       const suffix = where ? `（${where}）` : '';
       if (j.status === 'succeeded') toast('ok', `${opts.doneText ?? `${opts.label}完成`}${suffix}`);
-      else if (j.status === 'failed') toast('error', `${opts.label}失败${suffix}`, j.error || j.message);
+      else if (j.status === 'failed') {
+        const hint = errorHint(j.error);
+        toast('error', `${opts.label}失败${suffix}`, `${j.error || j.message}${hint ? `\n${hint}` : ''}`);
+      }
       else toast('info', `${opts.label}已取消${suffix}`);
       try {
         await opts.onDone?.(j);

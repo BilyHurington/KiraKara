@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { fmtMs, fmtSigned, parseTime } from '@/lib/format';
 import type { PipelineTask } from '@/lib/types';
 import { run, toast, useApp } from '@/store/app';
-import { isEnter, isEscape } from '@/lib/keys';
+import { isComposing, isEnter, isEscape, isTypingTarget } from '@/lib/keys';
 import { confirmCalibration, loadTasks } from '@/store/simple';
 import { Button, Callout, Dialog, Input } from '@/components/ui';
 
@@ -145,6 +145,29 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
   const dragging = useRef(false);
 
   const nudge = (d: number) => setMarker((m) => Math.min(Math.max(0, m + d), duration));
+  // the marker stays in view (moved with the keys, typed in)
+  useEffect(() => {
+    if (marker < view0 || marker > view0 + span) setView0(Math.max(0, marker - span * 0.35));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marker]);
+  // the waveform has the keyboard when the dialog opens (after the dialog's own first focus)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => { if (!isTypingTarget(document.activeElement)) canvas.current?.focus?.(); });
+    return () => cancelAnimationFrame(id);
+  }, []);
+  // Space plays from the marker / stops, ← → move it by 10 ms (with Shift 100 ms); not while typing,
+  // and Space still presses a focused button
+  const onKey = (e: React.KeyboardEvent) => {
+    if (isComposing(e) || isTypingTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === ' ') {
+      if (e.target instanceof HTMLElement && e.target.closest('button')) return;
+      e.preventDefault();
+      if (playhead !== null) stop(); else play(marker);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      nudge((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 100 : 10));
+    }
+  };
   // never past the end of the audio (at most the last window)
   const maxView = Number.isFinite(duration) ? Math.max(0, duration - span * 0.5) : Infinity;
   const pan = (d: number) => setView0((v) => Math.min(maxView, Math.max(0, v + d)));
@@ -195,7 +218,7 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
         </>
       }
     >
-      <div className="space-y-4">
+      <div className="space-y-4" onKeyDown={onKey}>
         <div className="rounded-xl bg-surface-2 px-4 py-3">
           <div className="text-xs text-muted">第一句</div>
           <div className="mt-0.5 text-lg font-semibold">{c.line_text}</div>
@@ -234,16 +257,24 @@ export function CalibrateDialog({ task, onClose }: { task: PipelineTask; onClose
           </div>
           <canvas
             ref={canvas}
-            aria-label="波形：点击或拖动设置标记"
-            className="h-32 w-full cursor-crosshair rounded-xl bg-surface-2 ring-1 ring-line"
+            tabIndex={0}
+            role="slider"
+            aria-label="波形：点击或拖动设置标记，← → 微调"
+            aria-valuemin={0}
+            aria-valuemax={Number.isFinite(duration) ? duration : undefined}
+            aria-valuenow={marker}
+            aria-valuetext={`标记 ${fmtMs(marker)}，偏移 ${fmtSigned(shift)}`}
+            className="focus-ring h-32 w-full cursor-crosshair rounded-xl bg-surface-2 ring-1 ring-line"
             onPointerDown={(e) => { dragging.current = true; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); pickAt(e.clientX); }}
             onPointerMove={(e) => { if (dragging.current) pickAt(e.clientX); }}
             onPointerUp={() => { dragging.current = false; }}
             onPointerCancel={() => { dragging.current = false; }}
             onLostPointerCapture={() => { dragging.current = false; }}
           />
-          <div className="mt-1 flex justify-between font-mono text-[11px] text-subtle">
-            <span>{fmtMs(view0, false)}</span><span>{fmtMs(view0 + span, false)}</span>
+          <div className="mt-1 flex justify-between gap-3 text-[11px] text-subtle">
+            <span className="font-mono">{fmtMs(view0, false)}</span>
+            <span>键盘：空格 播放 / 停止 · ← → 微调 10 ms · Shift + ← → 100 ms</span>
+            <span className="font-mono">{fmtMs(view0 + span, false)}</span>
           </div>
         </div>
 

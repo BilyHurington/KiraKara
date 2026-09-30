@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..audio.io import AudioError, ffmpeg_path
+
+log = logging.getLogger(__name__)
 
 
 class RenderError(AudioError):
@@ -29,13 +32,68 @@ def _encoders() -> str:
     return out.stdout
 
 
-def video_encoder(quality: str) -> list[str]:
+def _bitrate(quality: str, size: tuple[int, int]) -> str:
+    """For the encoders without a constant-quality mode: 10 / 16 Mbit/s at 1080p, by frame area."""
+    w, h = size
+    return f"{max(2, round((16 if quality == 'high' else 10) * w * h / (1920 * 1080)))}M"
+
+
+def hardware_encoders(quality: str, size: tuple[int, int]) -> list[tuple[str, list[str]]]:
+    """The GPU H.264 encoders to try, best first: NVIDIA, Intel, AMD, Apple."""
+    hq = quality == "high"
+    return [
+        ("h264_nvenc", ["-preset", "p6" if hq else "p5", "-tune", "hq", "-rc", "vbr", "-cq", "18" if hq else "21",
+                        "-b:v", "0", "-pix_fmt", "yuv420p"]),
+        ("h264_qsv", ["-preset", "slow" if hq else "medium", "-global_quality", "18" if hq else "21", "-pix_fmt", "nv12"]),
+        ("h264_amf", ["-quality", "quality", "-rc", "cqp", "-qp_i", "18" if hq else "21", "-qp_p", "20" if hq else "23",
+                      "-pix_fmt", "yuv420p"]),
+        ("h264_videotoolbox", ["-b:v", _bitrate(quality, size), "-pix_fmt", "yuv420p"]),
+    ]
+
+
+@functools.lru_cache(maxsize=8)
+def _encoder_works(name: str, args: tuple[str, ...]) -> bool:
+    """Listed is not usable (an NVENC build without an NVIDIA card, a driver too old …): encode a few frames."""
+    if name not in _encoders():
+        return False
+    try:
+        r = subprocess.run([ffmpeg_path(), "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=30:d=0.2",
+                            "-c:v", name, *args, "-f", "null", "-"], capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def software_encoder(quality: str) -> list[str]:
     if "libx264" in _encoders():
         preset, crf = ("veryfast", "20") if quality != "high" else ("medium", "17")
         return ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]
-    if "h264_videotoolbox" in _encoders():
-        return ["-c:v", "h264_videotoolbox", "-b:v", "12M" if quality == "high" else "8M", "-pix_fmt", "yuv420p"]
     return ["-c:v", "mpeg4", "-q:v", "2"]
+
+
+def video_encoder(quality: str, size: tuple[int, int] = (1920, 1080), hardware: bool = False) -> list[str]:
+    """The encoder of a burn: a working GPU encoder when ``hardware``, libx264 otherwise (and
+    whenever no GPU encoder works); VideoToolbox also without libx264."""
+    for name, args in hardware_encoders(quality, size):
+        if (hardware or (name == "h264_videotoolbox" and "libx264" not in _encoders())) and _encoder_works(name, tuple(args)):
+            return ["-c:v", name, *args]
+    return software_encoder(quality)
+
+
+def prefer_hardware(decodes_video: bool) -> bool:
+    """The setting (on by default), where it helps: Apple Silicon's libx264 outruns VideoToolbox on a
+    plain background, and gains on a decoded video only (measured: 60 s of 1080p with subtitles,
+    black 6.4 s vs 8.6 s, a music video 10.3 s vs 8.7 s); a GPU encoder elsewhere takes the load off
+    CPUs that are often slower."""
+    import sys
+
+    from .. import settings as app_settings
+
+    try:
+        on = app_settings.load().hardware_encoding
+    except Exception:
+        on = True
+    return on and (decodes_video or sys.platform != "darwin")
 
 
 def _subtitles_filter(ass_name: str) -> str:
@@ -188,12 +246,30 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
             maps += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "256k"]
         else:
             maps += ["-an"]
-        cmd += ["-vf", vf, *maps, *limit, *video_encoder(quality), "-movflags", "+faststart", "-f", "mp4",
-                str(part.resolve())]
-        # stderr goes to a file: an undrained pipe could block ffmpeg
-        err_file = open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace")
-        proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, encoding="utf-8", errors="replace", bufsize=1)
+        encoder = video_encoder(quality, (w, h), prefer_hardware(video is not None or (background or ("", ""))[1] == "video"))
         total = dur + audio_offset_s
+        while True:
+            cmd_enc = cmd + ["-vf", vf, *maps, *limit, *encoder, "-movflags", "+faststart", "-f", "mp4", str(part.resolve())]
+            rc, err = _run_burn(cmd_enc, td, part, total, cancel, progress, Cancelled)
+            if rc == 0 and part.exists():
+                break
+            part.unlink(missing_ok=True)
+            fallback = software_encoder(quality)
+            if encoder == fallback:
+                raise RenderError(f"烧录失败：{err.strip()[-400:]}")
+            # a GPU encoder that passed the probe can still fail on this video (its size, the driver …)
+            log.warning("GPU encoder %s failed, burning with %s: %s", encoder[1], fallback[1], err.strip()[-400:])
+            encoder = fallback
+            if progress:
+                progress(0.0, "显卡编码失败，改用 CPU 编码")
+        part.replace(out_path)
+    return out_path
+
+
+def _run_burn(cmd: list[str], td: str, part: Path, total: float, cancel, progress, Cancelled) -> tuple[int, str]:
+    # stderr goes to a file: an undrained pipe could block ffmpeg
+    with open(Path(td, "err.log"), "w+", encoding="utf-8", errors="replace") as err_file:
+        proc = subprocess.Popen(cmd, cwd=td, stdout=subprocess.PIPE, stderr=err_file, text=True, encoding="utf-8", errors="replace", bufsize=1)
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -215,13 +291,7 @@ def burn(ass_text: str, out_path: Path, size: tuple[int, int], duration_ms: int,
                 proc.kill()
                 time.sleep(0.1)
         err_file.seek(0)
-        err = err_file.read()
-        err_file.close()
-        if proc.returncode != 0 or not part.exists():
-            part.unlink(missing_ok=True)
-            raise RenderError(f"烧录失败：{err.strip()[-400:]}")
-        part.replace(out_path)
-    return out_path
+        return proc.returncode, err_file.read()
 
 
 def ffmpeg_available() -> bool:

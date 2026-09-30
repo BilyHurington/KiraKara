@@ -46,9 +46,10 @@ export function setSimplePage(page: SimplePage) {
 }
 
 /** Open a task's project in the detailed mode. */
-export async function openInDetail(pid: string, step: Step = 'review') {
+export async function openInDetail(pid: string, step: Step = 'review', opts: { issues?: boolean } = {}) {
   const ok = await run(async () => { await openProject(pid); return true; }, '打开项目失败');
   if (!ok) return;
+  if (opts.issues) useApp.setState({ reviewFilter: 'issues' });
   setStep(step);
   setUi('pro');
 }

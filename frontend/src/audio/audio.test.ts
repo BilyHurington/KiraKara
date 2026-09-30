@@ -25,6 +25,25 @@ const mouse = (target: EventTarget, type: string, x: number, y = 100) =>
   target.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
 
 describe('Waveform', () => {
+  it('follows the playhead again once playback starts after the user scrolled away', () => {
+    const { wf } = makeWave();
+    let ph = { ms: 1000, playing: false };
+    wf.cb.getPlayhead = () => ph;
+    wf.zoom(0.2, 5000);  // 2 s visible
+    wf.scrollTo(0.7);
+    expect(wf.follow).toBe(false);
+    (wf as any).draw();
+    expect(wf.viewStart).toBeCloseTo(7000);  // paused: the view stays where the user put it
+    ph = { ms: 1000, playing: true };
+    (wf as any).draw();
+    expect(wf.follow).toBe(true);
+    expect(wf.viewStart).toBeLessThanOrEqual(1000);  // back to the playhead
+    wf.scrollTo(0.7);
+    wf.reveal(3000, 3500);
+    expect(wf.follow).toBe(true);
+    wf.dispose();
+  });
+
   it('maps ms ⇄ px and fits the whole song initially', () => {
     const { wf } = makeWave();
     expect(wf.msPerPx).toBeCloseTo(10);

@@ -1,6 +1,8 @@
 import * as Popover from '@radix-ui/react-popover';
 import { Activity, Download, Moon, Redo2, Sparkles, Sun, Undo2, X } from 'lucide-react';
 import { cn } from '@/lib/format';
+import { errorHint } from '@/lib/errorHints';
+import { DiagnosticsButton } from '@/components/DiagnosticsButton';
 import { MOD_KEY, SHIFT_KEY } from '@/lib/keys';
 import { cancelJob, isOpenProject, ppath, projectName, run, setTheme, STEPS, useApp } from '@/store/app';
 import { hasActiveTasks, setUi, useSimple } from '@/store/simple';
@@ -111,6 +113,12 @@ function JobsIndicator() {
                   <div className={cn('mt-1 truncate text-xs', j.status === 'failed' ? 'text-danger' : 'text-muted')} title={j.error ?? j.message}>
                     {j.error ?? j.message}
                   </div>
+                  {j.status === 'failed' && (
+                    <div className="mt-1 space-y-1">
+                      {errorHint(j.error) && <div className="text-xs text-muted">{errorHint(j.error)}</div>}
+                      <DiagnosticsButton jobId={j.id} />
+                    </div>
+                  )}
                 </div>
               );
             })}

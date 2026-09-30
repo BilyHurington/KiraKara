@@ -411,6 +411,9 @@ def cmd_serve(a) -> None:
     print(f"MiliKara WebUI: {url}", file=sys.stderr)
     if a.open:
         _open_when_ready(url)
+    from .diagnostics import setup_logging
+
+    setup_logging()  # failures and server errors also go to <home>/logs/milikara.log
     server = uvicorn.Server(uvicorn.Config(app, host=a.host, port=port, log_level="warning"))
 
     async def serve() -> None:

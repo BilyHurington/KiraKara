@@ -9,6 +9,7 @@ import { loadSettings, saveSettings, useSimple } from '@/store/simple';
 import { loadUpdate, useUpdate } from '@/store/update';
 import { updateHowTo } from '@/components/shell/UpdateBadge';
 import { AiSettingsForm } from '@/components/AiSettingsForm';
+import { DiagnosticsButton } from '@/components/DiagnosticsButton';
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { Button, Callout, Card, CardBody, CardHeader, Field, Segmented, Select, Spinner, Switch } from '@/components/ui';
 
@@ -114,6 +115,11 @@ export function SimpleSettings() {
               </Group>
             </>
           )}
+          <div>
+            <Switch checked={settings.hardware_encoding ?? true} onChange={(v) => void run(() => saveSettings({ hardware_encoding: v }), '保存设置失败')}
+              label="使用显卡编码（更快）" />
+            <p className="mt-1 text-xs text-muted">有可用的显卡编码器（NVIDIA / Intel / AMD，Mac 上烧录进视频时）就用它，否则或失败时自动改用 CPU。对画质不满意可以关掉。详细模式导出的视频也使用这个设置。</p>
+          </div>
         </CardBody>
       </Card>
 
@@ -145,6 +151,7 @@ function UpdateCard({ enabled }: { enabled: boolean }) {
           label="打开时检查新版本（只读取 GitHub 上最新版本的版本号）" />
         <div className="flex flex-wrap items-center gap-3">
           <Button size="sm" variant="secondary" loading={checking} onClick={() => void checkNow()}>立即检查</Button>
+          <DiagnosticsButton size="sm" label="复制诊断信息（反馈问题时附上）" />
           {info?.newer && <span className="text-xs text-muted">{updateHowTo(info)}</span>}
         </div>
       </CardBody>

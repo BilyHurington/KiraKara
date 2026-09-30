@@ -51,6 +51,13 @@ describe('lyrics detection', () => {
     expect(detectLyrics('分享歌曲 https://y.qq.com/n/ryqq/songDetail/abc').label).toContain('QQ');
     expect(detectLyrics('[00:01.00]きみと\n[00:02.00]あるいた')).toMatchObject({ kind: 'lrc', label: 'LRC 歌词 · 2 行带时间' });
     expect(detectLyrics('君と\n歩いた')).toMatchObject({ kind: 'text' });
+    // an album / playlist is refused as it is pasted (not after the task has started)
+    for (const t of ['https://music.163.com/#/album?id=123', 'https://music.163.com/playlist?id=9', 'https://y.qq.com/n/ryqq/albumDetail/abc',
+      'https://y.qq.com/n/ryqq/playlist/123', 'netease:album:123']) {
+      expect(detectLyrics(t)).toMatchObject({ kind: 'badlink', label: expect.stringContaining('专辑或歌单') });
+    }
+    expect(detectLyrics('https://music.163.com/#/song?id=1').kind).toBe('link');
+    expect(detectLyrics('https://y.qq.com/n/ryqq/songDetail/abc').kind).toBe('link');
   });
 });
 
@@ -128,7 +135,7 @@ describe('simple mode home', () => {
     const pv = fixturePV();
     const running = task({ id: 't2', name: '夜に駆ける', status: 'running', progress: 0.42, stages: stages(3, true), message: '人声分离 · 42%', project_id: pv.project.id });
     const done = task({ id: 't1', status: 'succeeded', progress: 1, stages: stages(7), project_id: pv.project.id,
-      outputs: { video: { filename: 'a-karaoke.mp4', url: '/api/projects/p/exports/a-karaoke.mp4' } }, warnings: ['有 1 处可能需要人工检查'] });
+      outputs: { video: { filename: 'a-karaoke.mp4', url: '/api/projects/p/exports/a-karaoke.mp4' } }, warnings: ['有 1 处建议检查（在“人工检查”的“有问题”里查看）'] });
     mockApi({
       'GET /api/tasks': () => [running, done],
       [`GET /api/projects/${pv.project.id}/jobs`]: () => [],
@@ -139,7 +146,7 @@ describe('simple mode home', () => {
     const rows = await screen.findAllByRole('listitem', { name: undefined });
     expect(await screen.findByText('人声分离 · 42%')).toBeInTheDocument();
     expect(screen.getByText('42%')).toBeInTheDocument();
-    expect(screen.getByText('有 1 处可能需要人工检查')).toBeInTheDocument();
+    const warn = screen.getByRole('button', { name: /有 1 处建议检查/ });
     expect(screen.getByRole('link', { name: /下载视频/ })).toHaveAttribute('href', '/api/projects/p/exports/a-karaoke.mp4');
     expect(rows.length).toBeGreaterThan(2);
     const doneRow = screen.getByRole('button', { name: '初恋' }).closest('li')!;
@@ -147,6 +154,11 @@ describe('simple mode home', () => {
     await waitFor(() => expect(useSimple.getState().ui).toBe('pro'));
     expect(useApp.getState().pid).toBe(pv.project.id);
     expect(useApp.getState().step).toBe('karaoke');
+    // the warning opens the review on the lines with problems
+    act(() => useSimple.setState({ ui: 'simple' }));
+    await userEvent.click(warn);
+    await waitFor(() => expect(useApp.getState().step).toBe('review'));
+    expect(useApp.getState().reviewFilter).toBe('issues');
   });
 });
 
@@ -487,6 +499,29 @@ describe('confirming the start before the task continues', () => {
     expect(within(dialog).getByText('+750 ms')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: /改普通模式/ }));
     await waitFor(() => expect(api.find('POST', '/api/tasks/tw/calibration')[0]?.body).toEqual({ plain: true }));
+  });
+
+  it('the marker moves with the arrow keys (Shift: 100 ms), not while typing the time', async () => {
+    seed();
+    useSimple.setState({ tasks: [waiting()] });
+    const api = mockApi({
+      'GET /api/tasks': () => [waiting()],
+      'POST /api/tasks/tw/calibration': () => ({ ...waiting(), status: 'queued' }),
+      'GET /api/projects/p/audio/a1/peaks': () => ({ per_second: 100, mins: [], maxs: [] }),
+    });
+    renderUI(<SimpleHome />);
+    await userEvent.click(await screen.findByRole('button', { name: /确认开头位置/ }));
+    const dialog = await screen.findByRole('dialog');
+    const wave = within(dialog).getByRole('slider', { name: /波形/ });
+    await waitFor(() => expect(wave).toHaveFocus());
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}{Shift>}{ArrowLeft}{/Shift}');
+    expect(wave).toHaveAttribute('aria-valuenow', '1420');
+    const input = within(dialog).getByRole('textbox', { name: '标记时间' });
+    await userEvent.click(input);
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(wave).toHaveAttribute('aria-valuenow', '1420');
+    await userEvent.click(within(dialog).getByRole('button', { name: /确认并继续/ }));
+    await waitFor(() => expect(api.find('POST', '/api/tasks/tw/calibration')[0]?.body).toEqual({ marked_ms: 1420 }));
   });
 });
 

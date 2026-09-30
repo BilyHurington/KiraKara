@@ -727,6 +727,9 @@ class TaskQueue:
             self._mark_running_stage(task, "failed", error)
             task.error = error
             task.detail = traceback.format_exc(limit=8)
+            from .diagnostics import failure
+
+            failure(f"任务 {task.id}（{task.name}）", error, task.detail)
             task.message = "失败"
             task.status = "failed"
         finally:
@@ -837,6 +840,10 @@ def _handle(q: TaskQueue, task: PipelineTask) -> "S.ProjectHandle":
 
 def _holder(task: PipelineTask, what: str) -> str:
     return f"极简模式任务「{task.name or task.media_filename}」的{what}"
+
+
+# the checks worth a look after simple mode's alignment (the app links a warning naming 人工检查 there)
+REVIEW_CODES = ("unit_in_rest", "line_gap", "low_confidence")
 
 
 def _warn(task: PipelineTask, text: str) -> None:
@@ -1119,9 +1126,9 @@ def _align(q: TaskQueue, task: PipelineTask, h: "S.ProjectHandle", cancel: Cance
             return S.run_align(h, audio_role=role, cancel=cancel, progress=progress)
 
     r = run_heavy(align, lambda m: progress(0.0, m), cancel, holder=_holder(task, "对齐"))
-    warns = [i for i in r.issues if i.severity in ("warning", "error") and i.code in ("unit_in_rest", "line_gap")]
+    warns = [i for i in r.issues if i.severity in ("warning", "error") and i.code in REVIEW_CODES]
     if warns:
-        _warn(task, f"有 {len(warns)} 处可能需要人工检查（点开任务在“人工检查”中查看）")
+        _warn(task, f"有 {len(warns)} 处建议检查（在“人工检查”的“有问题”里查看）")
     return r
 
 

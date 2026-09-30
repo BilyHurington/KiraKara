@@ -129,6 +129,8 @@ class AppSettings(_Base):
     simple: SimpleSettings = Field(default_factory=SimpleSettings)
     # look for a newer version (the latest GitHub release) when the app is opened
     check_updates: bool = True
+    # burn videos with the graphics card's encoder where one works (karaoke/render.py)
+    hardware_encoding: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -233,8 +235,9 @@ def update(patch: dict) -> AppSettings:
             ai_patch.pop("api_key", None)
         for key, sub in (("ai", ai_patch), ("simple", simple_patch)):
             cur[key] = _merge(cur[key], sub)
-        if "check_updates" in patch:
-            cur["check_updates"] = bool(patch["check_updates"])
+        for key in ("check_updates", "hardware_encoding"):
+            if key in patch:
+                cur[key] = bool(patch[key])
         if clear:
             cur["ai"]["api_key"] = ""
         s = AppSettings.model_validate(cur)

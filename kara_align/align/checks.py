@@ -47,6 +47,38 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
     return issues
 
 
+def check_confidence(units: list[UnitTiming], min_units: int = 40, z_low: float = -4.0) -> list[Issue]:
+    """Lines where the model heard something else than the reading: several units whose acoustic
+    score (mean log-probability per frame) is far below this song's usual level (a robust z-score,
+    median / MAD over the song, so a quieter or noisier recording does not matter).  Typical causes:
+    English words, backing vocals in brackets, a wrong reading.  One issue per line (at least 2 of its
+    units, and 30 % of them); units edited by hand do not count."""
+    scored = [u for u in units if u.acoustic_score is not None and u.start_ms is not None and u.manual is None]
+    if len(scored) < min_units:
+        return []
+    vals = sorted(u.acoustic_score for u in scored)  # type: ignore[misc]
+    med = vals[len(vals) // 2]
+    mad = sorted(abs(v - med) for v in vals)[len(vals) // 2] * 1.4826
+    mad = max(mad, 0.05)
+    per_line: dict[str, list[UnitTiming]] = {}
+    for u in scored:
+        per_line.setdefault(u.line_id, []).append(u)
+    issues: list[Issue] = []
+    for line_id, us in per_line.items():
+        low = [u for u in us if (u.acoustic_score - med) / mad < z_low]  # type: ignore[operator]
+        if len(low) < max(2, 0.3 * len(us)):
+            continue
+        for u in low:
+            _flag(u, "low_confidence")
+        worst = min(low, key=lambda u: u.acoustic_score)  # type: ignore[arg-type, return-value]
+        readings = "".join(u.reading for u in low[:8])
+        issues.append(Issue(code="low_confidence", severity="warning", line_id=line_id, unit_id=worst.unit_id,
+                            message=f"这一行有 {len(low)}/{len(us)} 个单元和模型听到的发音差得较多（{readings}）："
+                                    "常见于英文、括号里的和声或读音不对，建议试听检查",
+                            data={"low_units": len(low), "units": len(us)}))
+    return issues
+
+
 def check_line_gaps(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
     """A long pause between two consecutive units of the same line."""
     issues: list[Issue] = []
@@ -202,14 +234,15 @@ def run_checks(units: list[UnitTiming], lines: list[LineTiming], cfg: CheckConfi
                audio_end_ms: Optional[float] = None) -> tuple[list[Issue], float]:
     cov_issues, cov = check_coverage(units, lines, cfg)
     issues = (check_units(units, cfg) + check_line_gaps(units, cfg) + check_rest(units, activity) + cov_issues
-              + check_lines(lines, cfg, voices, audio_end_ms) + check_unit_order(units, voices))
+              + check_lines(lines, cfg, voices, audio_end_ms) + check_unit_order(units, voices)
+              + check_confidence(units))
     return issues, cov
 
 
 # codes produced by the checks above (recomputed when unit times change, e.g. adopting a rerun)
 CHECK_CODES = {"illegal_interval", "short_unit", "token_gap", "long_unit", "line_gap", "unit_in_rest",
                "line_incomplete", "low_coverage", "anchor_deviation", "window_edge", "order_conflict",
-               "line_overlap", "unit_overlap"}
+               "line_overlap", "unit_overlap", "low_confidence"}
 
 
 # issue codes that a retry could plausibly improve

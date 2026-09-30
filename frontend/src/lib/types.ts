@@ -404,6 +404,8 @@ export interface AppSettings {
   version: number;
   /** look for a newer version (the latest GitHub release) when the app is opened */
   check_updates?: boolean;
+  /** burn videos with the graphics card's encoder where one works (falls back to the CPU) */
+  hardware_encoding?: boolean;
   ai: {
     /** AI readings on / off (tasks and the one-click button) */
     enabled: boolean;
@@ -454,6 +456,7 @@ export interface SettingsPatch {
   ai?: Partial<AppSettings['ai']> & { api_key?: string; clear_api_key?: boolean };
   simple?: Partial<AppSettings['simple']> & { reset_karaoke?: boolean };
   check_updates?: boolean;
+  hardware_encoding?: boolean;
 }
 
 export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }
