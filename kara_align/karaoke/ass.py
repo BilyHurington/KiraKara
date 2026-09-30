@@ -123,6 +123,7 @@ class Chunk:
     base: list[Part]  # lyric text pieces with their own karaoke timing
     ruby: list[Part] = field(default_factory=list)  # empty = no ruby
     wrap_before: bool = False  # the first chunk of a segment the AI suggested a line break before
+    singers: tuple[int, ...] = ()  # who sings it (Line.singers / singer_spans); () = the style's own colours
 
     @property
     def base_text(self) -> str:
@@ -244,9 +245,28 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
                  romaji: dict[str, str]) -> list[Chunk]:
     ruby_cfg = style.ruby
     chunks: list[Chunk] = []
+    # who sings each character (only when the line says so; the segments spell out the line's text)
+    chars = None
+    if line.singers or line.singer_spans:
+        from ..lyrics.singers import effective
+
+        chars = effective(line)
+        if "".join(s.surface for s in line.segments) != line.text:
+            chars = [tuple(line.singers)] * sum(len(s.surface) for s in line.segments)
+    pos = 0
+
+    def sung_by(n: int) -> tuple[int, ...]:
+        if chars is None:
+            return ()
+        from ..lyrics.singers import range_singers
+
+        return range_singers(chars, pos, pos + n)
+
     for seg in line.segments:
         if not seg.units:
-            chunks.append(Chunk([Part(seg.surface, None, None)], wrap_before=seg.wrap_before))
+            chunks.append(Chunk([Part(seg.surface, None, None)], wrap_before=seg.wrap_before,
+                                singers=sung_by(len(seg.surface))))
+            pos += len(seg.surface)
             continue
         pieces = _split_affixes(seg) if seg.lang == "ja" else [(seg.surface, seg.units)]
         for n_piece, (surface, units) in enumerate(pieces):
@@ -256,10 +276,10 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
             readings = [u.reading for u in units]
             # kana (or latin) whose units map 1:1 onto the surface: per-unit karaoke
             if not kanji and seg.lang == "ja" and hira == "".join(readings):
-                base, pos = [], 0
+                base, at = [], 0
                 for u, (s, e) in zip(units, t):
-                    base.append(Part(surface[pos:pos + len(u.reading)], s, e))
-                    pos += len(u.reading)
+                    base.append(Part(surface[at:at + len(u.reading)], s, e))
+                    at += len(u.reading)
             elif all(u.surface for u in units) and "".join(u.surface for u in units) == surface:
                 base = [Part(u.surface, s, e) for u, (s, e) in zip(units, t)]
             else:
@@ -273,7 +293,9 @@ def build_chunks(line: Line, times: dict[str, tuple[Optional[int], Optional[int]
                         for u, (s, e) in zip(units, t)]
                 if "".join(p.text for p in ruby) == surface:
                     ruby = []  # e.g. hiragana ruby over hiragana
-            chunks.append(Chunk(base, ruby, wrap_before=seg.wrap_before and n_piece == 0))
+            chunks.append(Chunk(base, ruby, wrap_before=seg.wrap_before and n_piece == 0,
+                                singers=sung_by(len(surface))))
+            pos += len(surface)
     _fill_missing_times(chunks)
     return chunks
 
@@ -324,7 +346,7 @@ def _trim(piece: list[Chunk]) -> list[Chunk]:
         if text != part.text and text:
             base = list(c.base)
             base[idx] = Part(text, part.start, part.end)
-            piece[idx] = Chunk(base, c.ruby, c.wrap_before)
+            piece[idx] = Chunk(base, c.ruby, c.wrap_before, c.singers)
     return piece
 
 
@@ -544,8 +566,8 @@ Box = tuple[float, float, float, float, float, float]  # shown from, to (ASS tim
 
 def translation_placements(laid: list[LaidLine], style: KaraokeStyle, W: int, H: int, block_top: float,
                            block_h: float, size: float, measurer, margin_h: float,
-                           margin_v: float) -> list[tuple[int, int, str, str, tuple[float, float, float, float]]]:
-    """(from, to, position tags, text, (x0, y0, x1, y1)): the translation as one line at the
+                           margin_v: float) -> list[tuple[int, int, str, str, tuple[float, float, float, float], LaidLine]]:
+    """(from, to, position tags, text, (x0, y0, x1, y1), line): the translation as one line at the
     other edge of the frame or just outside the lyric block."""
     lay = style.layout
     bottom = lay.position == "bottom"
@@ -562,7 +584,7 @@ def translation_placements(laid: list[LaidLine], style: KaraokeStyle, W: int, H:
         fs = f"\\fscx{avail / w * 100:.1f}\\fscy{avail / w * 100:.1f}" if w > avail else ""
         w, h = min(w, avail), size * min(1.0, avail / w)
         box = (W / 2 - w / 2, y if an == 8 else y - h, W / 2 + w / 2, y + h if an == 8 else y)
-        out.append((t0, t1, f"\\an{an}\\pos({W / 2:.1f},{y:.1f}){fs}", text, box))
+        out.append((t0, t1, f"\\an{an}\\pos({W / 2:.1f},{y:.1f}){fs}", text, box, ll))
     return out
 
 
@@ -668,15 +690,38 @@ def sweep_time(segs: list[tuple[int, int, float, float]], x: float, instant: boo
     return segs[-1][1] if segs else 0
 
 
-def sweep_clip(segs: list[tuple[int, int, float, float]], hi: float, instant: bool, H: int,
-               inverse: bool = False) -> str:
-    """An animated \\clip (``inverse``: \\iclip, the rest) whose right edge is the sweep over one chunk.
+Move = tuple[int, int, float]  # the sweep edge goes to x over [from, to] ms (to = from + 1: a jump)
 
-    Nothing is sung before the chunk's first piece starts; then the cut jumps to the lyric's
+
+def sweep_moves(segs: list[tuple[int, int, float, float]], hi: float, instant: bool) -> list[Move]:
+    """How the sweep edge over a chunk moves (from x = 0: nothing sung).
+
+    Nothing is sung before the chunk's first piece starts; then the edge jumps to the lyric's
     left edge (so a reading reaching further left turns sung there at once), follows the
     lyric's sweep, and when the last piece is done jumps to ``hi`` (the right edge of what
     is drawn: a reading wider than its lyric turns sung completely).  Lyric and ruby of a
     chunk follow the same sweep over the lyric, so both are cut by one vertical line meanwhile."""
+    moves: list[Move] = []
+    if not segs:
+        return moves
+    cur: Optional[float] = None
+    for i, (s, e, xa, xb) in enumerate(segs):
+        if i == len(segs) - 1 and (instant or e <= s):
+            xb = max(xb, hi)
+        if cur is None or abs(xa - cur) > 0.5:  # on to the next piece
+            moves.append((s, s + 1, xa))
+        moves.append((s, e, xb) if not instant and e > s else (s, s + 1, xb))
+        cur = xb
+    last_e = segs[-1][1]
+    if hi > (cur or 0) + 0.5:
+        moves.append((last_e, last_e + 1, hi))
+    return moves
+
+
+def sweep_clip(segs: list[tuple[int, int, float, float]], hi: float, instant: bool, H: int,
+               inverse: bool = False) -> str:
+    """An animated \\clip (``inverse``: \\iclip, the rest) whose right edge is the sweep over one chunk
+    (sweep_moves())."""
     name = "iclip" if inverse else "clip"
 
     def clip(x: float) -> str:
@@ -684,21 +729,119 @@ def sweep_clip(segs: list[tuple[int, int, float, float]], hi: float, instant: bo
 
     if not segs:
         return clip(hi)
-    tags, cur = [clip(0)], None
-    for i, (s, e, xa, xb) in enumerate(segs):
-        if i == len(segs) - 1 and (instant or e <= s):
-            xb = max(xb, hi)
-        if cur is None or abs(xa - cur) > 0.5:  # on to the next piece
-            tags.append(f"\\t({s},{s + 1},{clip(xa)})")
-        if not instant and e > s:
-            tags.append(f"\\t({s},{e},{clip(xb)})")
-        else:
-            tags.append(f"\\t({s},{s + 1},{clip(xb)})")
-        cur = xb
-    last_e = segs[-1][1]
-    if hi > (cur or 0) + 0.5:
-        tags.append(f"\\t({last_e},{last_e + 1},{clip(hi)})")
-    return "".join(tags)
+    return clip(0) + "".join(f"\\t({a},{b},{clip(x)})" for a, b, x in sweep_moves(segs, hi, instant))
+
+
+Rect = tuple[float, float, float, float]  # x0, y0, x1, y1
+
+
+def band_clip(moves: list[Move], rect: Rect, sung: bool, hi: float) -> str:
+    """An animated rectangular \\clip showing one band (``rect``) of a chunk: its part left of the sweep
+    edge (``sung``) or right of it.  The two meet at the same rounded x, and neighbouring bands share
+    their rounded edges, so every pixel of the chunk comes from exactly one of them."""
+    x0, y0, x1, y1 = (int(round(v)) for v in rect)
+
+    def at(x: float) -> int:
+        return min(max(int(round(x)), x0), x1)
+
+    def clip(x: float) -> str:
+        e = at(x)
+        return f"\\clip({x0},{y0},{e},{y1})" if sung else f"\\clip({e},{y0},{x1},{y1})"
+
+    if not moves:
+        return clip(hi)
+    out, cur = [clip(0)], 0.0
+    for a, b, x in moves:
+        if b - a <= 1 or abs(x - cur) < 1e-9:  # a jump
+            if at(x) != at(cur):
+                out.append(f"\\t({a},{b},{clip(x)})")
+            cur = x
+            continue
+        # a steady move from cur to x: only the stretch inside the band animates this clip
+        lo, hi_ = sorted((cur, x))
+        cuts = [a, b] + [int(round(a + (b - a) * (edge - cur) / (x - cur)))
+                         for edge in (x0, x1) if lo < edge < hi_]
+        cuts = sorted(set(cuts))
+        for ta, tb in zip(cuts, cuts[1:]):
+            xa = cur + (x - cur) * (ta - a) / (b - a)
+            xb = cur + (x - cur) * (tb - a) / (b - a)
+            if at(xa) != at(xb):
+                out.append(f"\\t({ta},{max(tb, ta + 1)},{clip(xb)})")
+        cur = x
+    return "".join(out)
+
+
+@dataclass
+class Band:
+    """One copy of a chunk's text for singers: in ``rect`` (None: all of it), in singer ``singer``'s
+    colours (0: the style's own) or, for a gradient strip, in ``colors`` written into the event."""
+
+    rect: Optional[Rect]
+    singer: int
+    colors: Optional[dict[str, str]] = None
+    blend: bool = False
+
+
+BASE_BAND = Band(None, 0)
+_ROLES = ("sung", "unsung", "outline", "glow_sung", "glow_unsung", "translation", "sparkle")
+
+
+def plan_bands(ids: tuple[int, ...], colors: dict[int, dict[str, str]], mix: str, direction: str,
+               top: float, bottom: float, chars: list[tuple[float, float]], W: int, H: int,
+               k: float = 1.0) -> list[Band]:
+    """The copies a chunk's text is drawn in: one for a single singer; for several, a band per singer
+    (``mix == "split"``) or thin strips blending their colours (``"gradient"``), stacked top to
+    bottom (``direction == "vertical"``, between ``top`` and ``bottom``: where the glyphs are) or
+    side by side inside each character (``"horizontal"``, ``chars``: each character's x range).
+    The outer bands reach the frame's edges, so outline and glow beyond the glyphs are drawn too."""
+    ids = tuple(i for i in ids if i in colors)
+    if not ids:
+        return [BASE_BAND]
+    if len(ids) == 1:
+        return [Band(None, ids[0], colors[ids[0]])]
+    n = len(ids)
+    grad = mix == "gradient"
+
+    def band(i: int, steps: int, rect: Rect) -> Band:
+        if not grad:
+            return Band(rect, ids[i], colors[ids[i]])
+        from .themes import blend
+
+        t = (i + 0.5) / steps
+        cols = {r: blend([colors[j][r] for j in ids], t) for r in _ROLES}
+        return Band(rect, ids[min(n - 1, int(t * n))], cols, True)
+
+    out: list[Band] = []
+    if direction == "vertical" or not chars:
+        steps = n if not grad else max(2 * n, min(16, round((bottom - top) / (5 * k))))
+        edges = [top + (bottom - top) * i / steps for i in range(steps + 1)]
+        edges[0], edges[-1] = 0, H
+        for i in range(steps):
+            out.append(band(i, steps, (0, edges[i], W, edges[i + 1])))
+        return out
+    for ci, (a, b) in enumerate(chars):
+        steps = n if not grad else max(n, min(8, round((b - a) / (8 * k))))
+        edges = [a + (b - a) * i / steps for i in range(steps + 1)]
+        if ci == 0:
+            edges[0] = 0
+        if ci == len(chars) - 1:
+            edges[-1] = W
+        for i in range(steps):
+            out.append(band(i, steps, (edges[i], 0, edges[i + 1], H)))
+    return out
+
+
+def char_spans(text: str, cx: float, width: float, measurer) -> list[tuple[float, float]]:
+    """The x range of each character of ``text`` drawn ``width`` wide centred at ``cx``."""
+    total = measurer.width(text) or 1.0
+    left, k = cx - width / 2, width / total
+    edges = [left + measurer.width(text[:i]) * k for i in range(len(text) + 1)]
+    return [(edges[i], edges[i + 1]) for i in range(len(text)) if text[i].strip()] or [(left, left + width)]
+
+
+def _actor(name: str) -> str:
+    """A singer's name for the Name field of an event (no commas, braces or line breaks)."""
+    return re.sub(r"[,{}\\\x00-\x1f]", "", name or "").strip()[:40]
 
 
 def _unit_times(result: AlignmentResult) -> dict[str, tuple[Optional[int], Optional[int]]]:
@@ -796,6 +939,12 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     m_ruby = Measurer(ruby_family, txt.bold, ruby_size) if rb.enabled else None
     times = _unit_times(result)
     romaji = _romaji(project) if (rb.enabled and rb.script == "romaji") else {}
+    # singers (多人演唱): each one's colours, by number; parts sung together are drawn in bands
+    from .themes import singer_colors
+
+    sg = style.singers
+    scol: dict[int, dict[str, str]] = {i + 1: singer_colors(m) for i, m in enumerate(sg.members)}
+    sname = {i + 1: _actor(m.name) or str(i + 1) for i, m in enumerate(sg.members)}
     warnings: list[str] = []
     if missing_fonts:
         warnings.append(f"这台电脑没有字体 {'、'.join(sorted(set(missing_fonts)))}，已改用 {family}")
@@ -858,45 +1007,143 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     events: list[str] = []
     boxes: list[Box] = []  # where the lyrics and translations are, and when (for the title card)
 
-    def emit(layer: int, t_from: float, t_to: float, name: str, tags: str, body: str, fad: str) -> None:
+    def emit(layer: int, t_from: float, t_to: float, name: str, tags: str, body: str, fad: str,
+             actor: str = "") -> None:
         events.append(f"Dialogue: {layer},{ass_time(t_from + time_offset_ms)},{ass_time(t_to + time_offset_ms)},"
-                      f"{name},,0,0,0,,{{{tags}{fad}}}{body}")
+                      f"{name},{actor},0,0,0,,{{{tags}{fad}}}{body}")
+
+    def band_look(b: Band, name: str, unsung: str) -> tuple[str, str, str, str, str]:
+        """(style name, unsung colour, sung glow, unsung glow, actor) of one band; a band of the style's own
+        colours uses the style as before."""
+        if not b.singer:
+            return name, unsung, glow.color_sung, glow.color_unsung, ""
+        c = b.colors or scol[b.singer]
+        return f"{name}_{b.singer}", c["unsung"], c["glow_sung"], c["glow_unsung"], sname.get(b.singer, "")
+
+    def blend_tags(b: Band, *roles: str) -> str:
+        """A gradient strip's own colours (\\1c sung, \\2c unsung, \\3c outline) written into the event."""
+        if not (b.blend and b.colors):
+            return ""
+        tag_of = {"sung": "1c", "unsung": "2c", "outline": "3c"}
+        return "".join(f"\\{tag_of[r]}{bgr_tag(b.colors[r])}" for r in roles)
+
+    def cut_of(b: Band) -> str:
+        return "" if b.rect is None else "\\clip({},{},{},{})".format(*(int(round(v)) for v in b.rect))
 
     def emit_text(layer: int, t_from: float, t_to: float, name: str, pos: str, parts: list[Part], width: float,
-                  with_glow: bool, font: str, size: float, fad: str) -> None:
-        """A karaoke text event, with its glow layers when the glow is on."""
+                  with_glow: bool, font: str, size: float, fad: str,
+                  bands: tuple[list[Band], list[Band]] = ([BASE_BAND], [BASE_BAND])) -> None:
+        """A karaoke text event, with its glow layers when the glow is on (singers: one copy per band,
+        each cut to its band; ``bands``: the text's and the glow's)."""
+        plain = escape_text("".join(p.text for p in parts))
+        fill, glows = bands
         if glow.enabled and with_glow:
-            plain = escape_text("".join(p.text for p in parts))
-            emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(glow.color_unsung, width, font, size, txt.bold), plain,
-                 fad)
-            # \ko: the border (the glow) appears as each syllable is sung
-            emit(L_GLOW_SUNG, t_from, t_to, "KGlow", pos + glow_tags(glow.color_sung, width, font, size, txt.bold),
-                 _karaoke(parts, int(t_from), "ko"), fad)
-        emit(layer, t_from, t_to, name, pos, _karaoke(parts, int(t_from), tag), fad)
+            for b in glows:
+                _, _, g_sung, g_unsung, actor = band_look(b, name, "")
+                emit(L_GLOW, t_from, t_to, "KGlow", pos + glow_tags(g_unsung, width, font, size, txt.bold) + cut_of(b),
+                     plain, fad, actor)
+                # \ko: the border (the glow) appears as each syllable is sung
+                emit(L_GLOW_SUNG, t_from, t_to, "KGlow", pos + glow_tags(g_sung, width, font, size, txt.bold) + cut_of(b),
+                     _karaoke(parts, int(t_from), "ko"), fad, actor)
+        for b in fill:
+            sty, _, _, _, actor = band_look(b, name, "")
+            emit(layer, t_from, t_to, sty, pos + blend_tags(b, "sung", "unsung", "outline") + cut_of(b),
+                 _karaoke(parts, int(t_from), tag), fad, actor)
 
     ruby_unsung = (txt if rb.follow_colors else rb).color_unsung
 
     def emit_following(layer: int, name: str, t_from: float, t_to: float, pos: str, text: str, unsung: str,
-                       font: str, size: float, glow_width: float, with_glow: bool, clip: str, iclip: str,
-                       fad: str) -> None:
-        """Text swept by a moving \\clip instead of \\kf: the text in the unsung colour cut at
-        ``iclip`` (right of the sweep) and in the sung colour (the style's primary) cut at
-        ``clip`` (left of it), so every pixel comes from one of the two, also while fading."""
+                       font: str, size: float, glow_width: float, with_glow: bool,
+                       segs: list[tuple[int, int, float, float]], hi: float, fad: str,
+                       bands: tuple[list[Band], list[Band]] = ([BASE_BAND], [BASE_BAND])) -> None:
+        """Text swept by a moving \\clip instead of \\kf: the text in the unsung colour cut right of the
+        sweep and in the sung colour (the style's primary) cut left of it, so every pixel comes from one
+        of the two, also while fading.  Singer bands: the same for each band, both cuts inside it."""
         plain = escape_text(text)
-        if glow.enabled and with_glow:
-            emit(L_GLOW, t_from, t_to, "KGlow",
-                 pos + glow_tags(glow.color_unsung, glow_width, font, size, txt.bold) + iclip, plain, fad)
-            emit(L_GLOW_SUNG, t_from, t_to, "KGlow",
-                 pos + glow_tags(glow.color_sung, glow_width, font, size, txt.bold) + clip, plain, fad)
-        emit(layer, t_from, t_to, name, pos + f"\\1c{bgr_tag(unsung)}" + iclip, plain, fad)
-        emit(layer, t_from, t_to, name, pos + clip, plain, fad)
+        moves: list[Move] = []
 
-    def emit_trans(t_from: float, t_to: float, pos: str, text: str, fad: str) -> None:
+        def cuts(b: Band) -> tuple[str, str]:
+            nonlocal moves
+            if b.rect is None:
+                return sweep_clip(segs, hi, instant, H), sweep_clip(segs, hi, instant, H, True)
+            moves = moves or sweep_moves(segs, hi, instant)
+            return band_clip(moves, b.rect, True, hi), band_clip(moves, b.rect, False, hi)
+
+        fill, glows = bands
+        if glow.enabled and with_glow:
+            for b in glows:
+                clip, iclip = cuts(b)
+                _, _, g_sung, g_unsung, actor = band_look(b, name, unsung)
+                emit(L_GLOW, t_from, t_to, "KGlow",
+                     pos + glow_tags(g_unsung, glow_width, font, size, txt.bold) + iclip, plain, fad, actor)
+                emit(L_GLOW_SUNG, t_from, t_to, "KGlow",
+                     pos + glow_tags(g_sung, glow_width, font, size, txt.bold) + clip, plain, fad, actor)
+        for b in fill:
+            clip, iclip = cuts(b)
+            sty, un, _, _, actor = band_look(b, name, unsung)
+            emit(layer, t_from, t_to, sty, pos + f"\\1c{bgr_tag(un)}" + blend_tags(b, "outline") + iclip, plain,
+                 fad, actor)
+            emit(layer, t_from, t_to, sty, pos + blend_tags(b, "sung", "outline") + clip, plain, fad, actor)
+
+    def emit_trans(t_from: float, t_to: float, pos: str, text: str, fad: str, singer: int = 0) -> None:
+        c = scol.get(singer)
         if glow.enabled and tr.glow:
             emit(L_TRANS_GLOW, t_from, t_to, "KGlow",
-                 pos + glow_tags(glow.color_unsung, glow.size * k * 0.7, trans_family, trans_size, tr.bold),
-                 escape_text(text), fad)
-        emit(L_TRANS, t_from, t_to, "KTrans", pos, escape_text(text), fad)
+                 pos + glow_tags(c["glow_unsung"] if c else glow.color_unsung, glow.size * k * 0.7, trans_family,
+                                 trans_size, tr.bold),
+                 escape_text(text), fad, sname.get(singer, ""))
+        emit(L_TRANS, t_from, t_to, f"KTrans_{singer}" if c else "KTrans", pos, escape_text(text), fad,
+             sname.get(singer, ""))
+
+    def live(ids: tuple[int, ...]) -> tuple[int, ...]:
+        return tuple(i for i in ids if i in scol)
+
+    def line_singer(ll: LaidLine) -> int:
+        """The singer a line's translation is coloured for: the line's own first singer, else the first
+        singer of its first part that has one; 0: the style's colours."""
+        own = live(tuple(ll.line.singers))
+        if own:
+            return own[0]
+        return next((live(c.singers)[0] for c in ll.chunks if live(c.singers)), 0)
+
+    ruby_bands = rb.follow_colors  # a ruby with its own colours keeps them (no singer colours)
+    main_ink = m_main.ink
+    ruby_ink = m_ruby.ink if m_ruby is not None else (0.0, 1.0)
+
+    def bands_for(ids: tuple[int, ...], text: str, cx: float, width: float, bottom_y: float, size: float,
+                  ink: tuple[float, float], measurer) -> tuple[list[Band], list[Band]]:
+        """The bands of a chunk's text and of its glow.  The glow of a part sung together always blends
+        (a blurred edge cut sharp between two colours shows as a seam beside the glyphs): top to bottom
+        in strips, side by side as one even blend (strips inside every character would stripe it)."""
+        ids = live(ids)
+        if len(ids) < 2:
+            one = plan_bands(ids, scol, sg.mix, sg.direction, 0, 0, [], W, H, k)
+            return one, one
+        top = bottom_y - size
+        y0, y1 = top + size * ink[0], top + size * ink[1]
+        chars = char_spans(text, cx, width, measurer) if sg.direction == "horizontal" else []
+        fill = plan_bands(ids, scol, sg.mix, sg.direction, y0, y1, chars, W, H, k)
+        if not glow.enabled:
+            return fill, fill
+        if sg.direction == "horizontal":
+            from .themes import blend
+
+            even = {r: blend([scol[i][r] for i in ids], 0.5) for r in _ROLES}
+            return fill, [Band(None, ids[0], even, True)]
+        if sg.mix == "gradient":
+            return fill, fill
+        return fill, plan_bands(ids, scol, "gradient", sg.direction, y0, y1, chars, W, H, k)
+
+    def fx_color(ids: tuple[int, ...]) -> Optional[str]:
+        """Effects fired by a singer's part: in the singer's colours (its sung glow / sung colour when the
+        effect follows, else a pale tint like a template's sparkles)."""
+        ids = live(ids)
+        if not ids:
+            return None
+        c = scol[ids[0]]
+        if style.effects.color:
+            return c["sparkle"]
+        return c["glow_sung"] if glow.enabled else c["sung"]
 
     tag = "kf" if tm.highlight == "sweep" else "k"
     instant = tm.highlight != "sweep"
@@ -968,36 +1215,39 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 bw = m_main.width(c.base_text) * scale
                 rw = m_ruby.width(c.ruby_text) * scale if (c.ruby and m_ruby is not None) else 0.0
                 segs = piece_segments(c, cx, bw, int(t_from), m_main) if (following or fx_on) else []
+                main_bands = bands_for(c.singers, c.base_text, cx, bw, main_y, main_size * scale, main_ink, m_main)
+                r_bands = ([BASE_BAND], [BASE_BAND])
+                if c.ruby and m_ruby is not None and ruby_bands:
+                    r_bands = bands_for(c.singers, c.ruby_text, cx, rw, ruby_y, ruby_size * scale, ruby_ink, m_ruby)
                 if following:
                     # lyric and ruby cut by one computed line: libass places its own \\kf boundary by
                     # glyph ink, a few pixels away from any position computed outside it
                     # once sung, the edges beyond the last glyph's advance (outline, glow) turn too
                     hi = cx + bw / 2 + edge
                     emit_following(L_MAIN, "KMain", t_from, t_to, main_pos, c.base_text, txt.color_unsung,
-                                   family, main_size, glow.size * k, True,
-                                   sweep_clip(segs, hi, instant, H), sweep_clip(segs, hi, instant, H, True), fad)
+                                   family, main_size, glow.size * k, True, segs, hi, fad, main_bands)
                 else:
                     emit_text(L_MAIN, t_from, t_to, "KMain", main_pos, c.base, glow.size * k, True, family,
-                              main_size, fad)
+                              main_size, fad, main_bands)
                 if c.ruby and following:
                     hi = max(cx + bw / 2, cx + rw / 2) + edge
                     emit_following(L_RUBY, "KRuby", t_from, t_to, ruby_pos, c.ruby_text, ruby_unsung, ruby_family,
-                                   ruby_size, glow.size * k * 0.55, glow.ruby,
-                                   sweep_clip(segs, hi, instant, H), sweep_clip(segs, hi, instant, H, True), fad)
+                                   ruby_size, glow.size * k * 0.55, glow.ruby, segs, hi, fad, r_bands)
                 elif c.ruby:
                     emit_text(L_RUBY, t_from, t_to, "KRuby", ruby_pos, c.ruby, glow.size * k * 0.55, glow.ruby,
-                              ruby_family, ruby_size, fad)
+                              ruby_family, ruby_size, fad, r_bands)
                 if fx_on:
                     group = f"{ll.line.id}@{t_from}"
+                    color = fx_color(c.singers)
                     syllables += _syllables(c.base, cx, main_y, main_size, scale, m_main, family, False, t_from,
-                                            t_to, group, line_top, room_above)
+                                            t_to, group, line_top, room_above, color=color)
                     if c.ruby and style.effects.ruby and m_ruby is not None:
                         # with the ruby following the lyric, a reading syllable is sung when the sweep
                         # passes it, not at its own time
                         timing = (lambda xa, xb: (int(t_from) + sweep_time(segs, xa, instant),
                                                   int(t_from) + sweep_time(segs, xb, instant))) if following else None
                         syllables += _syllables(c.ruby, cx, ruby_y, ruby_size, scale, m_ruby, ruby_family, True,
-                                                t_from, t_to, group, line_top, room_above, timing)
+                                                t_from, t_to, group, line_top, room_above, timing, color=color)
             if ll.translation and per_line_trans:
                 ty = main_y + trans_gap + trans_size
                 # a translation wider than the room between the margins is shrunk, and kept inside them
@@ -1007,13 +1257,13 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 an, tx = {"left": (1, max(margin_h, min(x0, W - margin_h - tw))),
                           "right": (3, min(W - margin_h, max(x0 + line_w, margin_h + tw))),
                           "center": (2, W / 2)}[align]
-                emit_trans(t_from, t_to, f"\\an{an}\\pos({tx:.1f},{ty:.1f}){tfs}", ll.translation, fad)
+                emit_trans(t_from, t_to, f"\\an{an}\\pos({tx:.1f},{ty:.1f}){tfs}", ll.translation, fad, line_singer(ll))
 
     if tr.enabled and not per_line_trans:
         fad = f"\\fad({fade_in},{fade_out})" if (fade_in or fade_out) else ""
-        for t0, t1, pos, text, (bx0, by0, bx1, by1) in translation_placements(
+        for t0, t1, pos, text, (bx0, by0, bx1, by1), ll in translation_placements(
                 laid, style, W, H, block_top, block_h, trans_size, m_trans, margin_h, margin_v):
-            emit_trans(t0, t1, pos, text, fad)
+            emit_trans(t0, t1, pos, text, fad, line_singer(ll))
             boxes.append((t0 + time_offset_ms, t1 + time_offset_ms, bx0, by0, bx1, by1))
 
     if fx_on:
@@ -1037,6 +1287,17 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
                 f"{max(0.0, outline) * k:.2f},{max(0.0, shadow) * k:.2f},2,0,0,0,1")
 
     rc = txt if rb.follow_colors else rb
+    ruby_outline = rb.outline if not rb.follow_colors else max(1.0, txt.outline * 0.6)
+    # each singer's own styles (KMain_1 …): its colours, the rest as the style's
+    singer_styles: list[str] = []
+    for n, c in scol.items():
+        singer_styles.append(style_line(f"KMain_{n}", family, main_size, c["sung"], c["unsung"], c["outline"],
+                                        txt.outline, txt.shadow, txt.bold))
+        if rb.follow_colors:
+            singer_styles.append(style_line(f"KRuby_{n}", ruby_family, ruby_size, c["sung"], c["unsung"],
+                                            c["outline"], ruby_outline, txt.shadow * 0.6, txt.bold))
+        singer_styles.append(style_line(f"KTrans_{n}", trans_family, trans_size, c["translation"],
+                                        c["translation"], c["outline"], tr.outline, tr.shadow, tr.bold))
     header = [
         "[Script Info]",
         "; generated by KiraKara",
@@ -1054,11 +1315,12 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
         style_line("KMain", family, main_size, txt.color_sung, txt.color_unsung, txt.outline_color, txt.outline,
                    txt.shadow, txt.bold),
         style_line("KRuby", ruby_family, ruby_size, rc.color_sung, rc.color_unsung, rc.outline_color,
-                   rb.outline if not rb.follow_colors else max(1.0, txt.outline * 0.6), txt.shadow * 0.6, txt.bold),
+                   ruby_outline, txt.shadow * 0.6, txt.bold),
         style_line("KTrans", trans_family, trans_size, tr.color, tr.color, tr.outline_color, tr.outline, tr.shadow,
                    tr.bold),
         # glow layers: invisible fill, the (blurred) border is the glow; sizes set per event
         style_line("KGlow", family, main_size, "#FFFFFF", "#FFFFFF", "#FFFFFF", 0, 0, txt.bold, fill_alpha=100),
+        *singer_styles,
         FX_STYLE,
         info_style(family, main_size),
         "",
@@ -1070,7 +1332,7 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
 
 def _syllables(parts: list[Part], cx: float, bottom_y: float, size: float, scale: float, measurer, font: str,
                ruby: bool, t_from: float, t_to: float, group: str = "", top: float = 0.0, room: float = 1e9,
-               timing=None) -> list:
+               timing=None, color: Optional[str] = None) -> list:
     """Where each sung piece of a chunk sits on screen (the chunk text is centred at ``cx``, its
     bottom at ``bottom_y`` as drawn with \\an2); ``timing(x0, x1)`` gives a piece's (start, end)
     when it is not its own (a reading that follows the lyric's sweep)."""
@@ -1087,6 +1349,6 @@ def _syllables(parts: list[Part], cx: float, bottom_y: float, size: float, scale
             out.append(Syllable(text=p.text, start=int(start), end=int(max(end, start)), x=left + w / 2,
                                 y=bottom_y - size * scale * 0.5, w=max(w, size * scale * 0.4), h=size * scale,
                                 font=font, size=size * scale, ruby=ruby, visible_until=int(t_to), group=group,
-                                top=top, room=room))
+                                top=top, room=room, color=color))
         left += w
     return out

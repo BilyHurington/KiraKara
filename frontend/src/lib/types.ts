@@ -36,7 +36,22 @@ export interface Line {
   voice: string;
   confirmed: boolean;
   source: { origin: string; raw_index: number | null; merged_from: string[]; split_from: string | null; tag_index: number };
+  /** who sings it (numbers of the style's singers, 1-based; several = together); empty: the style's own colours */
+  singers?: number[];
+  /** parts sung by others than `singers`: character ranges [start, end) of `text` */
+  singer_spans?: SingerSpan[];
 }
+
+export interface SingerSpan { start: number; end: number; singers: number[] }
+
+/** One singer of a karaoke style: "" colours are derived from `color` */
+export interface KaraokeSinger {
+  name: string; color: string; color_unsung: string; color_sung: string; outline_color: string; glow_unsung: string; glow_sung: string;
+}
+/** Singers for songs with several voices; parts sung together: split into bands or blended, top-to-bottom or side by side */
+export interface KaraokeSingers { members: KaraokeSinger[]; mix: 'split' | 'gradient'; direction: 'vertical' | 'horizontal' }
+/** POST /api/karaoke/singer-colors: a singer's colours with the derived ones filled in */
+export interface SingerColors { sung: string; unsung: string; outline: string; glow_sung: string; glow_unsung: string; translation: string; sparkle: string }
 
 export interface LyricsDoc {
   language: string;
@@ -229,6 +244,8 @@ export interface KaraokeStyle {
   };
   /** burn-in audio: vocals kept at this % over the full instrumental */
   output?: { vocal_keep_pct: number };
+  /** singers (多人演唱): who sings which part is kept in the lyrics (Line.singers / singer_spans) */
+  singers?: KaraokeSingers;
 }
 
 /** A saved subtitle style (预设); 默认 is built in and read-only. */
@@ -291,6 +308,8 @@ export interface ProjectView {
     /** ``outdated``: a stem separated from a replaced original (not usable) */
     audio: Partial<Record<Role, { asset_id: string; available: boolean; outdated?: boolean; duration_ms: number; sample_rate: number }>>;
     picture?: PictureInfo;
+    /** lines starting with singer names ("A：…"), which the 演唱者 page can assign and take out */
+    singer_markers?: number;
   };
   [extra: string]: any;
 }

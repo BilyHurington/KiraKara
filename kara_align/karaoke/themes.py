@@ -33,6 +33,9 @@ Everything is computed in OKLCH (perceptual lightness L, chroma C, hue h), so
    1–3 and the sung glow; the second colour replaces the analogous colour — the
    unsung glow (lightness kept within 0.65–0.9), the sparkles and translation
    (pale tints of it) and the title card's accent bar.
+7. **Singers** (多人演唱): each singer's colours come from the same steps with the
+   singer's colour, except that the unsung text is a clearer tint of the hue
+   (L 0.94) so it shows who sings a line before it is sung.
 
 Neutral picks (grey / black / white) give neutral palettes.  Every colour is
 brought into the sRGB gamut by reducing chroma, never by clipping channels.
@@ -42,13 +45,15 @@ from __future__ import annotations
 
 import math
 
-from ..models import KaraokeStyle, KaraokeTheme
+from ..models import KaraokeSinger, KaraokeStyle, KaraokeTheme
 
 TEMPLATES = {"plain": "朴素", "glow": "荧光"}
 DEFAULT_COLOR = "#ED35B3"
 
 # theme colours offered as one-click swatches
 SWATCHES = ["#ED35B3", "#FF4D6D", "#FF8A1E", "#F5C400", "#3CC46A", "#1FB5C9", "#2F80ED", "#8B5CF6"]
+# a new singer's colour: the first of these no other singer has (neighbours far apart in hue)
+SINGER_SWATCHES = ["#ED35B3", "#2F80ED", "#F5C400", "#3CC46A", "#FF8A1E", "#8B5CF6", "#1FB5C9", "#FF4D6D", "#8A8A8A"]
 
 
 # ------------------------------------------------------------------ colour space
@@ -150,13 +155,16 @@ def _toward_light_hue(h: float, by: float) -> float:
     return (h + max(-by, min(by, d))) % 360
 
 
-def palette(color: str, secondary: str | None = None) -> dict[str, str]:
-    """The colours of every role, derived from one theme colour (and an optional second one)."""
+def palette(color: str, secondary: str | None = None, *, tinted: bool = False) -> dict[str, str]:
+    """The colours of every role, derived from one theme colour (and an optional second one).
+    ``tinted``: the unsung text a clearer tint of the hue (a singer's colours)."""
     L0, C0, h = oklch(color)
     neutral = C0 < 0.03
     C = 0.0 if neutral else C0
-    t = 0.0 if neutral else min(0.025, C * 0.15)
-    unsung = from_oklch(0.975, t, h)
+    if tinted:
+        unsung = from_oklch(0.94, 0.0 if neutral else min(0.06, C * 0.4), h)
+    else:
+        unsung = from_oklch(0.975, 0.0 if neutral else min(0.025, C * 0.15), h)
 
     Ls = min(0.86, max(0.60, L0))
     sung = from_oklch(Ls, C, h)
@@ -223,3 +231,36 @@ def theme_style(template: str, color: str, base: KaraokeStyle, secondary: str | 
         fx = st.effects
         fx.kind, fx.amount, fx.size, fx.color, fx.behind = "sparkle", 60, 90, p["sparkle"], True
     return st
+
+
+# ------------------------------------------------------------------ singers
+
+
+def singer_colors(member: KaraokeSinger) -> dict[str, str]:
+    """A singer's colours: its own where set, the rest derived from its colour (palette step 7)."""
+    p = palette(rgb_to_hex(hex_to_rgb(member.color)), tinted=True)
+    return {
+        "sung": member.color_sung or p["sung"],
+        "unsung": member.color_unsung or p["unsung"],
+        "outline": member.outline_color or p["outline"],
+        "glow_sung": member.glow_sung or p["glow_sung"],
+        "glow_unsung": member.glow_unsung or p["glow_unsung"],
+        "translation": p["translation"],
+        "sparkle": p["sparkle"],
+    }
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """``a`` blended toward ``b`` by ``t`` (0–1), in OKLab (even steps look even)."""
+    x, y = _rgb_to_oklab(hex_to_rgb(a)), _rgb_to_oklab(hex_to_rgb(b))
+    lab = tuple(p + (q - p) * t for p, q in zip(x, y))
+    return rgb_to_hex(tuple(_to_srgb(max(0.0, min(1.0, c))) for c in _oklab_to_linear(lab)))  # type: ignore[arg-type]
+
+
+def blend(colors: list[str], t: float) -> str:
+    """The colour at ``t`` (0–1) along a gradient through ``colors`` at even stops."""
+    if len(colors) == 1:
+        return colors[0]
+    t = max(0.0, min(1.0, t)) * (len(colors) - 1)
+    i = min(int(t), len(colors) - 2)
+    return mix(colors[i], colors[i + 1], t - i)

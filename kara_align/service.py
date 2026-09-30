@@ -308,8 +308,19 @@ def project_view(h: ProjectHandle) -> dict:
                 "capability_warnings": cap,
                 "audio": audio,
                 "picture": picture(h),
+                "singer_markers": _marker_count(p),
             },
         }
+
+
+def _marker_count(p) -> int:
+    """How many lines start with singer names (the 演唱者 page can assign and remove them)."""
+    from .lyrics.singers import detect_markers
+
+    try:
+        return len(detect_markers(p.lyrics))
+    except Exception:
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -685,9 +696,14 @@ def update_line(h: ProjectHandle, line_id: str, **fields: Any) -> None:
             # same canonical kana as imported text (composed, full width); one line only
             fields["text"] = normalize_text(str(fields["text"])).replace("\n", " ").strip()
         text_changed = "text" in fields and fields["text"] is not None and fields["text"] != ln.text
+        old_text = ln.text
         for k in ("text", "sing", "kind", "translation", "voice"):
             if k in fields and fields[k] is not None:
                 setattr(ln, k, fields[k])
+        if text_changed:
+            from .lyrics.singers import remap
+
+            remap(ln, old_text)  # who sings which characters follows the edit
         if text_changed or (ln.kind == "lyric" and ln.sing and not ln.units()):
             # a line switched back to a sung lyric (or edited) is prepared now, in the project:
             # an alignment must never refer to units the project does not have
@@ -1011,6 +1027,160 @@ def set_karaoke_style(h: ProjectHandle, style: dict) -> None:
     with h.lock:
         h.project.karaoke = k
         h.save()
+
+
+# ---------------------------------------------------------------------------
+# singers (多人演唱分色)
+# ---------------------------------------------------------------------------
+
+
+def set_line_singers(h: ProjectHandle, items: list[dict]) -> None:
+    """Who sings each of these lines: ``{line_id, singers, spans: [{start, end, singers}], text?}``
+    (``text``: the line's text the spans were made for; refused when the line has changed since)."""
+    from .lyrics.singers import clean_ids, normalize
+    from .models import SingerSpan
+
+    with h.lock:
+        todo = []
+        for it in items:
+            if not isinstance(it, dict):
+                raise ServiceError("每一项必须是对象")
+            ln = _line(h, str(it.get("line_id")))
+            if it.get("text") is not None and it["text"] != ln.text:
+                raise ServiceError(f"歌词「{ln.text}」已修改，请刷新后重试")
+            spans = []
+            for sp in it.get("spans") or []:
+                try:
+                    a, b = int(sp["start"]), int(sp["end"])
+                except (KeyError, TypeError, ValueError):
+                    raise ServiceError("分段必须有 start / end") from None
+                if not 0 <= a < b <= len(ln.text):
+                    raise ServiceError(f"分段 {a}–{b} 超出了歌词「{ln.text}」")
+                spans.append(SingerSpan(start=a, end=b, singers=clean_ids(sp.get("singers"))))
+            todo.append((ln, clean_ids(it.get("singers")), spans))
+        for ln, ids, spans in todo:
+            ln.singers, ln.singer_spans = ids, spans
+            normalize(ln)
+        h.save()
+
+
+def set_singers(h: ProjectHandle, data: dict) -> None:
+    """The style's singers (list, colours, how parts sung together look); the rest of the style stays."""
+    from .models import KaraokeSingers
+
+    try:
+        sg = KaraokeSingers.model_validate(data, context={"strict": True})
+    except Exception as e:
+        raise ServiceError(f"演唱者设置无效：{e}") from e
+    with h.lock:
+        h.project.karaoke.singers = sg
+        h.save()
+
+
+def remove_singer(h: ProjectHandle, number: int) -> int:
+    """Remove singer ``number`` (1-based): its parts go back to the other singers of the line (or the
+    style's own colours) and the singers after it move up.  Returns how many lines changed."""
+    from .lyrics.singers import shift_numbers
+
+    with h.lock:
+        members = h.project.karaoke.singers.members
+        if not 1 <= number <= len(members):
+            raise ServiceError(f"没有第 {number} 位演唱者")
+        del members[number - 1]
+        n = shift_numbers(h.project.lyrics, number)
+        h.save()
+        return n
+
+
+def singer_markers(h: ProjectHandle) -> dict:
+    """Lines whose text starts with singer names ("A：…", "（XX）…", "【成员】…")."""
+    from .lyrics.singers import detect_markers, is_all, marker_names
+
+    with h.lock:
+        found = detect_markers(h.project.lyrics)
+        texts = {ln.id: ln.text for ln in h.project.lyrics.lines}
+        existing = [m.name for m in h.project.karaoke.singers.members]
+    return {
+        "lines": [{"line_id": m.line_id, "text": texts.get(m.line_id, ""), "prefix": m.prefix, "names": m.names,
+                   "everyone": all(is_all(n) for n in m.names)} for m in found],
+        "names": marker_names(found),
+        "existing": existing,
+    }
+
+
+def apply_singer_markers(h: ProjectHandle, names: Optional[list[str]] = None, strip: bool = True) -> list[str]:
+    """Assign the lines that start with singer names to those singers (added to the style when new;
+    the words for "everyone" mean every singer named in the lyrics); ``names``: only these (default:
+    all found).  ``strip``: take the names out of the lyrics (only where every name was used)."""
+    from .karaoke.themes import SINGER_SWATCHES
+    from .lyrics.singers import detect_markers, is_all, marker_names
+    from .models import MAX_SINGERS, KaraokeSinger
+
+    with h.lock:
+        doc = h.project.lyrics
+        found = detect_markers(doc)
+        if not found:
+            raise ServiceError("歌词里没有找到演唱者标记")
+        wanted = marker_names(found) if names is None else [n for n in marker_names(found) if n in names]
+        members = h.project.karaoke.singers.members
+        number: dict[str, int] = {}
+        messages: list[str] = []
+        for name in wanted:
+            hit = next((i for i, m in enumerate(members) if m.name.strip().casefold() == name.casefold()), None)
+            if hit is None:
+                if len(members) >= MAX_SINGERS:
+                    messages.append(f"最多 {MAX_SINGERS} 位演唱者，「{name}」没有加入")
+                    continue
+                used = {m.color.upper() for m in members}
+                color = next((c for c in SINGER_SWATCHES if c not in used), SINGER_SWATCHES[len(members) % 9])
+                members.append(KaraokeSinger(name=name, color=color))
+                hit = len(members) - 1
+            number[name] = hit + 1
+        everyone = sorted(set(number.values()))
+        assigned = stripped = 0
+        for mk in found:
+            ln = doc.line(mk.line_id)
+            ids: list[int] = []
+            for n in mk.names:
+                for i in (everyone if is_all(n) else [number[n]] if n in number else []):
+                    if i not in ids:
+                        ids.append(i)
+            if not ids:
+                continue
+            ln.singers, ln.singer_spans = ids, []
+            assigned += 1
+            if strip and all(is_all(n) or n in number for n in mk.names) and ln.text.startswith(mk.prefix):
+                _strip_prefix(ln, len(mk.prefix), doc.language)
+                stripped += 1
+        h.save()
+    messages.insert(0, f"已按标记给 {assigned} 行指定演唱者：{'、'.join(number)}")
+    if stripped:
+        messages.append(f"已去掉 {stripped} 行开头的演唱者标记")
+        if h.project.results:
+            messages.append("歌词文本有改动，现有对齐结果已标为过期（其余部分的时间仍保留），建议重新对齐这些行")
+    return messages
+
+
+def _strip_prefix(ln, n: int, lang: str) -> None:
+    """Take the first ``n`` characters out of a line.  Where they are whole segments, the other
+    segments (and their units' times) are kept; otherwise the line is prepared again."""
+    from .reading.prepare import prepare_line
+
+    old = ln.text
+    pos, cut = 0, 0
+    for seg in ln.segments:
+        if pos >= n:
+            break
+        pos += len(seg.surface)
+        cut += 1
+    ln.text = old[n:]
+    if pos == n:
+        ln.segments = ln.segments[cut:]
+    else:
+        ln.segments = []
+        prepare_line(ln, lang)
+    ln.singer_spans = [sp.model_copy(update={"start": max(0, sp.start - n), "end": sp.end - n})
+                       for sp in ln.singer_spans if sp.end > n]
 
 
 def song_info(h: ProjectHandle) -> dict:

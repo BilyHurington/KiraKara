@@ -19,6 +19,7 @@ import { CalibratePage } from '@/pages/Calibrate';
 import { AlignPage } from '@/pages/Align';
 import { ReviewPage } from '@/pages/Review';
 import { KaraokePage } from '@/pages/Karaoke';
+import { SingersPage } from '@/pages/Singers';
 import { ExportPage } from '@/pages/Export';
 import { SimpleApp } from '@/pages/simple/SimpleApp';
 import { loadSettings, loadTasks, setUi, startTaskPolling, taskOnProject, useSimple } from '@/store/simple';
@@ -31,6 +32,7 @@ const PAGES = {
   calibrate: CalibratePage,
   align: AlignPage,
   review: ReviewPage,
+  singers: SingersPage,
   karaoke: KaraokePage,
   export: ExportPage,
 };

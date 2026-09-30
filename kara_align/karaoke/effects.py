@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Optional
 
 from ..models import KaraokeStyle
 
@@ -72,6 +73,7 @@ class Syllable:
     group: str = ""  # syllables shown together (one line while it is on screen)
     top: float = 0.0  # top edge of the whole line, ruby included
     room: float = 1e9  # free space above ``top`` (up to the line above or the frame's edge)
+    color: Optional[str] = None  # its own effect colour (a singer's part); None: the style's
 
 
 def _bgr(hex_rgb: str) -> str:
@@ -117,7 +119,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
     particle_layer = LAYER_UNDER_TEXT if fx.behind else LAYER_FRONT
     if fx.kind == "ball":
         return _ball(style, syllables, k, particle_layer)
-    color = _bgr(effect_color(style))
+    base_color = _bgr(effect_color(style))
     size = fx.size / 100
     amount = fx.amount / 100
     out: list[tuple[int, int, int, str, str]] = []
@@ -143,6 +145,7 @@ def syllable_events(style: KaraokeStyle, syllables: list[Syllable], k: float) ->
                 continue
             last_burst[s.ruby] = t0
 
+        color = _bgr(s.color) if s.color else base_color
         text_at = f"\\an5\\pos({s.x:.1f},{s.y:.1f})\\fn{s.font}\\fs{s.size:.1f}\\b{int(style.text.bold)}"
         if fx.kind == "pulse":
             dur = 520
@@ -223,7 +226,7 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
     and one per event), so the arc looks round without one event per frame.
     """
     fx = style.effects
-    color = _bgr(effect_color(style))
+    base_color = _bgr(effect_color(style))
     out: list[tuple[int, int, int, str, str]] = []
     groups: dict[str, list[Syllable]] = {}
     for s in syllables:
@@ -232,6 +235,7 @@ def _ball(style: KaraokeStyle, syllables: list[Syllable], k: float,
     for syl in groups.values():
         syl.sort(key=lambda s: s.start)
         h = syl[0].h
+        color = _bgr(syl[0].color) if syl[0].color else base_color
         sc = 100 * 0.2 * h * fx.size / 100 / 16  # 20 % of the font size across
         # the ball rests this far above the line (its ruby included) and hops no higher than the room
         # above it (the rows are kept apart for it, ball_room(); the top row: up to the frame's edge)

@@ -5,8 +5,9 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 import { api, ApiError, readableError } from '@/lib/api';
 import type { AlignmentResult, Info, Job, ManualEdit, ProjectListItem, ProjectView } from '@/lib/types';
+import type { LineSingers } from '@/lib/singers';
 
-export type Step = 'mode' | 'input' | 'enhance' | 'calibrate' | 'align' | 'review' | 'karaoke' | 'export';
+export type Step = 'mode' | 'input' | 'enhance' | 'calibrate' | 'align' | 'review' | 'singers' | 'karaoke' | 'export';
 
 export const STEPS: { id: Step; label: string; hint: string; optional?: boolean; lrcOnly?: boolean }[] = [
   { id: 'mode', label: '选择模式', hint: '普通 / LRC 增强' },
@@ -15,6 +16,7 @@ export const STEPS: { id: Step; label: string; hint: string; optional?: boolean;
   { id: 'calibrate', label: '首音校准', hint: '确认开头位置（全局偏移）', lrcOnly: true },
   { id: 'align', label: '对齐', hint: '运行模型' },
   { id: 'review', label: '人工检查', hint: '修正与锁定' },
+  { id: 'singers', label: '演唱者', hint: '多人演唱时分色', optional: true },
   { id: 'karaoke', label: '卡拉OK字幕', hint: '样式 · 预览 · 生成视频', optional: true },
   { id: 'export', label: '导出', hint: 'JSON · LRC · 混音' },
 ];
@@ -25,6 +27,9 @@ export interface UndoEntry {
   rid: string; uid: string; before: ManualEdit | null; after: ManualEdit | null; label: string;
   /** several units changed as one step (a whole line moved): undone / redone together */
   items?: { uid: string; before: ManualEdit | null; after: ManualEdit | null }[];
+  /** who sings which lines (the 演唱者 page; no result: `rid` / `uid` are empty); `key`: the next
+   * step with the same key replaces this one (typing 1 + 2 is one step) */
+  singers?: { before: LineSingers[]; after: LineSingers[]; key?: string };
 }
 
 interface State {
@@ -227,7 +232,7 @@ export function setPV(pv: ProjectView | null | undefined) {
     rid = pv.project.active_result_id ?? (results.length ? results[results.length - 1].id : null);
   }
   const ids = new Set(results.map((r) => r.id));
-  const keep = (e: UndoEntry) => ids.has(e.rid);
+  const keep = (e: UndoEntry) => !!e.singers || ids.has(e.rid);
   set((s) => ({
     ...(other ? PROJECT_RESET : {}),
     pv, pid: pv.project.id, resultId: rid,

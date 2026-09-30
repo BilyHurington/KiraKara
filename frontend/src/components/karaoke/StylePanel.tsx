@@ -451,7 +451,9 @@ function PresetBar({ style, onChange }: { style: KaraokeStyle; onChange: (s: Kar
   const pick = (id: string) => {
     const s = saved?.find((x) => x.id === id);
     if (!s) return;
-    onChange({ ...structuredClone(s.style), output: style.output });
+    // a preset without singers keeps this project's (the parts already assigned keep their colours)
+    const next = structuredClone(s.style);
+    onChange({ ...next, output: style.output, singers: next.singers?.members.length ? next.singers : style.singers });
     setConfirmDelete(false);
   };
   const [savingAs, setSavingAs] = useState(false);

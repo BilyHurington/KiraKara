@@ -126,6 +126,42 @@ class LineAnchor(_Base):
     note: str = ""
 
 
+MAX_SINGERS = 9  # singers of a karaoke style (keys 1–9 on the 演唱者 page)
+
+
+def _singer_ids(value: Any) -> list[int]:
+    """Singer numbers (1 … MAX_SINGERS) in order, each once; anything else is left out (never an error:
+    a hand-edited project still loads)."""
+    out: list[int] = []
+    for v in value if isinstance(value, (list, tuple)) else []:
+        if isinstance(v, bool):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n == v and 1 <= n <= MAX_SINGERS and n not in out:
+            out.append(n)
+    return out
+
+
+class SingerSpan(_Base):
+    """Part of a line sung by other singers than the line's own (``Line.singers``): characters
+    [start, end) of ``Line.text``.  Kept by character offset, not by segment, so re-segmenting a
+    line (readings, AI, regrouping) never loses it."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    singers: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clean(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "singers" in data:
+            data = {**data, "singers": _singer_ids(data["singers"])}
+        return data
+
+
 class Line(_Base):
     id: str = Field(default_factory=lambda: new_id("L"))
     text: str
@@ -141,6 +177,29 @@ class Line(_Base):
     voice: str = "main"  # independent lyric stream id for real simultaneous parts
     confirmed: bool = False
     source: LineSource = Field(default_factory=LineSource)
+    # who sings it (karaoke colours only, never the alignment): numbers of the style's singers
+    # (KaraokeStyle.singers.members, 1-based); several = sung together.  Empty: the style's own colours.
+    singers: list[int] = Field(default_factory=list)
+    # parts sung by someone else than ``singers`` (character ranges, sorted, not overlapping)
+    singer_spans: list[SingerSpan] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clean_singers(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "singers" in data:
+            data = {**data, "singers": _singer_ids(data["singers"])}
+        if isinstance(data, dict) and "singer_spans" in data:
+            def ok(x: Any) -> bool:
+                if isinstance(x, SingerSpan):
+                    return True
+                if not isinstance(x, dict):
+                    return False
+                a, b = x.get("start"), x.get("end")
+                return (isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool)
+                        and not isinstance(b, bool) and 0 <= a < b)
+            spans = data["singer_spans"]
+            data = {**data, "singer_spans": [x for x in spans if ok(x)] if isinstance(spans, list) else []}
+        return data
 
     def units(self) -> list[Unit]:
         return [u for s in self.segments for u in s.units]
@@ -816,6 +875,39 @@ class KaraokeSongInfo(_KaraokeBase):
     accent: str = _color("", follow=True)  # accent bar; "" = the lyrics' sung colour
 
 
+class KaraokeSinger(_KaraokeBase):
+    """One singer's colours.  Only ``color`` is needed: every "" colour is derived from it the way
+    a colour template derives a style (themes.singer_colors)."""
+
+    name: str = Field(default="", max_length=40)
+    color: str = _color("#ED35B3")
+    color_unsung: str = _color("", follow=True)
+    color_sung: str = _color("", follow=True)
+    outline_color: str = _color("", follow=True)
+    glow_unsung: str = _color("", follow=True)
+    glow_sung: str = _color("", follow=True)
+
+
+class KaraokeSingers(_KaraokeBase):
+    """Singers for songs with several voices (the 演唱者 page); which lines / words each one sings is
+    kept in the lyrics (``Line.singers``, ``Line.singer_spans``), by number."""
+
+    members: list[KaraokeSinger] = Field(default_factory=list, max_length=MAX_SINGERS)
+    # parts sung together: each singer's colours in its own band (split) or blended (gradient)
+    mix: Literal["split", "gradient"] = "split"
+    # vertical: top to bottom (upper half 1, lower half 2); horizontal: left to right inside each character
+    direction: Literal["vertical", "horizontal"] = "vertical"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _members(cls, data: Any, info: Any) -> Any:
+        if isinstance(data, dict) and not (info.context or {}).get("strict") and "members" in data:
+            m = data["members"]
+            data = {**data, "members": [x for x in m if isinstance(x, (dict, BaseModel))][:MAX_SINGERS]
+                    if isinstance(m, list) else []}
+        return data
+
+
 class KaraokeTheme(_KaraokeBase):
     """The colour template a style's colours came from (karaoke.themes).  The editor clears it
     as soon as a colour or effect is changed by hand ("自定义")."""
@@ -838,6 +930,7 @@ class KaraokeStyle(_KaraokeBase):
     info: KaraokeSongInfo = Field(default_factory=KaraokeSongInfo)
     theme: Optional[KaraokeTheme] = None  # None = colours set by hand (or a preset)
     output: KaraokeOutput = Field(default_factory=KaraokeOutput)
+    singers: KaraokeSingers = Field(default_factory=KaraokeSingers)
 
     @model_validator(mode="before")
     @classmethod

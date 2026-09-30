@@ -81,6 +81,28 @@ class LinePatch(BaseModel):
     voice: Optional[str] = None
 
 
+class SpanBody(BaseModel):
+    start: int
+    end: int
+    singers: list[int] = []
+
+
+class LineSingersItem(BaseModel):
+    line_id: str
+    singers: list[int] = []
+    spans: list[SpanBody] = []
+    text: Optional[str] = None  # the text the spans were made for (refused if the line changed since)
+
+
+class LineSingersBody(BaseModel):
+    lines: list[LineSingersItem]
+
+
+class MarkersBody(BaseModel):
+    names: Optional[list[str]] = None
+    strip: bool = True
+
+
 class LineIdsBody(BaseModel):
     line_ids: Optional[list[str]] = None
 
@@ -841,6 +863,48 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         h = handle(pid)
         S.set_karaoke_style(h, body)
         return h.project.karaoke.model_dump(mode="json")
+
+    @app.put("/api/projects/{pid}/singers")
+    def put_line_singers(pid: str, body: LineSingersBody):
+        h = handle(pid)
+        guard(S.set_line_singers, h, [x.model_dump() for x in body.lines])
+        return view(h)
+
+    @app.get("/api/projects/{pid}/singers/markers")
+    def get_singer_markers(pid: str):
+        return S.singer_markers(handle(pid))
+
+    @app.post("/api/projects/{pid}/singers/markers")
+    def apply_markers(pid: str, body: MarkersBody):
+        h = handle(pid)
+        messages = guard(S.apply_singer_markers, h, body.names, body.strip)
+        return view(h, messages=messages)
+
+    @app.put("/api/projects/{pid}/karaoke/singers")
+    def put_singers(pid: str, body: dict):
+        h = handle(pid)
+        guard(S.set_singers, h, body)
+        return h.project.karaoke.model_dump(mode="json")
+
+    @app.delete("/api/projects/{pid}/karaoke/singers/{number}")
+    def delete_singer(pid: str, number: int):
+        h = handle(pid)
+        changed = guard(S.remove_singer, h, number)
+        return view(h, changed=changed)
+
+    @app.post("/api/karaoke/singer-colors")
+    def singer_colors(body: dict):
+        """Every colour of these singers, the derived ones filled in (for the editor)."""
+        from ..karaoke.themes import singer_colors as colors
+        from ..models import KaraokeSinger
+
+        out = []
+        for m in (body or {}).get("members") or []:
+            try:
+                out.append(colors(KaraokeSinger.model_validate(m)))
+            except Exception as e:
+                raise HTTPException(400, f"演唱者颜色无效：{e}") from e
+        return out
 
     @app.get("/api/projects/{pid}/karaoke/info")
     def get_song_info(pid: str):

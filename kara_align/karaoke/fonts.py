@@ -383,6 +383,14 @@ class Measurer:
             hhea = tt["hhea"]
             win = hhea.ascent - hhea.descent
         self.em_scale = upem / win  # ASS size → em size (libass: ass_face_set_size)
+        # where the glyphs sit in the line box (0 = its top, 1 = its bottom): the typographic ascender /
+        # descender, which for CJK fonts is the ideographic em box (splitting a character in bands)
+        self.ink = (0.0, 1.0)
+        if os2 is not None and os2.usWinAscent and win:
+            top = (os2.usWinAscent - os2.sTypoAscender) / win
+            bottom = (os2.usWinAscent - os2.sTypoDescender) / win
+            if 0 <= top < bottom <= 1.05:
+                self.ink = (top, min(1.0, bottom))
         self.size = size
         self._font = ImageFont.truetype(path, size=max(1, round(size * self.em_scale * 4)), index=index)
         self._k = 1 / 4  # measure at 4x for sub-pixel accuracy

@@ -48,6 +48,13 @@ export function stepStatus(step: Step, pv: ProjectView | null, running: Set<stri
       if (n) return { state: 'attention', note: `${n} 条提示` };
       return { state: 'done' };
     }
+    case 'singers': {
+      const n = p.karaoke?.singers?.members.length ?? 0;
+      const lines = p.lyrics.lines.filter((l) => l.kind === 'lyric' && l.sing && ((l.singers?.length ?? 0) || (l.singer_spans?.length ?? 0))).length;
+      if (!n && pv.view.singer_markers) return { state: 'optional', note: `${pv.view.singer_markers} 行写着演唱者，可自动识别` };
+      if (!n) return { state: 'optional', note: '可选 · 多人演唱时分色' };
+      return { state: lines ? 'done' : 'optional', note: `${n} 位演唱者 · ${lines} 行` };
+    }
     case 'karaoke':
       if (running.has('burn')) return { state: 'running', note: '生成视频中' };
       return active ? { state: 'optional', note: p.video ? '字幕 · 生成带字幕的视频' : '字幕 · 纯黑背景视频' } : { state: 'todo', note: '需要对齐结果' };

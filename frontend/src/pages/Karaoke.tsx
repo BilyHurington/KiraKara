@@ -19,6 +19,7 @@ import {
 import { StylePanel } from '@/components/karaoke/StylePanel';
 import { BACKGROUND_ACCEPT } from '@/pages/input/AudioCard';
 import { setSimpleDefault } from '@/store/simple';
+import { singersSettled } from '@/store/singers';
 
 interface LineSpan { id: string; index: number; text: string; start: number; end: number }
 
@@ -41,11 +42,12 @@ export function KaraokePage() {
     let stop = false;
     setLoadError(null);
     // fonts and song data are optional: the page works without them; only the style is needed
-    void Promise.allSettled([
+    // (after the 演唱者 page's last change of the singer list is saved)
+    void singersSettled().then(() => Promise.allSettled([
       api.get<{ default: string; families: FontFamily[] }>('/api/fonts'),
       api.get<KaraokeStyle>(`/api/projects/${pid}/karaoke`),
       api.get<SongInfo>(`/api/projects/${pid}/karaoke/info`),
-    ]).then(([f, k, info]) => {
+    ])).then(([f, k, info]) => {
       if (stop) return;
       if (f.status === 'fulfilled') setFonts(f.value);
       if (info.status === 'fulfilled') setSongInfo(info.value);
@@ -164,6 +166,7 @@ export function KaraokePage() {
         </Callout>
       )}
       {result.stale && <Callout tone="warn" className="mb-4" title="当前对齐结果已过期">{result.stale_reason}。字幕仍按该结果生成。</Callout>}
+      <SingersNote style={style} />
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <PreviewCard style={style} lines={lines} refreshKey={songInfo?.text ?? ''} />
@@ -193,10 +196,27 @@ export function KaraokePage() {
   );
 }
 
+/** Songs with several singers: who sings is set on the 演唱者 page (a line here when it is in use). */
+function SingersNote({ style }: { style: KaraokeStyle }) {
+  const project = useProject()!;
+  const n = style.singers?.members.length ?? 0;
+  if (!n) return null;
+  const lines = project.lyrics.lines.filter((l) => (l.singers?.length ?? 0) || (l.singer_spans?.length ?? 0)).length;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-line px-4 py-2.5 text-[13px] text-muted">
+      <span className="flex -space-x-1">{style.singers!.members.map((m, i) => (
+        <span key={i} className="size-3.5 rounded-full ring-2 ring-surface" style={{ background: m.color }} />
+      ))}</span>
+      <span className="min-w-0 flex-1">{n} 位演唱者 · {lines} 行已指定：这些部分用各自的颜色显示，其余用下面的配色。</span>
+      <Button size="xs" variant="ghost" onClick={() => setStep('singers')}>去“演唱者”页</Button>
+    </div>
+  );
+}
+
 function Header() {
   return (
     <PageHeader
-      eyebrow="第 7 步（可选）"
+      eyebrow="第 8 步（可选）"
       title="卡拉OK字幕"
       description="选择样式并预览任意时刻的画面；导出 ASS 字幕，或一键生成带字幕的视频（把字幕烧录进画面：背景图片 / 循环播放的背景视频、原视频或纯黑）。设置会自动保存；总是使用项目的当前对齐结果。"
       actions={<Button onClick={() => setStep('export')} icon={<ArrowRight className="size-4" />}>下一步：导出</Button>}

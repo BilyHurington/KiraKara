@@ -8,8 +8,8 @@
 // changing an old result.
 
 import { api } from '@/lib/api';
-import type { AlignmentResult, ManualEdit, UnitTiming } from '@/lib/types';
-import { currentResult, patchResult, resultFrom, run, toast, useApp, type UndoEntry } from './app';
+import type { AlignmentResult, ManualEdit, ProjectView, UnitTiming } from '@/lib/types';
+import { currentResult, patchResult, resultFrom, run, setPV, toast, useApp, type UndoEntry } from './app';
 
 function applyUnit(pid: string, rid: string, ut: UnitTiming) {
   const pv = useApp.getState().pv;
@@ -31,13 +31,13 @@ function unitOf(rid: string, uid: string): UnitTiming | undefined {
   return useApp.getState().pv?.project.results.find((r) => r.id === rid)?.units.find((u) => u.unit_id === uid);
 }
 
-function push(entry: UndoEntry) {
+export function push(entry: UndoEntry) {
   useApp.setState((s) => ({ undo: [...s.undo.slice(-199), entry], redo: [] }));
 }
 
 // one edit at a time, in the order they were made
 let queue: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
+export function serial<T>(fn: () => Promise<T>): Promise<T> {
   const next = queue.then(fn, fn);
   queue = next.catch(() => undefined);
   return next;
@@ -117,6 +117,12 @@ export function forgetEdits(rid: string, lineIds: string[]) {
 
 /** Why an entry cannot be applied any more (null: it can). */
 function blocked(e: UndoEntry): string | null {
+  if (e.singers) {
+    const lines = new Map((useApp.getState().pv?.project.lyrics.lines ?? []).map((l) => [l.id, l.text]));
+    const gone = e.singers.before.find((x) => lines.get(x.line_id) !== x.text);
+    if (gone) return lines.has(gone.line_id) ? `歌词「${gone.text}」已修改` : '该行歌词已不存在';
+    return null;
+  }
   const r = resultFrom(useApp.getState().pv, e.rid);
   if (!r) return '该修改所在的对齐结果已不存在';
   if (r.stale) return '该修改所在的对齐结果已过期（输入已修改），不能再改它的时间';
@@ -137,8 +143,12 @@ function step(from: 'undo' | 'redo') {
       toast('warn', `无法${from === 'undo' ? '撤销' : '重做'}：${e.label}`, `${why}；这一步已从记录中移除`);
       return;
     }
-    const items = e.items ?? [{ uid: e.uid, before: e.before, after: e.after }];
+    const items = e.singers ? [] : e.items ?? [{ uid: e.uid, before: e.before, after: e.after }];
     try {
+      if (e.singers) {
+        const lines = from === 'undo' ? e.singers.before : e.singers.after;
+        setPV(await api.put<ProjectView>(`/api/projects/${pid}/singers`, { lines }));
+      }
       for (const it of items) {
         const manual: ManualEdit | null = from === 'undo' ? it.before : it.after;
         const ut = await api.post<UnitTiming>(upath(pid, e.rid, it.uid, '/restore'), { manual });
@@ -146,7 +156,7 @@ function step(from: 'undo' | 'redo') {
       }
       if (useApp.getState().pid !== pid) return;
       useApp.setState((st) => ({ [to]: [...st[to], e] }) as any);
-      if (e.rid !== useApp.getState().resultId) {
+      if (e.rid && e.rid !== useApp.getState().resultId) {
         toast('info', `已${from === 'undo' ? '撤销' : '重做'}：${e.label}`, '这一步属于另一个对齐结果', 2500);
       } else {
         toast('info', `已${from === 'undo' ? '撤销' : '重做'}：${e.label}`, undefined, 1800);

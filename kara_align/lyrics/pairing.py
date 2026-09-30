@@ -142,6 +142,9 @@ def merge_lines(doc: LyricsDoc, ids: list[str]) -> LyricsDoc:
         text += j + p.text
     # segments stay valid only when their surfaces still concatenate to the text
     keep_segments = all(p.segments for p in parts) and not spaced
+    from .singers import merged as merged_singers
+
+    singers, singer_spans = merged_singers(parts, text)
     merged = Line(
         id=new_id("L"),
         text=text,
@@ -156,6 +159,7 @@ def merge_lines(doc: LyricsDoc, ids: list[str]) -> LyricsDoc:
         voice=first.voice,
         source=LineSource(origin=first.source.origin, source_id=first.source.source_id,
                           raw_index=first.source.raw_index, merged_from=list(ids)),
+        singers=singers, singer_spans=singer_spans,
     )
     new.lines[positions[0]: positions[-1] + 1] = [merged]
     return new
@@ -194,5 +198,9 @@ def split_line(doc: LyricsDoc, line_id: str, at_char: int) -> LyricsDoc:
                  voice=line.voice, source=LineSource(**src))
     if left.text != left_text or right.text != right_text:
         left.segments, right.segments = [], []
+    from .singers import split as split_singers
+
+    (left.singers, left.singer_spans), (right.singers, right.singer_spans) = split_singers(
+        line, at_char, left.text, right.text)
     new.lines[idx: idx + 1] = [left, right]
     return new

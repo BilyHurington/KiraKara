@@ -44,7 +44,7 @@ export function ExportPage() {
   return (
     <>
       <PageHeader
-        eyebrow="第 8 步"
+        eyebrow="第 9 步"
         title="导出"
         description="对外时间统一为原音频起点起算的整数毫秒，导出不再叠加任何偏移。不能表达读音映射、终点、间隙或失败信息的格式会提示损失。"
       />
