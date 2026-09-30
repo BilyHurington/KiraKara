@@ -273,6 +273,10 @@ Warnings say when the result is stale or partial and how many lines were skipped
 | GET | `/api/projects/{pid}/karaoke/info` | – | `{fields: {field: text}, labels, text: str\|null}` (title card data; `text` = the project's own text) |
 | PUT | `/api/projects/{pid}/karaoke/info` | `{text: str\|null}` | same as GET (`null` goes back to the song data) |
 | PUT | `/api/projects/{pid}/karaoke/singers` | `KaraokeSingers` | `KaraokeStyle` (only the style's singers change; validated strictly) |
+| POST | `/api/projects/{pid}/karaoke/singers/preset` | `{id}` | `ProjectView` + `lines` + `kept`: the singers of a saved set (below) used in this song. Parts already assigned stay with the same person: matched by name, an unnamed singer by number; one the preset lacks but the lyrics use is added after the preset's (`kept`: their names), with a free key. 404: no such preset |
+| GET | `/api/karaoke/singer-presets` | – | `[{id, name, updated, singers: KaraokeSingers}]` by name (`<home>/singer_presets.json`, shared by every project) |
+| POST | `/api/karaoke/singer-presets` | `{name, singers, id?}` | the saved preset (no `id`: a new one, or the one of that name replaced; 400: no name, no singers, invalid singers) |
+| DELETE | `/api/karaoke/singer-presets/{id}` | – | `{ok}` |
 | DELETE | `/api/projects/{pid}/karaoke/singers/{n}` | – | `ProjectView` + `changed` (lines whose assignment changed): singer `n` (1-based) removed, its parts go back to the line's other singers, later numbers move down by one (in combinations too; one left with fewer than two singers is removed) |
 | POST | `/api/karaoke/singer-colors` | `{members: [KaraokeSinger]}` | `[{sung, unsung, outline, glow_sung, glow_unsung, translation, sparkle}]`: each singer's colours with the derived ones filled in |
 | PUT | `/api/projects/{pid}/singers` | `{lines: [{line_id, singers, spans: [{start, end, singers}], text?}]}` | `ProjectView`: who sings these lines (replaces their assignment; `text`: the line's text the spans were made for, 400 when it changed since) |
@@ -288,11 +292,14 @@ starts (so with `advance_ms`). A line can override the rules: `Line.countdown` t
 `PATCH …/lines/{id}` `{countdown: "on"|"off"|"auto"}`. Such a line appears as its countdown begins (`dots` seconds before it is sung, not earlier with `early_show`), so the first dot goes a second after it appears. In the ASS the dots are
 drawings with the style `KDots`. Simple-mode tasks: `task_style.countdown_intro` / `countdown_interlude` (null = as the style says).
 
-**Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, color, color_unsung, color_sung, outline_color, glow_unsung,
-glow_sung}] (≤ 9; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal",
+**Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, key, color, color_unsung, color_sung, outline_color, glow_unsung,
+glow_sung}] (any number; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal",
 combos: [{key, singers}]}` (vertical: every character top to bottom, a reading in the first singer's colours; horizontal: each run
-sung together left to right; `combos`: number keys of the 演唱者 page for singers who sing together, keys after the singers' own —
-a combination on a singer's key, a repeated key or one with fewer than two singers is refused when saved, dropped when loaded).
+sung together left to right; `combos`: singers who sing together). `key`: the key that assigns a singer / combination on the
+演唱者 page, one character of `123456789abcdefghijkmnoqrstuvwxyz` (1–9, then a–z without l and p) or "" (none); new ones take
+the first free one in that order. A key that is not usable or used twice, or a combination of fewer than two singers, is
+refused when saved; when loaded the key is cleared (the combination dropped). Saved before keys existed: singer n has key n
+(1–9), a combination's number key becomes that character.
 Who sings is kept in the lyrics: `Line.singers` (numbers, 1-based; several = together; empty = the style's own colours) and
 `Line.singer_spans: [{start, end, singers}]` (character ranges of `Line.text` sung by others than the line's singers;
 blanks belong to nobody: inside a part they join it, between parts they keep the line's own singers). They

@@ -4,7 +4,7 @@
 
 import { api } from '@/lib/api';
 import { assign, lineSingers, sameSingers, type LineSingers, type Selection } from '@/lib/singers';
-import type { KaraokeSingers, KaraokeStyle, ProjectView } from '@/lib/types';
+import type { KaraokeSingers, KaraokeStyle, ProjectView, SingerPreset } from '@/lib/types';
 import { run, setPV, useApp } from './app';
 import { push, serial } from './edits';
 
@@ -109,5 +109,23 @@ export async function applyMarkers(pid: string, names: string[], strip: boolean)
   const pv = await api.post<ProjectView & { messages: string[] }>(`/api/projects/${pid}/singers/markers`, { names, strip });
   setPV(pv);
   forgetSingerSteps();  // texts / numbers may have changed
+  return pv;
+}
+
+// ------------------------------------------------------------------ saved sets of singers (演唱者预设)
+
+export const loadSingerPresets = () => api.get<SingerPreset[]>('/api/karaoke/singer-presets');
+
+export const saveSingerPreset = (name: string, singers: KaraokeSingers, id?: string) =>
+  api.post<SingerPreset>('/api/karaoke/singer-presets', { name, singers, id });
+
+export const deleteSingerPreset = (id: string) => api.del(`/api/karaoke/singer-presets/${id}`);
+
+/** Use a preset in this song: parts already assigned stay with the same person (matched by name). */
+export async function applySingerPreset(pid: string, id: string) {
+  await flushSingers();
+  const pv = await api.post<ProjectView & { lines: number; kept: string[] }>(`/api/projects/${pid}/karaoke/singers/preset`, { id });
+  setPV(pv);
+  forgetSingerSteps();  // numbers may have changed
   return pv;
 }

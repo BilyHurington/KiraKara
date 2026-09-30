@@ -1,6 +1,7 @@
 // Step 7 (optional): singers — for songs with several voices, who sings which line / word, and
 // each singer's colours.  The whole lyrics in one view: click line numbers (Shift / ⌘ for more)
-// or drag over the words (across lines too), then press 1–9; 1 + 2 = sung together; 0 clears.
+// or drag over the words (across lines too), then press a singer's key (1–9, letters; each can be
+// changed); 1 + 2 = sung together; 0 clears.
 // Assignments are saved at once (one undo step each); the singer list lives in the style.
 
 import { ArrowRight, Eraser, Keyboard, Loader2, Play, Subtitles, Tags, Users } from 'lucide-react';
@@ -9,14 +10,14 @@ import { api } from '@/lib/api';
 import { cn, fmtMs } from '@/lib/format';
 import { ignoreShortcut, isEnter, MOD_KEY } from '@/lib/keys';
 import {
-  caretAt, caretTimeline, effective, freeKey, idsKey, isSelected, keyIds, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
+  caretAt, caretTimeline, effective, freeKey, idsKey, isSelected, keyIds, keyLabel, keyOf, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
   usage, withCombo, wordRange, wordsOf, type CaretStep, type Selection, type Word,
 } from '@/lib/singers';
 import type { KaraokeSingers, KaraokeStyle, Line } from '@/lib/types';
 import { player, usePlayhead } from '@/audio/player';
 import { revealOnWaveform } from '@/audio/waveformRef';
 import { run, setStep, toast, useActiveResult, useApp, useProject } from '@/store/app';
-import { assignSingers, flushSingers, removeSinger, saveSingers } from '@/store/singers';
+import { assignSingers, flushSingers, removeSinger, saveSingers, applySingerPreset } from '@/store/singers';
 import { Badge, Button, Callout, Card, CardBody, CardHeader, Input, Kbd, PageHeader, Segmented, Switch } from '@/components/ui';
 import { MarkersDialog } from './singers/MarkersDialog';
 import { SingerList } from './singers/SingerList';
@@ -54,6 +55,14 @@ export function SingersPage() {
     if (pv.project.karaoke?.singers) setStyle((s) => (s ? { ...s, singers: pv.project.karaoke!.singers! } : s));
     toast('ok', `已删除${singerLabel(members, n)}`, pv.changed ? `${pv.changed} 行的指定已随之调整` : undefined);
   }, '删除演唱者失败');
+  const usePreset = (id: string, name: string) => run(async () => {
+    const pv = await applySingerPreset(pid, id);
+    if (pv.project.karaoke?.singers) setStyle((s) => (s ? { ...s, singers: pv.project.karaoke!.singers! } : s));
+    toast('ok', `已使用演唱者预设「${name}」`, [
+      pv.lines ? `${pv.lines} 行已指定的部分按名字对应到预设里的演唱者` : '',
+      pv.kept.length ? `预设里没有的 ${pv.kept.join('、')} 在歌词里有指定，已保留在最后` : '',
+    ].filter(Boolean).join('；') || undefined);
+  }, '使用预设失败');
   const afterMarkers = () => {
     const k = useApp.getState().pv?.project.karaoke;
     if (k?.singers) setStyle((s) => (s ? { ...s, singers: k.singers! } : s));
@@ -149,13 +158,17 @@ export function SingersPage() {
     void assignSingers(sel, ids, ids.length ? `指定 ${label(ids)}` : '清除演唱者', key);
   }, [sel, members]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pressNumber = (n: number) => {
-    const got = keyIds(singers, n);
+  const pressKey = (k: string) => {
+    const got = keyIds(singers, k);
     if (!got) {
-      toast('info', members.length ? `数字键 ${n} 还没有用` : '还没有演唱者',
-        members.length ? `现有 ${members.length} 位演唱者；组合可以存到空着的数字键上` : '先在右边添加演唱者');
+      toast('info', members.length ? `快捷键 ${keyLabel(k)} 还没有用` : '还没有演唱者',
+        members.length ? '右边每位演唱者和组合旁边是它的快捷键，点一下可以修改' : '先在右边添加演唱者');
       return;
     }
+    pressIds(got);
+  };
+  /** A singer / combination chosen (key or button): after "+", added to what was just assigned. */
+  const pressIds = (got: number[]) => {
     const cur = comboNow.current;
     if (cur?.plus) {
       const ids = [...cur.ids, ...got.filter((x) => !cur.ids.includes(x))];
@@ -167,15 +180,15 @@ export function SingersPage() {
     setCombo({ ids: got, key, plus: false });
     apply(got, key);
   };
-  /** Keep what was just assigned together on a free number key. */
+  /** Keep what was just assigned together on a free key. */
   const saveCombo = (ids: number[]) => {
     const { next, key } = withCombo(singers, ids);
     if (key === null) {
-      toast('info', '数字键 1–9 已经用完', '先删掉一个组合');
+      toast('info', '快捷键已经用完', '先删掉一个组合，或把某位演唱者的快捷键清空');
       return;
     }
     if (next !== singers) changeSingers(next);
-    toast('ok', `按 ${key} 就是 ${label(ids)}`);
+    toast('ok', `按 ${keyLabel(key)} 就是 ${label(ids)}`);
   };
 
   // ------------------------------------------------------------------ listening / preview times
@@ -225,8 +238,8 @@ export function SingersPage() {
 
   // ------------------------------------------------------------------ keyboard
 
-  const keys = useRef({ pressNumber, apply, rows, listen });
-  keys.current = { pressNumber, apply, rows, listen };
+  const keys = useRef({ pressKey, apply, rows, listen });
+  keys.current = { pressKey, apply, rows, listen };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (ignoreShortcut(e)) return;
@@ -240,9 +253,9 @@ export function SingersPage() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (/^[1-9]$/.test(e.key)) {
+      if (keyOf(e.key)) {
         e.preventDefault();
-        k.pressNumber(Number(e.key));
+        k.pressKey(keyOf(e.key));
       } else if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
         if (comboNow.current) {
           e.preventDefault();
@@ -299,7 +312,7 @@ export function SingersPage() {
       <PageHeader
         eyebrow="第 7 步（可选）"
         title="演唱者"
-        description="多人演唱时，给每位歌手不同的字幕颜色：先在右边添加演唱者，再选中歌词按数字键指定。几个人一起唱的部分，每个字分成几种颜色（上下或左右，也可以渐变）。单人演唱的歌曲不需要这一步。"
+        description="多人演唱时，给每位歌手不同的字幕颜色：先在右边添加演唱者，再选中歌词按快捷键指定。几个人一起唱的部分，每个字分成几种颜色（上下或左右，也可以渐变）。单人演唱的歌曲不需要这一步。"
         actions={<Button onClick={() => setStep('karaoke')} icon={<ArrowRight className="size-4" />}>下一步：卡拉OK字幕</Button>}
       />
       {markers > 0 && (
@@ -318,8 +331,8 @@ export function SingersPage() {
               {combo?.plus && <Badge tone="accent">{combo.ids.join('+')}+ …</Badge>}
               {combo && combo.ids.length > 1 && !combo.plus && !(singers.combos ?? []).some((c) => idsKey(c.singers) === idsKey(combo.ids)) && (
                 <Button size="xs" variant="ghost" icon={<Keyboard className="size-3.5" />} onClick={() => saveCombo(combo.ids)}
-                  title="以后按一个数字键就指定为这几个人一起唱">
-                  把 {combo.ids.join('+')} 存到 {freeKey(singers) ?? '…'}
+                  title="以后按一个键就指定为这几个人一起唱">
+                  把 {combo.ids.join('+')} 存到 {keyLabel(freeKey(singers) ?? '…')}
                 </Button>
               )}
               {steps.length > 0 && <Switch checked={follow} onChange={setFollow} label={<span className="text-xs text-muted">跟随播放</span>} />}
@@ -327,18 +340,20 @@ export function SingersPage() {
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
               {members.map((m, i) => (
-                <Button key={i} size="xs" variant="outline" disabled={!nLines} onClick={() => pressNumber(i + 1)}
-                  title={`指定为 ${singerLabel(members, i + 1)}（按 ${i + 1}）`}>
+                <Button key={i} size="xs" variant="outline" disabled={!nLines} onClick={() => pressIds([i + 1])}
+                  title={`指定为 ${singerLabel(members, i + 1)}${m.key ? `（按 ${keyLabel(m.key)}）` : ''}`}>
                   <span className="grid size-4 place-items-center rounded text-[10px] font-bold text-white" style={{ background: m.color }}>{i + 1}</span>
                   <span className="max-w-24 truncate">{singerLabel(members, i + 1)}</span>
+                  {m.key && <Kbd>{keyLabel(m.key)}</Kbd>}
                 </Button>
               ))}
-              {(singers.combos ?? []).map((c) => (
-                <Button key={`c${c.key}`} size="xs" variant="outline" disabled={!nLines} onClick={() => pressNumber(c.key)}
-                  title={`指定为 ${label(c.singers)} 一起唱（按 ${c.key}）`}>
-                  <span className="grid size-4 place-items-center rounded text-[10px] font-bold text-white"
-                    style={{ background: mixBackground(c.singers.map((n) => colorOf(n) ?? '#888'), singers.mix, singers.direction) }}>{c.key}</span>
+              {(singers.combos ?? []).map((c, ci) => (
+                <Button key={`c${ci}`} size="xs" variant="outline" disabled={!nLines} onClick={() => pressIds(c.singers)}
+                  title={`指定为 ${label(c.singers)} 一起唱${c.key ? `（按 ${keyLabel(c.key)}）` : ''}`}>
+                  <span className="size-4 rounded" aria-hidden
+                    style={{ background: mixBackground(c.singers.map((n) => colorOf(n) ?? '#888'), singers.mix, singers.direction) }} />
                   <span className="max-w-28 truncate">{c.singers.join('+')}</span>
+                  {c.key && <Kbd>{keyLabel(c.key)}</Kbd>}
                 </Button>
               ))}
               {members.length > 1 && (
@@ -353,7 +368,7 @@ export function SingersPage() {
           </div>
           <CardBody className="space-y-0.5 px-3">
             <p className="px-2 pb-2 text-xs leading-5 text-subtle">
-              <Kbd>1</Kbd>–<Kbd>9</Kbd> 指定（演唱者或存好的组合）· 先按 <Kbd>1</Kbd> 再按 <Kbd>+</Kbd> <Kbd>2</Kbd> 为 1+2 一起唱，可以存到空着的数字键 · <Kbd>0</Kbd> 清除 ·
+              按演唱者或组合的快捷键指定（上面按钮里的键，在右边点一下可以修改）· 先按 <Kbd>1</Kbd> 再按 <Kbd>+</Kbd> <Kbd>2</Kbd> 为两人一起唱，可以存成组合 · <Kbd>0</Kbd> 清除 ·
               {' '}<Kbd>P</Kbd> 试听 · <Kbd>Esc</Kbd> 取消选择 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>A</Kbd> 全选 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>Z</Kbd> 撤销；
               行号 Shift / {MOD_KEY} 点选多行，在歌词上按住 {MOD_KEY} 拖动可以追加；<Kbd>Space</Kbd> 播放时竖线标出正在唱的位置，双击歌词从那里播放
             </p>
@@ -374,6 +389,7 @@ export function SingersPage() {
           <PreviewCard style={style} times={selTimes} hasResult={!!result} refresh={`${assigned}-${JSON.stringify(project.lyrics.lines.map((l) => [l.singers, l.singer_spans]))}`} />
           {style && (
             <SingerList singers={singers} onChange={changeSingers} onRemove={(n) => void remove(n)} glow={style.glow.enabled}
+              onUsePreset={(id, name) => void usePreset(id, name)}
               usage={(n) => usage(project.lyrics.lines, n)} />
           )}
         </div>

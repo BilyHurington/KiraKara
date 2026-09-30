@@ -18,8 +18,8 @@ function withSingers(): KaraokeStyle {
   const st = plainStyle();
   st.singers = {
     members: [
-      { name: 'Ann', color: '#ED35B3', color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' },
-      { name: 'Bo', color: '#2F80ED', color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' },
+      { name: 'Ann', key: '1', color: '#ED35B3', color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' },
+      { name: 'Bo', key: '2', color: '#2F80ED', color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' },
     ],
     mix: 'split', direction: 'vertical',
   };
@@ -46,6 +46,7 @@ function server() {
       return structuredClone(pv);
     },
     'POST /api/karaoke/singer-colors': () => [],
+    'GET /api/karaoke/singer-presets': () => [],
     [`POST /api/projects/${PID}/karaoke/preview`]: () => new Response(new Blob(['png']), { status: 200 }),
   });
   return { api, pv };
@@ -122,12 +123,68 @@ describe('singers page', () => {
     expect(api.find('PUT', `${PID}/singers`)[1].body.lines[0].singers).toEqual([1, 2]);
     fireEvent.click(await screen.findByRole('button', { name: /把 1\+2 存到 3/ }));
     await act(() => flushSingers());
-    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.combos).toEqual([{ key: 3, singers: [1, 2] }]);
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.combos).toEqual([{ key: '3', singers: [1, 2] }]);
     fireEvent.click(screen.getByRole('button', { name: '选择第 2 行' }));
     press('3');
     await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(3));
     expect(api.find('PUT', `${PID}/singers`)[2].body.lines[0]).toMatchObject({ line_id: 'L0002', singers: [1, 2] });
-    expect(screen.getByRole('textbox', { name: '快捷键 3 的演唱者' })).toHaveValue('1+2');
+    expect(screen.getByRole('textbox', { name: '组合 1+2 的演唱者' })).toHaveValue('1+2');
+  });
+
+  it('a key can be changed: click it, press the new one (taken: they swap); letters work too', async () => {
+    seedStore('singers');
+    const { api } = server();
+    renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    const annKey = screen.getByRole('button', { name: /Ann的快捷键：1/ });
+    fireEvent.click(annKey);
+    fireEvent.keyDown(annKey, { key: 'l' });  // loop: not usable, the button keeps listening
+    fireEvent.keyDown(annKey, { key: 'A' });
+    await act(() => flushSingers());
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.members.map((m: { key: string }) => m.key)).toEqual(['a', '2']);
+    // the page did not take that "A" as a shortcut (nothing selected, nothing assigned)
+    expect(api.find('PUT', `${PID}/singers`)).toHaveLength(0);
+    const boKey = screen.getByRole('button', { name: /Bo的快捷键：2/ });
+    fireEvent.click(boKey);
+    fireEvent.keyDown(boKey, { key: 'a' });
+    await act(() => flushSingers());
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.members.map((m: { key: string }) => m.key)).toEqual(['2', 'a']);
+    // pressing a on the lyrics now assigns Bo
+    fireEvent.click(screen.getByRole('button', { name: '选择第 1 行' }));
+    press('a');
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(1));
+    expect(api.find('PUT', `${PID}/singers`)[0].body.lines[0].singers).toEqual([2]);
+    // more than nine singers
+    for (let i = 0; i < 9; i++) fireEvent.click(screen.getByRole('button', { name: '添加演唱者' }));
+    await act(() => flushSingers());
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.members.map((m: { key: string }) => m.key).join(''))
+      .toBe('2a13456789b');
+  });
+
+  it('a saved set of singers is saved and loaded', async () => {
+    seedStore('singers');
+    const { pv } = server();
+    const presets: unknown[] = [];
+    const routes = mockApi({  // (in place of the server's routes: presets too)
+      [`GET /api/projects/${PID}/karaoke`]: () => pv.project.karaoke,
+      'GET /api/karaoke/singer-presets': () => presets,
+      'POST /api/karaoke/singer-presets': (c) => { const p = { id: 'sp1', name: c.body.name, updated: 'z', singers: c.body.singers }; presets.push(p); return p; },
+      [`POST /api/projects/${PID}/karaoke/singers/preset`]: () => ({ ...structuredClone(pv), lines: 3, kept: [] }),
+      'POST /api/karaoke/singer-colors': () => [],
+      [`POST /api/projects/${PID}/karaoke/preview`]: () => new Response(new Blob(['png']), { status: 200 }),
+    });
+    renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    fireEvent.click(screen.getByRole('button', { name: '存为预设' }));
+    expect(screen.getByRole('textbox', { name: '演唱者预设名称' })).toHaveValue('Ann、Bo');
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(routes.find('POST', '/api/karaoke/singer-presets')[0]?.body.name).toBe('Ann、Bo'));
+    expect(routes.find('POST', '/api/karaoke/singer-presets')[0].body.singers.members[0].key).toBe('1');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '演唱者预设' })).toHaveValue('sp1'));
+    fireEvent.click(screen.getByRole('button', { name: '载入' }));
+    fireEvent.click(screen.getByRole('button', { name: '载入' }));  // (asks first: there are singers already)
+    await waitFor(() => expect(routes.find('POST', '/karaoke/singers/preset')[0]?.body).toEqual({ id: 'sp1' }));
+    await waitFor(() => expect(useApp.getState().toasts.map((t) => t.title)).toContain('已使用演唱者预设「Ann、Bo」'));
   });
 
   it('double-clicking a word goes there; the row being sung is marked', async () => {
@@ -204,6 +261,7 @@ describe('singers page', () => {
     const routes = mockApi({
       [`GET /api/projects/${PID}/karaoke`]: () => withSingers(),
       'POST /api/karaoke/singer-colors': () => [],
+    'GET /api/karaoke/singer-presets': () => [],
       [`GET /api/projects/${PID}/singers/markers`]: () => ({
         lines: [
           { line_id: 'L0001', text: 'A：君と歩いた道', prefix: 'A：', names: ['A'], everyone: false },

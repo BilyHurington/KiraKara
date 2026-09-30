@@ -126,11 +126,19 @@ class LineAnchor(_Base):
     note: str = ""
 
 
-MAX_SINGERS = 9  # singers of a karaoke style (keys 1–9 on the 演唱者 page)
+# Shortcut keys of singers and combinations on the 演唱者 page, in the order new ones take them:
+# 1–9, then a–z except l (loop) and p (listen), which the page already uses.
+SINGER_KEYS = "123456789abcdefghijkmnoqrstuvwxyz"
+
+
+def singer_key(value: Any) -> str:
+    """A key as stored: one lower-case character of SINGER_KEYS, or "" (none / not usable)."""
+    k = str(value).strip().lower() if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
+    return k if len(k) == 1 and k in SINGER_KEYS else ""
 
 
 def _singer_ids(value: Any) -> list[int]:
-    """Singer numbers (1 … MAX_SINGERS) in order, each once; anything else is left out (never an error:
+    """Singer numbers (1, 2, …) in order, each once; anything else is left out (never an error:
     a hand-edited project still loads)."""
     out: list[int] = []
     for v in value if isinstance(value, (list, tuple)) else []:
@@ -140,7 +148,7 @@ def _singer_ids(value: Any) -> list[int]:
             n = int(v)
         except (TypeError, ValueError):
             continue
-        if n == v and 1 <= n <= MAX_SINGERS and n not in out:
+        if n == v and n >= 1 and n not in out:
             out.append(n)
     return out
 
@@ -894,6 +902,8 @@ class KaraokeSinger(_KaraokeBase):
     a colour template derives a style (themes.singer_colors)."""
 
     name: str = Field(default="", max_length=40)
+    # the key that assigns this singer on the 演唱者 page ("" = none)
+    key: str = Field(default="", max_length=1)
     color: str = _color("#ED35B3")
     color_unsung: str = _color("", follow=True)
     color_sung: str = _color("", follow=True)
@@ -903,10 +913,10 @@ class KaraokeSinger(_KaraokeBase):
 
 
 class KaraokeSingerCombo(_KaraokeBase):
-    """A shortcut for singers who often sing together: number key ``key`` on the 演唱者 page assigns
-    ``singers`` (e.g. 3 = 1+2).  Only a key no singer has (singer n is key n)."""
+    """A shortcut for singers who often sing together: key ``key`` on the 演唱者 page assigns
+    ``singers`` (e.g. 3 = 1+2).  A key no singer and no other combination has."""
 
-    key: int = Field(ge=1, le=MAX_SINGERS)
+    key: str = Field(default="", max_length=1)
     singers: list[int] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -914,6 +924,8 @@ class KaraokeSingerCombo(_KaraokeBase):
     def _clean(cls, data: Any) -> Any:
         if isinstance(data, dict) and "singers" in data:
             data = {**data, "singers": _singer_ids(data["singers"])}
+        if isinstance(data, dict) and isinstance(data.get("key"), int):
+            data = {**data, "key": str(data["key"])}  # (keys were numbers 1–9 before)
         return data
 
 
@@ -921,46 +933,69 @@ class KaraokeSingers(_KaraokeBase):
     """Singers for songs with several voices (the 演唱者 page); which lines / words each one sings is
     kept in the lyrics (``Line.singers``, ``Line.singer_spans``), by number."""
 
-    members: list[KaraokeSinger] = Field(default_factory=list, max_length=MAX_SINGERS)
+    members: list[KaraokeSinger] = Field(default_factory=list)
     # parts sung together: each singer's colours in its own band (split) or blended (gradient)
     mix: Literal["split", "gradient"] = "split"
     # vertical: top to bottom (upper half 1, lower half 2; a reading takes the top singer's colours);
     # horizontal: left to right across each run sung together
     direction: Literal["vertical", "horizontal"] = "vertical"
-    # number keys for singers who sing together (keys after the singers' own)
-    combos: list[KaraokeSingerCombo] = Field(default_factory=list, max_length=MAX_SINGERS)
+    # keys for singers who sing together
+    combos: list[KaraokeSingerCombo] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
     def _members(cls, data: Any, info: Any) -> Any:
-        if isinstance(data, dict) and not (info.context or {}).get("strict"):
+        if not isinstance(data, dict):
+            return data
+        if not (info.context or {}).get("strict"):
             for key in ("members", "combos"):
                 if key in data:
                     m = data[key]
-                    data = {**data, key: [x for x in m if isinstance(x, (dict, BaseModel))][:MAX_SINGERS]
-                            if isinstance(m, list) else []}
+                    data = {**data, key: [x for x in m if isinstance(x, (dict, BaseModel))] if isinstance(m, list) else []}
+        # saved before singers had their own keys: singer n was key n
+        members = data.get("members")
+        if isinstance(members, list):
+            data = {**data, "members": [{**m, "key": str(i + 1) if i < 9 else ""} if isinstance(m, dict) and "key" not in m else m
+                                        for i, m in enumerate(members)]}
         return data
 
     @model_validator(mode="after")
-    def _combo_keys(self, info: Any) -> "KaraokeSingers":
-        """A combination needs a key no singer (and no other combination) has and at least two of the
-        singers; when loading, one that does not fit is dropped, when saving it is refused."""
-        n = len(self.members)
-        seen: set[int] = set()
+    def _keys(self, info: Any) -> "KaraokeSingers":
+        """Every key (of singers and combinations) is one of SINGER_KEYS and used once; a combination
+        needs at least two of the singers.  When loading, what does not fit loses its key (a
+        combination: is dropped); when saving it is refused."""
+        strict = (info.context or {}).get("strict")
+        seen: dict[str, str] = {}
+
+        def check(raw: str, owner: str) -> str:
+            k = singer_key(raw)
+            problem = (f"{owner}的快捷键「{raw}」不能用（可以用 1–9、A–Z，L 和 P 除外）" if raw and not k
+                       else f"快捷键 {k.upper()} 同时给了{seen[k]}和{owner}" if k in seen else None)
+            if problem:
+                if strict:
+                    raise ValueError(problem)
+                return ""
+            if k:
+                seen[k] = owner
+            return k
+
+        members = [m.model_copy(update={"key": check(m.key, f"第 {i + 1} 位演唱者")}) for i, m in enumerate(self.members)]
+        n = len(members)
         keep = []
         for c in self.combos:
             ids = [i for i in c.singers if i <= n]
-            problem = ("快捷键 {} 已经是第 {} 位演唱者".format(c.key, c.key) if c.key <= n
-                       else f"快捷键 {c.key} 重复了" if c.key in seen
-                       else f"快捷键 {c.key} 至少要有两位演唱者" if len(ids) < 2 else None)
-            if problem:
-                if (info.context or {}).get("strict"):
-                    raise ValueError(problem)
+            if len(ids) < 2:
+                if strict:
+                    raise ValueError(f"组合 {c.key.upper() or '（无快捷键）'} 至少要有两位演唱者")
                 continue
-            seen.add(c.key)
-            keep.append(c.model_copy(update={"singers": ids}))
-        self.combos = keep
+            keep.append(c.model_copy(update={"singers": ids, "key": check(c.key, "组合 " + "+".join(map(str, ids)))}))
+        self.members, self.combos = members, keep
         return self
+
+    def free_key(self) -> str:
+        """The first key (in SINGER_KEYS order) no singer or combination has; "" when all are taken."""
+        used = {m.key for m in self.members} | {c.key for c in self.combos}
+        return next((k for k in SINGER_KEYS if k not in used), "")
 
 
 class KaraokeTheme(_KaraokeBase):

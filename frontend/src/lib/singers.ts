@@ -5,11 +5,13 @@
 // selection is a set of character ranges per line; assigning replaces what the selected
 // characters had (a whole line: the line's own singers, its parts cleared).
 
-import type { KaraokeSinger, KaraokeSingers, Line, SingerCombo, SingerSpan } from './types';
+import type { KaraokeSinger, KaraokeSingers, Line, SingerSpan } from './types';
 
-export const MAX_SINGERS = 9;
 /** A new singer's colour: the first of these no other singer has (as the server picks them). */
 export const SINGER_SWATCHES = ['#ED35B3', '#2F80ED', '#F5C400', '#3CC46A', '#FF8A1E', '#8B5CF6', '#1FB5C9', '#FF4D6D', '#8A8A8A'];
+/** Keys of singers and combinations, in the order new ones take them: 1–9, then a–z without l (loop)
+ *  and p (listen), which the page already uses (as kara_align.models.SINGER_KEYS). */
+export const SINGER_KEYS = '123456789abcdefghijkmnoqrstuvwxyz';
 
 /** The assignment of one line as the server stores it (`text`: what the spans were made for). */
 export interface LineSingers { line_id: string; text: string; singers: number[]; spans: SingerSpan[] }
@@ -34,7 +36,7 @@ export function sameSingers(a: LineSingers, b: LineSingers) {
 
 export function cleanIds(ids: readonly number[]): number[] {
   const out: number[] = [];
-  for (const n of ids) if (Number.isInteger(n) && n >= 1 && n <= MAX_SINGERS && !out.includes(n)) out.push(n);
+  for (const n of ids) if (Number.isInteger(n) && n >= 1 && !out.includes(n)) out.push(n);
   return out;
 }
 
@@ -175,10 +177,30 @@ export function usage(lines: Line[], n: number) {
   return lines.filter((l) => (l.singers ?? []).includes(n) || (l.singer_spans ?? []).some((s) => s.singers.includes(n))).length;
 }
 
-export function newSinger(members: KaraokeSinger[]): KaraokeSinger {
-  const used = new Set(members.map((m) => m.color.toUpperCase()));
-  const color = SINGER_SWATCHES.find((c) => !used.has(c)) ?? SINGER_SWATCHES[members.length % SINGER_SWATCHES.length];
-  return { name: '', color, color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' };
+/** The first swatch no singer has; after them, hues a golden angle apart (as themes.new_singer_color). */
+export function newSingerColor(used: string[], index: number): string {
+  const taken = new Set(used.map((c) => c.toUpperCase()));
+  const free = SINGER_SWATCHES.find((c) => !taken.has(c));
+  if (free) return free;
+  // HLS (0.55 lightness, 0.70 saturation) to RGB, as Python's colorsys
+  const h = ((index * 137.508) % 360) / 360;
+  const l = 0.55;
+  const s = 0.7;
+  const m2 = l <= 0.5 ? l * (1 + s) : l + s - l * s;
+  const m1 = 2 * l - m2;
+  const v = (hue: number) => {
+    hue = ((hue % 1) + 1) % 1;
+    if (hue < 1 / 6) return m1 + (m2 - m1) * hue * 6;
+    if (hue < 0.5) return m2;
+    if (hue < 2 / 3) return m1 + (m2 - m1) * (2 / 3 - hue) * 6;
+    return m1;
+  };
+  return '#' + [v(h + 1 / 3), v(h), v(h - 1 / 3)].map((x) => Math.round(x * 255).toString(16).padStart(2, '0').toUpperCase()).join('');
+}
+
+export function newSinger(members: KaraokeSinger[], key = ''): KaraokeSinger {
+  const color = newSingerColor(members.map((m) => m.color), members.length);
+  return { name: '', key, color, color_unsung: '', color_sung: '', outline_color: '', glow_unsung: '', glow_sung: '' };
 }
 
 export const singerLabel = (members: KaraokeSinger[], n: number) => members[n - 1]?.name?.trim() || `演唱者 ${n}`;
@@ -192,46 +214,72 @@ export function mixBackground(colors: string[], mix: 'split' | 'gradient', direc
   return `linear-gradient(${dir}, ${stops.join(', ')})`;
 }
 
-// ------------------------------------------------------------------ number keys
+// ------------------------------------------------------------------ keys
 
-/** What number key `n` assigns: singer n, or a saved combination on that key (null: nothing). */
-export function keyIds(sg: KaraokeSingers, n: number): number[] | null {
-  if (n >= 1 && n <= sg.members.length) return [n];
-  return sg.combos?.find((c) => c.key === n)?.singers ?? null;
+/** A key press as a singer key ('' when it cannot be one). */
+export function keyOf(key: string): string {
+  const k = key.length === 1 ? key.toLowerCase() : '';
+  return k && SINGER_KEYS.includes(k) ? k : '';
 }
 
-/** The first number key neither a singer nor a combination has (null: all nine are taken). */
-export function freeKey(sg: KaraokeSingers, skip: number[] = []): number | null {
-  const used = new Set([...(sg.combos ?? []).map((c) => c.key), ...skip]);
-  for (let k = sg.members.length + 1; k <= MAX_SINGERS; k++) if (!used.has(k)) return k;
-  return null;
+/** How a key is shown (letters in capitals). */
+export const keyLabel = (k: string) => k.toUpperCase();
+
+/** What key `k` assigns: a singer, or a saved combination (null: nothing). */
+export function keyIds(sg: KaraokeSingers, k: string): number[] | null {
+  if (!k) return null;
+  const i = sg.members.findIndex((m) => m.key === k);
+  if (i >= 0) return [i + 1];
+  return sg.combos?.find((c) => c.key === k)?.singers ?? null;
 }
 
-/** Keys left for new singers or combinations. */
-export const keysLeft = (sg: KaraokeSingers) => MAX_SINGERS - sg.members.length - (sg.combos?.length ?? 0);
+/** The first key (1–9, then letters) neither a singer nor a combination has (null: all are taken). */
+export function freeKey(sg: KaraokeSingers): string | null {
+  const used = new Set([...sg.members.map((m) => m.key), ...(sg.combos ?? []).map((c) => c.key)]);
+  return [...SINGER_KEYS].find((k) => !used.has(k)) ?? null;
+}
 
-/** A new singer takes the next number, and so the next key: a combination on that key moves to a free one. */
+/** Who has a key: 'singer' n or combination index c. */
+export type KeyOwner = { singer: number } | { combo: number };
+
+function ownerOf(sg: KaraokeSingers, k: string): KeyOwner | null {
+  const i = sg.members.findIndex((m) => m.key === k);
+  if (i >= 0) return { singer: i + 1 };
+  const c = (sg.combos ?? []).findIndex((x) => x.key === k);
+  return c >= 0 ? { combo: c } : null;
+}
+
+function keyAt(sg: KaraokeSingers, o: KeyOwner): string {
+  return 'singer' in o ? sg.members[o.singer - 1]?.key ?? '' : sg.combos?.[o.combo]?.key ?? '';
+}
+
+function putKey(sg: KaraokeSingers, o: KeyOwner, k: string): KaraokeSingers {
+  if ('singer' in o) return { ...sg, members: sg.members.map((m, i) => (i === o.singer - 1 ? { ...m, key: k } : m)) };
+  return { ...sg, combos: (sg.combos ?? []).map((c, i) => (i === o.combo ? { ...c, key: k } : c)) };
+}
+
+/** Give `o` the key `k` ('' = none).  One that had `k` gets `o`'s old key instead (they swap). */
+export function withKey(sg: KaraokeSingers, o: KeyOwner, k: string): { next: KaraokeSingers; swapped: KeyOwner | null } {
+  const old = keyAt(sg, o);
+  const other = k ? ownerOf(sg, k) : null;
+  if (other && JSON.stringify(other) === JSON.stringify(o)) return { next: sg, swapped: null };
+  let next = putKey(sg, o, k);
+  if (other) next = putKey(next, other, old);
+  return { next, swapped: other };
+}
+
+/** A new singer gets the next number and the first free key. */
 export function withNewSinger(sg: KaraokeSingers): KaraokeSingers {
-  const n = sg.members.length + 1;
-  const next: KaraokeSingers = { ...sg, members: [...sg.members, newSinger(sg.members)] };
-  const combos = [...(sg.combos ?? [])];
-  const i = combos.findIndex((c) => c.key === n);
-  if (i >= 0) {
-    const k = freeKey(next, [n]);
-    if (k === null) combos.splice(i, 1);
-    else combos[i] = { ...combos[i], key: k };
-  }
-  return { ...next, combos };
+  return { ...sg, members: [...sg.members, newSinger(sg.members, freeKey(sg) ?? '')] };
 }
 
 /** Save singers sung together on the first free key (the same combination again: its key). */
-export function withCombo(sg: KaraokeSingers, ids: number[]): { next: KaraokeSingers; key: number | null } {
+export function withCombo(sg: KaraokeSingers, ids: number[]): { next: KaraokeSingers; key: string | null } {
   const same = sg.combos?.find((c) => idsKey(c.singers) === idsKey(ids));
   if (same) return { next: sg, key: same.key };
   const key = freeKey(sg);
   if (key === null || ids.length < 2) return { next: sg, key: null };
-  const combos: SingerCombo[] = [...(sg.combos ?? []), { key, singers: ids }].sort((a, b) => a.key - b.key);
-  return { next: { ...sg, combos }, key };
+  return { next: { ...sg, combos: [...(sg.combos ?? []), { key, singers: ids }] }, key };
 }
 
 // ------------------------------------------------------------------ the playhead on the lyrics

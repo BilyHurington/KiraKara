@@ -24,15 +24,17 @@ def _spans(line):
 
 
 def test_loading_is_lenient_and_numbers_are_kept_in_range():
-    ln = Line.model_validate({"text": "あいう", "singers": [2, 2, 0, 10, "3", True, 1],
+    ln = Line.model_validate({"text": "あいう", "singers": [2, 2, 0, 12, "3", True, 1],
                               "singer_spans": [{"start": 0, "end": 2, "singers": [3, 3, 99]}, {"start": 2, "end": 1},
                                                "x"]})
-    assert ln.singers == [2, 1]
-    assert _spans(ln) == [(0, 2, [3])]
+    assert ln.singers == [2, 12, 1]  # any number of singers
+    assert _spans(ln) == [(0, 2, [3, 99])]
     st = KaraokeStyle.model_validate({"singers": {"members": [{"name": "A", "color": "#f00"}] * 12, "mix": "bad"}})
-    assert len(st.singers.members) == 9 and st.singers.members[0].color == "#ff0000" and st.singers.mix == "split"
+    assert len(st.singers.members) == 12 and st.singers.members[0].color == "#ff0000" and st.singers.mix == "split"
+    # saved before singers had their own keys: singer n was key n (1–9)
+    assert [m.key for m in st.singers.members] == [str(i) for i in range(1, 10)] + ["", "", ""]
     with pytest.raises(Exception):  # a style sent to be saved is refused instead
-        KaraokeStyle.model_validate({"singers": {"members": [{"color": "#f00"}] * 10}}, context={"strict": True})
+        KaraokeStyle.model_validate({"singers": {"members": [{"color": "#f00", "key": "1"}] * 2}}, context={"strict": True})
 
 
 def test_normalize_joins_clips_and_drops_what_the_line_says_anyway():
@@ -269,19 +271,72 @@ def test_readings_take_the_top_singer_when_split_top_to_bottom(tmp_path):
 def test_saved_combinations(tmp_path):
     from kara_align.models import KaraokeSingers
 
-    members = [{"color": "#ED35B3"}, {"color": "#2F80ED"}, {"color": "#F5C400"}]
+    members = [{"color": "#ED35B3"}, {"color": "#2F80ED"}, {"color": "#F5C400"}]  # keys 1, 2, 3 (older projects)
     sg = KaraokeSingers.model_validate({"members": members, "combos": [
         {"key": 4, "singers": [1, 2]}, {"key": 2, "singers": [1, 3]}, {"key": 4, "singers": [2, 3]},
-        {"key": 5, "singers": [1, 9]}, {"key": 6, "singers": [3, 1]}]})
-    # loading: a singer's own key, a repeated key, fewer than two real singers are dropped
-    assert [(c.key, c.singers) for c in sg.combos] == [(4, [1, 2]), (6, [3, 1])]
-    with pytest.raises(Exception):
-        KaraokeSingers.model_validate({"members": members, "combos": [{"key": 3, "singers": [1, 2]}]},
-                                      context={"strict": True})
+        {"key": 5, "singers": [1, 9]}, {"key": "Q", "singers": [3, 1]}, {"key": "l", "singers": [2, 1]}]})
+    # loading: a key already taken or not usable (l loops) is dropped, a combination of fewer than two goes
+    assert [(c.key, c.singers) for c in sg.combos] == [("4", [1, 2]), ("", [1, 3]), ("", [2, 3]), ("q", [3, 1]), ("", [2, 1])]
+    assert sg.free_key() == "5"
+    for bad in ({"key": 3, "singers": [1, 2]}, {"key": "p", "singers": [1, 2]}, {"key": "7", "singers": [1]}):
+        with pytest.raises(Exception):
+            KaraokeSingers.model_validate({"members": members, "combos": [bad]}, context={"strict": True})
     h = _project(tmp_path)
-    S.set_singers(h, {"members": members, "combos": [{"key": 4, "singers": [1, 3]}, {"key": 5, "singers": [1, 2]}]})
-    S.remove_singer(h, 2)  # 1+3 becomes 1+2; 1+2 has one singer left and goes
-    assert [(c.key, c.singers) for c in h.project.karaoke.singers.combos] == [(4, [1, 2])]
+    S.set_singers(h, {"members": members, "combos": [{"key": "a", "singers": [1, 3]}, {"key": "b", "singers": [1, 2]}]})
+    S.remove_singer(h, 2)  # 1+3 becomes 1+2; 1+2 has one singer left and goes; keys stay with their singers
+    sg = h.project.karaoke.singers
+    assert [(c.key, c.singers) for c in sg.combos] == [("a", [1, 2])]
+    assert [m.key for m in sg.members] == ["1", "3"]
+
+
+def test_own_keys_and_no_limit(tmp_path):
+    from kara_align.karaoke.themes import SINGER_SWATCHES, new_singer_color
+    from kara_align.models import SINGER_KEYS, KaraokeSingers
+
+    h = _project(tmp_path)
+    members = [{"name": f"S{i}", "color": new_singer_color(set(), i), "key": SINGER_KEYS[i] if i < 33 else ""} for i in range(40)]
+    members[0]["key"], members[1]["key"], members[32]["key"] = "z", "1", "2"  # any usable key, in any order
+    S.set_singers(h, {"members": members})
+    sg = h.project.karaoke.singers
+    assert len(sg.members) == 40 and sg.members[0].key == "z" and sg.members[39].key == ""
+    assert new_singer_color({"#ED35B3"}, 1) == "#2F80ED"
+    colors = {new_singer_color(set(SINGER_SWATCHES), i) for i in range(9, 30)}
+    assert len(colors) == 21  # past the swatches: all different
+    h.project.lyrics.lines[0].singers = [40]
+    text, _ = S.karaoke_ass(h)
+    assert "Style: KMain_40," in text
+    assert KaraokeSingers(members=[]).free_key() == "1"
+
+
+def test_a_saved_set_of_singers(tmp_path, monkeypatch):
+    from kara_align.karaoke import singer_presets as P
+
+    monkeypatch.setenv("KARA_ALIGN_HOME", str(tmp_path / "home"))
+    group = {"members": [{"name": "Ann", "color": "#ED35B3", "key": "a"}, {"name": "Bo", "color": "#2F80ED", "key": "b"},
+                         {"name": "Cy", "color": "#3CC46A", "key": "c"}],
+             "combos": [{"key": "d", "singers": [1, 2]}], "mix": "gradient"}
+    saved = P.save_preset("三人组", group)
+    assert P.save_preset("三人组", group)["id"] == saved["id"]  # the same name again: replaced
+    assert [p["name"] for p in P.list_presets()] == ["三人组"]
+    with pytest.raises(P.PresetError):
+        P.save_preset("空", {"members": []})
+    # a song where Bo and an unnamed singer 2 already sing, and someone the preset does not know
+    h = _project(tmp_path)
+    l1, l2 = h.project.lyrics.lines
+    S.set_singers(h, {"members": [{"name": "Bo", "color": "#111111"}, {"name": "", "color": "#222222"},
+                                  {"name": "Dee", "color": "#333333"}, {"name": "Eve", "color": "#444444"}]})
+    l1.singers, l1.singer_spans = [1], [SingerSpan(start=0, end=1, singers=[2, 3])]
+    l2.singers = [3]
+    out = S.apply_singer_preset(h, P.get_preset(saved["id"])["singers"])
+    sg = h.project.karaoke.singers
+    # Bo by name; the unnamed singer and Dee sing here and are not in the preset: kept; Eve sings nothing
+    assert [m.name for m in sg.members] == ["Ann", "Bo", "Cy", "", "Dee"]
+    assert [m.key for m in sg.members] == ["a", "b", "c", "1", "2"]  # the first free keys and sg.members[4].color == "#333333"
+    assert sg.mix == "gradient" and [(c.key, c.singers) for c in sg.combos] == [("d", [1, 2])]
+    assert l1.singers == [2] and _spans(l1) == [(0, 1, [4, 5])] and l2.singers == [5]
+    assert out == {"lines": 2, "kept": ["演唱者 2", "Dee"]}
+    P.delete_preset(saved["id"])
+    assert P.list_presets() == []
 
 
 def test_blanks_are_nobodys():
@@ -299,3 +354,22 @@ def test_blanks_are_nobodys():
     chars = SG.effective(Line(text="a b", singers=[], singer_spans=[SingerSpan(start=0, end=3, singers=[2])]))
     assert SG.range_singers([(), (2,), (2,)], 0, 3, " bb") == (2,)
     assert chars == [(2,), (2,), (2,)]
+
+
+def test_singer_presets_over_the_api(tmp_path, monkeypatch):
+    from kara_align.web.server import create_app
+
+    monkeypatch.setenv("KARA_ALIGN_HOME", str(tmp_path / "home"))
+    c = TestClient(create_app(tmp_path / "projects"))
+    pid = c.post("/api/projects", json={"name": "s", "mode": "plain"}).json()["project"]["id"]
+    group = {"members": [{"name": "Ann", "color": "#ED35B3", "key": "q"}], "combos": []}
+    assert c.post("/api/karaoke/singer-presets", json={"name": "", "singers": group}).status_code == 400
+    bad = {"members": [{"name": "Ann", "key": "p"}]}
+    assert c.post("/api/karaoke/singer-presets", json={"name": "x", "singers": bad}).status_code == 400
+    sp = c.post("/api/karaoke/singer-presets", json={"name": "组", "singers": group}).json()
+    assert [p["name"] for p in c.get("/api/karaoke/singer-presets").json()] == ["组"]
+    v = c.post(f"/api/projects/{pid}/karaoke/singers/preset", json={"id": sp["id"]}).json()
+    assert v["project"]["karaoke"]["singers"]["members"][0]["key"] == "q" and v["lines"] == 0 and v["kept"] == []
+    assert c.post(f"/api/projects/{pid}/karaoke/singers/preset", json={"id": "nope"}).status_code == 404
+    assert c.delete(f"/api/karaoke/singer-presets/{sp['id']}").json() == {"ok": True}
+    assert c.get("/api/karaoke/singer-presets").json() == []

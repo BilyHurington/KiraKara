@@ -1006,6 +1006,45 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         guard(S.set_singers, h, body)
         return h.project.karaoke.model_dump(mode="json")
 
+    @app.post("/api/projects/{pid}/karaoke/singers/preset")
+    def use_singer_preset(pid: str, body: dict):
+        """Use a saved set of singers ({id}); parts already assigned stay with the same person."""
+        from ..karaoke.singer_presets import PresetError, get_preset
+
+        h = handle(pid)
+        try:
+            preset = get_preset(str((body or {}).get("id") or ""))
+        except PresetError as e:
+            raise HTTPException(404, str(e)) from e
+        out = guard(S.apply_singer_preset, h, preset["singers"])
+        return view(h, **out)
+
+    @app.get("/api/karaoke/singer-presets")
+    def list_singer_presets():
+        from ..karaoke.singer_presets import list_presets
+
+        return list_presets()
+
+    @app.post("/api/karaoke/singer-presets")
+    def save_singer_preset(body: dict):
+        from ..karaoke.singer_presets import PresetError, save_preset
+
+        b = body or {}
+        try:
+            return save_preset(b.get("name", ""), b.get("singers") or {}, b.get("id"))
+        except PresetError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.delete("/api/karaoke/singer-presets/{preset_id}")
+    def delete_singer_preset(preset_id: str):
+        from ..karaoke.singer_presets import PresetError, delete_preset
+
+        try:
+            delete_preset(preset_id)
+        except PresetError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True}
+
     @app.delete("/api/projects/{pid}/karaoke/singers/{number}")
     def delete_singer(pid: str, number: int):
         h = handle(pid)

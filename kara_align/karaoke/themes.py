@@ -56,6 +56,18 @@ SWATCHES = ["#ED35B3", "#FF4D6D", "#FF8A1E", "#F5C400", "#3CC46A", "#1FB5C9", "#
 SINGER_SWATCHES = ["#ED35B3", "#2F80ED", "#F5C400", "#3CC46A", "#FF8A1E", "#8B5CF6", "#1FB5C9", "#FF4D6D", "#8A8A8A"]
 
 
+def new_singer_color(used: set[str], index: int) -> str:
+    """The first swatch no singer has; after them, hues a golden angle apart (as the 演唱者 page's
+    lib/singers.ts newSinger does)."""
+    import colorsys
+
+    free = next((c for c in SINGER_SWATCHES if c not in {u.upper() for u in used}), None)
+    if free:
+        return free
+    r, g, b = colorsys.hls_to_rgb(((index * 137.508) % 360) / 360, 0.55, 0.70)
+    return "#" + "".join(f"{round(v * 255):02X}" for v in (r, g, b))
+
+
 # ------------------------------------------------------------------ colour space
 
 

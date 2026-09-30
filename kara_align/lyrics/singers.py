@@ -169,6 +169,34 @@ def shift_numbers(doc: LyricsDoc, removed: int) -> int:
     return changed
 
 
+def usage(doc: LyricsDoc) -> set[int]:
+    """The singer numbers the lyrics use."""
+    out: set[int] = set()
+    for ln in doc.lines:
+        out.update(ln.singers)
+        for sp in ln.singer_spans:
+            out.update(sp.singers)
+    return out
+
+
+def renumber(doc: LyricsDoc, mapping: dict[int, int]) -> int:
+    """Singer numbers change (``mapping``: old → new; one not in it leaves the lyrics).  Returns how
+    many lines changed."""
+    def fix(ids: Iterable[int]) -> list[int]:
+        return [mapping[i] for i in ids if i in mapping]
+
+    changed = 0
+    for ln in doc.lines:
+        before = (list(ln.singers), [(s.start, s.end, list(s.singers)) for s in ln.singer_spans])
+        ln.singers = fix(ln.singers)
+        for sp in ln.singer_spans:
+            sp.singers = fix(sp.singers)
+        normalize(ln)
+        if before != (list(ln.singers), [(s.start, s.end, list(s.singers)) for s in ln.singer_spans]):
+            changed += 1
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # singer names written into the lyrics (网易云 etc.: "A：…", "（XX）…", "【成员】…")
 

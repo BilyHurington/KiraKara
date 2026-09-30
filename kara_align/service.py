@@ -1090,6 +1090,48 @@ def set_singers(h: ProjectHandle, data: dict) -> None:
         h.save()
 
 
+def apply_singer_preset(h: ProjectHandle, data: dict) -> dict:
+    """Use a saved set of singers (演唱者预设) in this song.  Parts already assigned stay with the same
+    person: a singer is matched by name, an unnamed one by number; one that is used in the lyrics
+    but not in the preset is kept (added after the preset's)."""
+    from .karaoke.themes import new_singer_color
+    from .lyrics.singers import renumber, usage
+    from .models import KaraokeSingers
+
+    try:
+        new = KaraokeSingers.model_validate(data, context={"strict": True})
+    except Exception as e:
+        raise ServiceError(f"演唱者预设无效：{e}") from e
+    with h.lock:
+        old = h.project.karaoke.singers.members
+        used = usage(h.project.lyrics)
+        mapping: dict[int, int] = {}
+        taken: set[int] = set()
+        names = {m.name.strip().casefold(): j for j, m in enumerate(new.members, 1) if m.name.strip()}
+        for i, m in enumerate(old, 1):
+            j = names.get(m.name.strip().casefold()) if m.name.strip() else None
+            if j is not None and j not in taken:
+                mapping[i] = j
+                taken.add(j)
+        for i, m in enumerate(old, 1):
+            if i not in mapping and not m.name.strip() and i <= len(new.members) and i not in taken \
+                    and not new.members[i - 1].name.strip():
+                mapping[i] = i
+                taken.add(i)
+        kept = []
+        for i, m in enumerate(old, 1):
+            if i not in mapping and i in used:
+                color = m.color if all(x.color.upper() != m.color.upper() for x in new.members) \
+                    else new_singer_color({x.color for x in new.members}, len(new.members))
+                new.members.append(m.model_copy(update={"color": color, "key": new.free_key()}))
+                mapping[i] = len(new.members)
+                kept.append(m.name.strip() or f"演唱者 {i}")
+        changed = renumber(h.project.lyrics, mapping)
+        h.project.karaoke.singers = new
+        h.save()
+    return {"lines": changed, "kept": kept}
+
+
 def remove_singer(h: ProjectHandle, number: int) -> int:
     """Remove singer ``number`` (1-based): its parts go back to the other singers of the line (or the
     style's own colours) and the singers after it move up.  Returns how many lines changed."""
@@ -1106,7 +1148,7 @@ def remove_singer(h: ProjectHandle, number: int) -> int:
         combos = []
         for c in sg.combos:
             ids = [i - 1 if i > number else i for i in c.singers if i != number]
-            if len(ids) >= 2 and c.key > len(members):
+            if len(ids) >= 2:
                 combos.append(c.model_copy(update={"singers": ids}))
         sg.combos = combos
         h.save()
@@ -1133,9 +1175,9 @@ def apply_singer_markers(h: ProjectHandle, names: Optional[list[str]] = None, st
     """Assign the lines that start with singer names to those singers (added to the style when new;
     the words for "everyone" mean every singer named in the lyrics); ``names``: only these (default:
     all found).  ``strip``: take the names out of the lyrics (only where every name was used)."""
-    from .karaoke.themes import SINGER_SWATCHES
+    from .karaoke.themes import new_singer_color
     from .lyrics.singers import detect_markers, is_all, marker_names
-    from .models import MAX_SINGERS, KaraokeSinger
+    from .models import KaraokeSinger
 
     with h.lock:
         doc = h.project.lyrics
@@ -1149,12 +1191,8 @@ def apply_singer_markers(h: ProjectHandle, names: Optional[list[str]] = None, st
         for name in wanted:
             hit = next((i for i, m in enumerate(members) if m.name.strip().casefold() == name.casefold()), None)
             if hit is None:
-                if len(members) >= MAX_SINGERS:
-                    messages.append(f"最多 {MAX_SINGERS} 位演唱者，「{name}」没有加入")
-                    continue
-                used = {m.color.upper() for m in members}
-                color = next((c for c in SINGER_SWATCHES if c not in used), SINGER_SWATCHES[len(members) % 9])
-                members.append(KaraokeSinger(name=name, color=color))
+                color = new_singer_color({m.color for m in members}, len(members))
+                members.append(KaraokeSinger(name=name, color=color, key=h.project.karaoke.singers.free_key()))
                 hit = len(members) - 1
             number[name] = hit + 1
         everyone = sorted(set(number.values()))

@@ -48,16 +48,21 @@ export interface SingerSpan { start: number; end: number; singers: number[] }
 
 /** One singer of a karaoke style: "" colours are derived from `color` */
 export interface KaraokeSinger {
-  name: string; color: string; color_unsung: string; color_sung: string; outline_color: string; glow_unsung: string; glow_sung: string;
+  name: string;
+  /** the key that assigns this singer on the 演唱者 page ('' = none; one of SINGER_KEYS) */
+  key: string;
+  color: string; color_unsung: string; color_sung: string; outline_color: string; glow_unsung: string; glow_sung: string;
 }
 /** Singers for songs with several voices; parts sung together: split into bands or blended, top-to-bottom or side by side */
-/** A number key for singers who sing together (e.g. key 3 = 1+2); only keys after the singers' own */
-export interface SingerCombo { key: number; singers: number[] }
+/** A key for singers who sing together (e.g. key 3 = 1+2); no singer and no other combination has it */
+export interface SingerCombo { key: string; singers: number[] }
 export interface KaraokeSingers {
   members: KaraokeSinger[]; mix: 'split' | 'gradient'; direction: 'vertical' | 'horizontal';
   /** vertical: top to bottom (readings take the top singer); horizontal: left to right across each run sung together */
   combos?: SingerCombo[];
 }
+/** A saved set of singers (演唱者预设): names, colours, keys, combinations, how parts sung together look */
+export interface SingerPreset { id: string; name: string; updated: string | null; singers: KaraokeSingers }
 /** POST /api/karaoke/singer-colors: a singer's colours with the derived ones filled in */
 export interface SingerColors { sung: string; unsung: string; outline: string; glow_sung: string; glow_unsung: string; translation: string; sparkle: string }
 

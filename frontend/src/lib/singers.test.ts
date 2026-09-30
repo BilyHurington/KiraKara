@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Line } from './types';
 import {
-  assign, caretAt, caretTimeline, coversLine, effective, freeKey, keyIds, mergeRanges, mixBackground, newSinger, parseCombo, rangeSingers, union,
-  withCombo, withNewSinger, wordRange, wordsOf, type LineSingers,
+  assign, caretAt, caretTimeline, coversLine, effective, freeKey, keyIds, keyOf, mergeRanges, mixBackground, newSinger, newSingerColor, parseCombo,
+  rangeSingers, SINGER_KEYS, SINGER_SWATCHES, union, withCombo, withKey, withNewSinger, wordRange, wordsOf, type LineSingers,
 } from './singers';
 
 const ls = (text: string, singers: number[] = [], spans: LineSingers['spans'] = []): LineSingers => ({ line_id: 'L', text, singers, spans });
@@ -54,18 +54,40 @@ describe('assigning singers', () => {
     expect(mixBackground(['#f00', '#00f'], 'gradient', 'horizontal')).toBe('linear-gradient(to right, #f00, #00f)');
   });
 
-  it('number keys: singers first, then saved combinations; a new singer moves a combination off its key', () => {
-    const two = { members: [newSinger([]), newSinger([newSinger([])])], mix: 'split' as const, direction: 'vertical' as const };
+  it('keys: each singer and combination has its own, new ones take the first free one, any can be changed', () => {
+    const empty = { members: [], mix: 'split' as const, direction: 'vertical' as const };
+    const two = withNewSinger(withNewSinger(empty));
+    expect(two.members.map((m) => m.key)).toEqual(['1', '2']);
     const { next, key } = withCombo(two, [1, 2]);
-    expect(key).toBe(3);
-    expect(keyIds(next, 3)).toEqual([1, 2]);
-    expect(keyIds(next, 2)).toEqual([2]);
-    expect(keyIds(next, 4)).toBeNull();
-    expect(withCombo(next, [1, 2]).key).toBe(3);  // saved already
+    expect(key).toBe('3');
+    expect(keyIds(next, '3')).toEqual([1, 2]);
+    expect(keyIds(next, '2')).toEqual([2]);
+    expect(keyIds(next, '4')).toBeNull();
+    expect(withCombo(next, [1, 2]).key).toBe('3');  // saved already
     const three = withNewSinger(next);
-    expect(keyIds(three, 3)).toEqual([3]);
-    expect(three.combos).toEqual([{ key: 4, singers: [1, 2] }]);
-    expect(freeKey(three)).toBe(5);
+    expect(three.members[2].key).toBe('4');  // the combination keeps its key
+    // a key given to another: they swap; '' leaves it without one
+    const moved = withKey(three, { singer: 1 }, '3');
+    expect(moved.swapped).toEqual({ combo: 0 });
+    expect(moved.next.members[0].key).toBe('3');
+    expect(moved.next.combos![0].key).toBe('1');
+    const cleared = withKey(moved.next, { singer: 2 }, '').next;
+    expect(cleared.members[1].key).toBe('');
+    expect(freeKey(cleared)).toBe('2');  // the smallest free one, in the order 1–9, a–z
+    // past 9 come the letters; l and p stay with the page (loop, listen)
+    let many = empty as typeof three;
+    for (let i = 0; i < 12; i++) many = withNewSinger(many);
+    expect(many.members.map((m) => m.key).join('')).toBe('123456789abc');
+    expect(SINGER_KEYS).not.toMatch(/[lp0]/);
+    expect(keyOf('Q')).toBe('q');
+    expect(keyOf('l')).toBe('');
+    expect(keyOf('Enter')).toBe('');
+  });
+
+  it('any number of singers: colours past the swatches are all different', () => {
+    const colors = new Set(Array.from({ length: 20 }, (_, i) => newSingerColor(SINGER_SWATCHES, 9 + i)));
+    expect(colors.size).toBe(20);
+    expect(newSingerColor(SINGER_SWATCHES, 9)).toMatch(/^#[0-9A-F]{6}$/);
   });
 
   it('blanks are nobody\'s: they join a part around them, else stay with the line', () => {
