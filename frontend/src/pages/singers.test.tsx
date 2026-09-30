@@ -68,18 +68,18 @@ describe('singers page', () => {
     fireEvent.click(screen.getByRole('button', { name: '选择第 1 行' }));
     expect(screen.getByRole('status')).toHaveTextContent('已选 1 行');
     press('1');
-    await waitFor(() => expect(api.find('PUT', '/singers')).toHaveLength(1));
-    expect(api.find('PUT', '/singers')[0].body.lines).toEqual([{ line_id: 'L0001', text: pv.project.lyrics.lines[0].text, singers: [1], spans: [] }]);
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(1));
+    expect(api.find('PUT', `${PID}/singers`)[0].body.lines).toEqual([{ line_id: 'L0001', text: pv.project.lyrics.lines[0].text, singers: [1], spans: [] }]);
     press('+');
     press('2');
-    await waitFor(() => expect(api.find('PUT', '/singers')).toHaveLength(2));
-    expect(api.find('PUT', '/singers')[1].body.lines[0].singers).toEqual([1, 2]);
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(2));
+    expect(api.find('PUT', `${PID}/singers`)[1].body.lines[0].singers).toEqual([1, 2]);
     expect(useApp.getState().undo).toHaveLength(1);
     expect(useApp.getState().undo[0].label).toBe('指定 Ann + Bo');
     expect(useApp.getState().pv!.project.lyrics.lines[0].singers).toEqual([1, 2]);
 
     await act(() => undo());
-    const last = api.find('PUT', '/singers').at(-1)!;
+    const last = api.find('PUT', `${PID}/singers`).at(-1)!;
     expect(last.body.lines).toEqual([{ line_id: 'L0001', text: pv.project.lyrics.lines[0].text, singers: [], spans: [] }]);
     expect(useApp.getState().redo).toHaveLength(1);
   });
@@ -97,16 +97,37 @@ describe('singers page', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已选 2 行中的部分歌词');
     press('3');  // only two singers
     press('2');
-    await waitFor(() => expect(api.find('PUT', '/singers')).toHaveLength(1));
-    const lines = api.find('PUT', '/singers')[0].body.lines;
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(1));
+    const lines = api.find('PUT', `${PID}/singers`)[0].body.lines;
     expect(lines.map((l: any) => [l.line_id, l.singers, l.spans])).toEqual([
       ['L0001', [], [{ start: 5, end: 6, singers: [2] }]],
       ['L0002', [], [{ start: 0, end: 2, singers: [2] }]],
     ]);
     press('0');
-    await waitFor(() => expect(api.find('PUT', '/singers')).toHaveLength(2));
-    expect(api.find('PUT', '/singers')[1].body.lines.every((l: any) => !l.spans.length)).toBe(true);
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(2));
+    expect(api.find('PUT', `${PID}/singers`)[1].body.lines.every((l: any) => !l.spans.length)).toBe(true);
     expect(useApp.getState().undo).toHaveLength(2);
+  });
+
+  it('1 + 2 can be saved to key 3, which then assigns both', async () => {
+    seedStore('singers');
+    const { api } = server();
+    renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    fireEvent.click(screen.getByRole('button', { name: '选择第 1 行' }));
+    press('1');
+    // "+" and "2" typed faster than the page re-renders
+    act(() => { fireEvent.keyDown(window, { key: '+' }); fireEvent.keyDown(window, { key: '2' }); });
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(2));
+    expect(api.find('PUT', `${PID}/singers`)[1].body.lines[0].singers).toEqual([1, 2]);
+    fireEvent.click(await screen.findByRole('button', { name: /把 1\+2 存到 3/ }));
+    await act(() => flushSingers());
+    expect(api.find('PUT', '/karaoke/singers').at(-1)!.body.combos).toEqual([{ key: 3, singers: [1, 2] }]);
+    fireEvent.click(screen.getByRole('button', { name: '选择第 2 行' }));
+    press('3');
+    await waitFor(() => expect(api.find('PUT', `${PID}/singers`)).toHaveLength(3));
+    expect(api.find('PUT', `${PID}/singers`)[2].body.lines[0]).toMatchObject({ line_id: 'L0002', singers: [1, 2] });
+    expect(screen.getByRole('textbox', { name: '快捷键 3 的演唱者' })).toHaveValue('1+2');
   });
 
   it('the singer list is saved; the step shows who sings', async () => {

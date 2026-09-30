@@ -3,14 +3,14 @@
 // or drag over the words (across lines too), then press 1–9; 1 + 2 = sung together; 0 clears.
 // Assignments are saved at once (one undo step each); the singer list lives in the style.
 
-import { ArrowRight, Eraser, Loader2, Play, Subtitles, Tags, Users } from 'lucide-react';
+import { ArrowRight, Eraser, Keyboard, Loader2, Play, Subtitles, Tags, Users } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { api } from '@/lib/api';
 import { cn, fmtMs } from '@/lib/format';
 import { ignoreShortcut, isEnter, MOD_KEY } from '@/lib/keys';
 import {
-  effective, idsKey, isSelected, lineSingers, mixBackground, parseCombo, singerLabel, union, usage, wordRange, wordsOf,
-  type Selection, type Word,
+  effective, freeKey, idsKey, isSelected, keyIds, lineSingers, mixBackground, parseCombo, rangeSingers, singerLabel, union,
+  usage, withCombo, wordRange, wordsOf, type Selection, type Word,
 } from '@/lib/singers';
 import type { KaraokeSingers, KaraokeStyle, Line } from '@/lib/types';
 import { player } from '@/audio/player';
@@ -69,7 +69,10 @@ export function SingersPage() {
   const lineAnchor = useRef<number | null>(null);
   const drag = useRef<{ from: [number, number]; base: Selection } | null>(null);
   // the last assignment by key (1 → + → 2 makes it 1+2, one undo step)
-  const [combo, setCombo] = useState<{ ids: number[]; key: string; plus: boolean } | null>(null);
+  const [combo, setComboState] = useState<{ ids: number[]; key: string; plus: boolean } | null>(null);
+  // (also kept in a ref: "+" and the next number can come faster than a re-render)
+  const comboNow = useRef(combo);
+  const setCombo = (v: typeof combo) => { comboNow.current = v; setComboState(v); };
 
   // a selection of lines that no longer exist (merged, split, new lyrics) is dropped
   useEffect(() => {
@@ -147,19 +150,32 @@ export function SingersPage() {
   }, [sel, members]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pressNumber = (n: number) => {
-    if (n > members.length) {
-      toast('info', members.length ? `只有 ${members.length} 位演唱者` : '还没有演唱者', '先在右边添加演唱者');
+    const got = keyIds(singers, n);
+    if (!got) {
+      toast('info', members.length ? `数字键 ${n} 还没有用` : '还没有演唱者',
+        members.length ? `现有 ${members.length} 位演唱者；组合可以存到空着的数字键上` : '先在右边添加演唱者');
       return;
     }
-    if (combo?.plus) {
-      const ids = combo.ids.includes(n) ? combo.ids : [...combo.ids, n];
-      setCombo({ ids, key: combo.key, plus: false });
-      apply(ids, combo.key);
+    const cur = comboNow.current;
+    if (cur?.plus) {
+      const ids = [...cur.ids, ...got.filter((x) => !cur.ids.includes(x))];
+      setCombo({ ids, key: cur.key, plus: false });
+      apply(ids, cur.key);
       return;
     }
     const key = `k${++keySeq}`;
-    setCombo({ ids: [n], key, plus: false });
-    apply([n], key);
+    setCombo({ ids: got, key, plus: false });
+    apply(got, key);
+  };
+  /** Keep what was just assigned together on a free number key. */
+  const saveCombo = (ids: number[]) => {
+    const { next, key } = withCombo(singers, ids);
+    if (key === null) {
+      toast('info', '数字键 1–9 已经用完', '先删掉一个组合');
+      return;
+    }
+    if (next !== singers) changeSingers(next);
+    toast('ok', `按 ${key} 就是 ${label(ids)}`);
   };
 
   // ------------------------------------------------------------------ listening / preview times
@@ -197,8 +213,8 @@ export function SingersPage() {
 
   // ------------------------------------------------------------------ keyboard
 
-  const keys = useRef({ pressNumber, apply, combo, rows, listen });
-  keys.current = { pressNumber, apply, combo, rows, listen };
+  const keys = useRef({ pressNumber, apply, rows, listen });
+  keys.current = { pressNumber, apply, rows, listen };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (ignoreShortcut(e)) return;
@@ -216,9 +232,9 @@ export function SingersPage() {
         e.preventDefault();
         k.pressNumber(Number(e.key));
       } else if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
-        if (k.combo) {
+        if (comboNow.current) {
           e.preventDefault();
-          setCombo({ ...k.combo, plus: true });
+          setCombo({ ...comboNow.current, plus: true });
         }
       } else if (e.key === '0' || e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault();
@@ -246,6 +262,7 @@ export function SingersPage() {
       return;
     }
     apply(ids);
+    setCombo({ ids, key: `k${++keySeq}`, plus: false });
     setComboText('');
   };
   const nLines = [...sel.values()].length;
@@ -287,6 +304,12 @@ export function SingersPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1 text-[13px] text-muted" role="status">{summary}</span>
               {combo?.plus && <Badge tone="accent">{combo.ids.join('+')}+ …</Badge>}
+              {combo && combo.ids.length > 1 && !combo.plus && !(singers.combos ?? []).some((c) => idsKey(c.singers) === idsKey(combo.ids)) && (
+                <Button size="xs" variant="ghost" icon={<Keyboard className="size-3.5" />} onClick={() => saveCombo(combo.ids)}
+                  title="以后按一个数字键就指定为这几个人一起唱">
+                  把 {combo.ids.join('+')} 存到 {freeKey(singers) ?? '…'}
+                </Button>
+              )}
               <Button size="xs" variant="ghost" icon={<Play className="size-3.5" />} onClick={listen} disabled={!nLines}>试听</Button>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -295,6 +318,14 @@ export function SingersPage() {
                   title={`指定为 ${singerLabel(members, i + 1)}（按 ${i + 1}）`}>
                   <span className="grid size-4 place-items-center rounded text-[10px] font-bold text-white" style={{ background: m.color }}>{i + 1}</span>
                   <span className="max-w-24 truncate">{singerLabel(members, i + 1)}</span>
+                </Button>
+              ))}
+              {(singers.combos ?? []).map((c) => (
+                <Button key={`c${c.key}`} size="xs" variant="outline" disabled={!nLines} onClick={() => pressNumber(c.key)}
+                  title={`指定为 ${label(c.singers)} 一起唱（按 ${c.key}）`}>
+                  <span className="grid size-4 place-items-center rounded text-[10px] font-bold text-white"
+                    style={{ background: mixBackground(c.singers.map((n) => colorOf(n) ?? '#888'), singers.mix, singers.direction) }}>{c.key}</span>
+                  <span className="max-w-28 truncate">{c.singers.join('+')}</span>
                 </Button>
               ))}
               {members.length > 1 && (
@@ -309,7 +340,7 @@ export function SingersPage() {
           </div>
           <CardBody className="space-y-0.5 px-3">
             <p className="px-2 pb-2 text-xs leading-5 text-subtle">
-              <Kbd>1</Kbd>–<Kbd>9</Kbd> 指定 · 先按 <Kbd>1</Kbd> 再按 <Kbd>+</Kbd> <Kbd>2</Kbd> 为 1+2 一起唱 · <Kbd>0</Kbd> 清除 ·
+              <Kbd>1</Kbd>–<Kbd>9</Kbd> 指定（演唱者或存好的组合）· 先按 <Kbd>1</Kbd> 再按 <Kbd>+</Kbd> <Kbd>2</Kbd> 为 1+2 一起唱，可以存到空着的数字键 · <Kbd>0</Kbd> 清除 ·
               {' '}<Kbd>P</Kbd> 试听 · <Kbd>Esc</Kbd> 取消选择 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>A</Kbd> 全选 · <Kbd>{MOD_KEY}</Kbd>+<Kbd>Z</Kbd> 撤销；
               行号 Shift / {MOD_KEY} 点选多行，在歌词上按住 {MOD_KEY} 拖动可以追加
             </p>
@@ -346,6 +377,13 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
   const chars = effective(lineSingers(line));
   const own = (line.singers ?? []).filter((n) => colorOf(n));
   const full = (sel.get(line.id) ?? []).some(([a, b]) => a <= 0 && b >= line.text.length);
+  const groups: { ids: number[]; words: { w: Word; wi: number }[] }[] = [];
+  words.forEach((w, wi) => {
+    const ids = rangeSingers(chars, w.start, w.end);
+    const last = groups[groups.length - 1];
+    if (last && idsKey(last.ids) === idsKey(ids)) last.words.push({ w, wi });
+    else groups.push({ ids, words: [{ w, wi }] });
+  });
   const paint = (ids: number[]) => {
     const cols = ids.map(colorOf).filter((c): c is string => !!c);
     if (!cols.length) return undefined;
@@ -361,26 +399,23 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, names }: {
       <span aria-hidden className="mt-1.5 h-5 w-1.5 shrink-0 rounded-full"
         style={{ background: own.length ? mixBackground(own.map((n) => colorOf(n)!), singers.mix, 'vertical') : 'var(--color-line)' }} />
       <div className="min-w-0 flex-1 cursor-text text-[17px] leading-8 font-medium select-none">
-        {words.map((w, wi) => {
-          // runs of characters with the same singers (a word normally has one)
-          const runs: { a: number; b: number; ids: number[] }[] = [];
-          for (let i = w.start; i < w.end; i++) {
-            const last = runs[runs.length - 1];
-            if (last && idsKey(last.ids) === idsKey(chars[i] ?? [])) last.b = i + 1;
-            else runs.push({ a: i, b: i + 1, ids: chars[i] ?? [] });
-          }
-          const picked = isSelected(sel, line.id, w.start, w.end) && !full;
+        {groups.map((g, gi) => {
+          // a run of words with the same singers is painted as one piece (side by side: left to right across it)
+          const style = paint(g.ids);
           return (
-            <span key={wi} data-word={`${li}:${wi}`} onMouseDown={(e) => onWord(li, wi, e)}
-              className={cn('rounded-[3px] py-0.5', picked && 'bg-accent/20 ring-1 ring-accent/50')}>
-              {runs.map((r, ri) => {
-                const text = line.text.slice(r.a, r.b);
-                const style = paint(r.ids);
-                if (r.ids.length > 1 && singers.direction === 'horizontal') {
-                  // side by side inside each character
-                  return <span key={ri}>{[...text].map((ch, ci) => <span key={ci} style={style}>{ch}</span>)}</span>;
-                }
-                return <span key={ri} style={style}>{text}</span>;
+            <span key={gi} style={style}>
+              {g.words.map(({ w, wi }) => {
+                const picked = isSelected(sel, line.id, w.start, w.end) && !full;
+                // characters within the word sung by others (only data made elsewhere splits a word)
+                const odd = [...line.text.slice(w.start, w.end)].some((_, i) => idsKey(chars[w.start + i] ?? []) !== idsKey(g.ids));
+                return (
+                  <span key={wi} data-word={`${li}:${wi}`} onMouseDown={(e) => onWord(li, wi, e)}
+                    className={cn('rounded-[3px] py-0.5', picked && 'outline-2 outline-accent/70', picked && g.ids.length < 2 && 'bg-accent/15')}>
+                    {odd
+                      ? [...line.text.slice(w.start, w.end)].map((ch, ci) => <span key={ci} style={paint(chars[w.start + ci] ?? [])}>{ch}</span>)
+                      : w.text}
+                  </span>
+                );
               })}
             </span>
           );

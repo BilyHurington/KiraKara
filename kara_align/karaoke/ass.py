@@ -787,13 +787,15 @@ _ROLES = ("sung", "unsung", "outline", "glow_sung", "glow_unsung", "translation"
 
 
 def plan_bands(ids: tuple[int, ...], colors: dict[int, dict[str, str]], mix: str, direction: str,
-               top: float, bottom: float, chars: list[tuple[float, float]], W: int, H: int,
-               k: float = 1.0) -> list[Band]:
+               top: float, bottom: float, span: Optional[tuple[float, float]], W: int, H: int,
+               k: float = 1.0, within: Optional[tuple[float, float]] = None) -> list[Band]:
     """The copies a chunk's text is drawn in: one for a single singer; for several, a band per singer
     (``mix == "split"``) or thin strips blending their colours (``"gradient"``), stacked top to
     bottom (``direction == "vertical"``, between ``top`` and ``bottom``: where the glyphs are) or
-    side by side inside each character (``"horizontal"``, ``chars``: each character's x range).
-    The outer bands reach the frame's edges, so outline and glow beyond the glyphs are drawn too."""
+    side by side across ``span`` (``"horizontal"``: the x range of the whole run sung together, so a
+    run of chunks is split / blended once from its left to its right end).  The outer bands reach the
+    frame's edges, so outline and glow beyond the glyphs are drawn too.  ``within``: only the bands
+    reaching into this x range (what the chunk can draw)."""
     ids = tuple(i for i in ids if i in colors)
     if not ids:
         return [BASE_BAND]
@@ -812,31 +814,21 @@ def plan_bands(ids: tuple[int, ...], colors: dict[int, dict[str, str]], mix: str
         return Band(rect, ids[min(n - 1, int(t * n))], cols, True)
 
     out: list[Band] = []
-    if direction == "vertical" or not chars:
+    if direction == "vertical" or span is None:
         steps = n if not grad else max(2 * n, min(16, round((bottom - top) / (5 * k))))
         edges = [top + (bottom - top) * i / steps for i in range(steps + 1)]
         edges[0], edges[-1] = 0, H
         for i in range(steps):
             out.append(band(i, steps, (0, edges[i], W, edges[i + 1])))
         return out
-    for ci, (a, b) in enumerate(chars):
-        steps = n if not grad else max(n, min(8, round((b - a) / (8 * k))))
-        edges = [a + (b - a) * i / steps for i in range(steps + 1)]
-        if ci == 0:
-            edges[0] = 0
-        if ci == len(chars) - 1:
-            edges[-1] = W
-        for i in range(steps):
+    a, b = span
+    steps = n if not grad else max(2 * n, min(32, round((b - a) / (10 * k))))
+    edges = [a + (b - a) * i / steps for i in range(steps + 1)]
+    edges[0], edges[-1] = 0, W
+    for i in range(steps):
+        if within is None or (edges[i + 1] > within[0] and edges[i] < within[1]):
             out.append(band(i, steps, (edges[i], 0, edges[i + 1], H)))
     return out
-
-
-def char_spans(text: str, cx: float, width: float, measurer) -> list[tuple[float, float]]:
-    """The x range of each character of ``text`` drawn ``width`` wide centred at ``cx``."""
-    total = measurer.width(text) or 1.0
-    left, k = cx - width / 2, width / total
-    edges = [left + measurer.width(text[:i]) * k for i in range(len(text) + 1)]
-    return [(edges[i], edges[i + 1]) for i in range(len(text)) if text[i].strip()] or [(left, left + width)]
 
 
 def _actor(name: str) -> str:
@@ -1110,29 +1102,46 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
     main_ink = m_main.ink
     ruby_ink = m_ruby.ink if m_ruby is not None else (0.0, 1.0)
 
-    def bands_for(ids: tuple[int, ...], text: str, cx: float, width: float, bottom_y: float, size: float,
-                  ink: tuple[float, float], measurer) -> tuple[list[Band], list[Band]]:
+    def bands_for(ids: tuple[int, ...], cx: float, width: float, bottom_y: float, size: float,
+                  ink: tuple[float, float], run: Optional[tuple[float, float]],
+                  ruby: bool = False) -> tuple[list[Band], list[Band]]:
         """The bands of a chunk's text and of its glow.  The glow of a part sung together always blends
-        (a blurred edge cut sharp between two colours shows as a seam beside the glyphs): top to bottom
-        in strips, side by side as one even blend (strips inside every character would stripe it)."""
+        (a blurred edge cut sharp between two colours shows as a seam beside the glyphs).  Top to
+        bottom, a reading is too small to split: it takes the top singer's colours."""
         ids = live(ids)
-        if len(ids) < 2:
-            one = plan_bands(ids, scol, sg.mix, sg.direction, 0, 0, [], W, H, k)
+        if len(ids) < 2 or (ruby and sg.direction == "vertical"):
+            one = plan_bands(ids[:1], scol, sg.mix, sg.direction, 0, 0, None, W, H, k)
             return one, one
         top = bottom_y - size
         y0, y1 = top + size * ink[0], top + size * ink[1]
-        chars = char_spans(text, cx, width, measurer) if sg.direction == "horizontal" else []
-        fill = plan_bands(ids, scol, sg.mix, sg.direction, y0, y1, chars, W, H, k)
-        if not glow.enabled:
+        span = run if sg.direction == "horizontal" else None
+        reach = (cx - width / 2 - edge, cx + width / 2 + edge)
+        fill = plan_bands(ids, scol, sg.mix, sg.direction, y0, y1, span, W, H, k, reach)
+        if not glow.enabled or sg.mix == "gradient":
             return fill, fill
-        if sg.direction == "horizontal":
-            from .themes import blend
+        return fill, plan_bands(ids, scol, "gradient", sg.direction, y0, y1, span, W, H, k, reach)
 
-            even = {r: blend([scol[i][r] for i in ids], 0.5) for r in _ROLES}
-            return fill, [Band(None, ids[0], even, True)]
-        if sg.mix == "gradient":
-            return fill, fill
-        return fill, plan_bands(ids, scol, "gradient", sg.direction, y0, y1, chars, W, H, k)
+    def runs_of(ll: LaidLine, cxs: list[float], scale: float) -> list[Optional[tuple[float, float]]]:
+        """For each chunk sung together (side by side): the x range of its whole run, the neighbouring
+        chunks with the same singers (their lyric and readings)."""
+        out: list[Optional[tuple[float, float]]] = [None] * len(ll.chunks)
+        if sg.direction != "horizontal":
+            return out
+        i = 0
+        while i < len(ll.chunks):
+            ids = live(ll.chunks[i].singers)
+            j = i
+            while j + 1 < len(ll.chunks) and live(ll.chunks[j + 1].singers) == ids:
+                j += 1
+            if len(ids) >= 2:
+                lo, hi = float("inf"), float("-inf")
+                for c, cx in zip(ll.chunks[i:j + 1], cxs[i:j + 1]):
+                    half = max(m_main.width(c.base_text), m_ruby.width(c.ruby_text) if (c.ruby and m_ruby) else 0) * scale / 2
+                    lo, hi = min(lo, cx - half), max(hi, cx + half)
+                for x in range(i, j + 1):
+                    out[x] = (lo, hi)
+            i = j + 1
+        return out
 
     def fx_color(ids: tuple[int, ...]) -> Optional[str]:
         """Effects fired by a singer's part: in the singer's colours (its sung glow / sung colour when the
@@ -1209,16 +1218,17 @@ def build_ass(project: Project, result: AlignmentResult, style: Optional[Karaoke
             bottom = main_y + ((trans_gap + trans_size) if (ll.translation and per_line_trans) else 0)
             boxes.append((t_from + time_offset_ms, t_to + time_offset_ms, x0 - over_l, line_top,
                           x0 + line_w + over_r, bottom))
-            for c, cx in zip(ll.chunks, cxs):
+            runs = runs_of(ll, cxs, scale)
+            for c, cx, run in zip(ll.chunks, cxs, runs):
                 main_pos = f"\\an2\\pos({cx:.1f},{main_y:.1f}){fs}"
                 ruby_pos = f"\\an2\\pos({cx:.1f},{ruby_y:.1f}){fs}"
                 bw = m_main.width(c.base_text) * scale
                 rw = m_ruby.width(c.ruby_text) * scale if (c.ruby and m_ruby is not None) else 0.0
                 segs = piece_segments(c, cx, bw, int(t_from), m_main) if (following or fx_on) else []
-                main_bands = bands_for(c.singers, c.base_text, cx, bw, main_y, main_size * scale, main_ink, m_main)
+                main_bands = bands_for(c.singers, cx, bw, main_y, main_size * scale, main_ink, run)
                 r_bands = ([BASE_BAND], [BASE_BAND])
                 if c.ruby and m_ruby is not None and ruby_bands:
-                    r_bands = bands_for(c.singers, c.ruby_text, cx, rw, ruby_y, ruby_size * scale, ruby_ink, m_ruby)
+                    r_bands = bands_for(c.singers, cx, rw, ruby_y, ruby_size * scale, ruby_ink, run, ruby=True)
                 if following:
                     # lyric and ruby cut by one computed line: libass places its own \\kf boundary by
                     # glyph ink, a few pixels away from any position computed outside it

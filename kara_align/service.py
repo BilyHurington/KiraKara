@@ -1088,6 +1088,14 @@ def remove_singer(h: ProjectHandle, number: int) -> int:
             raise ServiceError(f"没有第 {number} 位演唱者")
         del members[number - 1]
         n = shift_numbers(h.project.lyrics, number)
+        # combinations: without the singer, later ones renumbered; one left with fewer than two goes
+        sg = h.project.karaoke.singers
+        combos = []
+        for c in sg.combos:
+            ids = [i - 1 if i > number else i for i in c.singers if i != number]
+            if len(ids) >= 2 and c.key > len(members):
+                combos.append(c.model_copy(update={"singers": ids}))
+        sg.combos = combos
         h.save()
         return n
 

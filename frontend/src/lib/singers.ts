@@ -5,7 +5,7 @@
 // selection is a set of character ranges per line; assigning replaces what the selected
 // characters had (a whole line: the line's own singers, its parts cleared).
 
-import type { KaraokeSinger, Line, SingerSpan } from './types';
+import type { KaraokeSinger, KaraokeSingers, Line, SingerCombo, SingerSpan } from './types';
 
 export const MAX_SINGERS = 9;
 /** A new singer's colour: the first of these no other singer has (as the server picks them). */
@@ -161,4 +161,46 @@ export function mixBackground(colors: string[], mix: 'split' | 'gradient', direc
   if (mix === 'gradient') return `linear-gradient(${dir}, ${colors.join(', ')})`;
   const stops = colors.map((c, i) => `${c} ${(i / colors.length) * 100}% ${((i + 1) / colors.length) * 100}%`);
   return `linear-gradient(${dir}, ${stops.join(', ')})`;
+}
+
+// ------------------------------------------------------------------ number keys
+
+/** What number key `n` assigns: singer n, or a saved combination on that key (null: nothing). */
+export function keyIds(sg: KaraokeSingers, n: number): number[] | null {
+  if (n >= 1 && n <= sg.members.length) return [n];
+  return sg.combos?.find((c) => c.key === n)?.singers ?? null;
+}
+
+/** The first number key neither a singer nor a combination has (null: all nine are taken). */
+export function freeKey(sg: KaraokeSingers, skip: number[] = []): number | null {
+  const used = new Set([...(sg.combos ?? []).map((c) => c.key), ...skip]);
+  for (let k = sg.members.length + 1; k <= MAX_SINGERS; k++) if (!used.has(k)) return k;
+  return null;
+}
+
+/** Keys left for new singers or combinations. */
+export const keysLeft = (sg: KaraokeSingers) => MAX_SINGERS - sg.members.length - (sg.combos?.length ?? 0);
+
+/** A new singer takes the next number, and so the next key: a combination on that key moves to a free one. */
+export function withNewSinger(sg: KaraokeSingers): KaraokeSingers {
+  const n = sg.members.length + 1;
+  const next: KaraokeSingers = { ...sg, members: [...sg.members, newSinger(sg.members)] };
+  const combos = [...(sg.combos ?? [])];
+  const i = combos.findIndex((c) => c.key === n);
+  if (i >= 0) {
+    const k = freeKey(next, [n]);
+    if (k === null) combos.splice(i, 1);
+    else combos[i] = { ...combos[i], key: k };
+  }
+  return { ...next, combos };
+}
+
+/** Save singers sung together on the first free key (the same combination again: its key). */
+export function withCombo(sg: KaraokeSingers, ids: number[]): { next: KaraokeSingers; key: number | null } {
+  const same = sg.combos?.find((c) => idsKey(c.singers) === idsKey(ids));
+  if (same) return { next: sg, key: same.key };
+  const key = freeKey(sg);
+  if (key === null || ids.length < 2) return { next: sg, key: null };
+  const combos: SingerCombo[] = [...(sg.combos ?? []), { key, singers: ids }].sort((a, b) => a.key - b.key);
+  return { next: { ...sg, combos }, key };
 }

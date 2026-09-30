@@ -273,7 +273,7 @@ Warnings say when the result is stale or partial and how many lines were skipped
 | GET | `/api/projects/{pid}/karaoke/info` | – | `{fields: {field: text}, labels, text: str\|null}` (title card data; `text` = the project's own text) |
 | PUT | `/api/projects/{pid}/karaoke/info` | `{text: str\|null}` | same as GET (`null` goes back to the song data) |
 | PUT | `/api/projects/{pid}/karaoke/singers` | `KaraokeSingers` | `KaraokeStyle` (only the style's singers change; validated strictly) |
-| DELETE | `/api/projects/{pid}/karaoke/singers/{n}` | – | `ProjectView` + `changed` (lines whose assignment changed): singer `n` (1-based) removed, its parts go back to the line's other singers, later numbers move down by one |
+| DELETE | `/api/projects/{pid}/karaoke/singers/{n}` | – | `ProjectView` + `changed` (lines whose assignment changed): singer `n` (1-based) removed, its parts go back to the line's other singers, later numbers move down by one (in combinations too; one left with fewer than two singers is removed) |
 | POST | `/api/karaoke/singer-colors` | `{members: [KaraokeSinger]}` | `[{sung, unsung, outline, glow_sung, glow_unsung, translation, sparkle}]`: each singer's colours with the derived ones filled in |
 | PUT | `/api/projects/{pid}/singers` | `{lines: [{line_id, singers, spans: [{start, end, singers}], text?}]}` | `ProjectView`: who sings these lines (replaces their assignment; `text`: the line's text the spans were made for, 400 when it changed since) |
 | GET | `/api/projects/{pid}/singers/markers` | – | `{lines: [{line_id, text, prefix, names, everyone}], names, existing}`: lines that start with singer names (“A：”, “（XX）”, “【XX】”; a name must start at least two lines) |
@@ -282,7 +282,10 @@ Warnings say when the result is stale or partial and how many lines were skipped
 | POST | `/api/projects/{pid}/karaoke/burn` | `{background?: "auto"\|"black", audio?: "original"\|"mix"\|"none", quality?: "standard"\|"high", vocal_keep_pct?: 0–100}` | `Job` (kind `burn`); output `{filename, url, warnings}` |
 
 **Singers** (多人演唱): `KaraokeStyle.singers = {members: [{name, color, color_unsung, color_sung, outline_color, glow_unsung,
-glow_sung}] (≤ 9; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal"}`.
+glow_sung}] (≤ 9; "" colours are derived from `color`), mix: "split"|"gradient", direction: "vertical"|"horizontal",
+combos: [{key, singers}]}` (vertical: every character top to bottom, a reading in the first singer's colours; horizontal: each run
+sung together left to right; `combos`: number keys of the 演唱者 page for singers who sing together, keys after the singers' own —
+a combination on a singer's key, a repeated key or one with fewer than two singers is refused when saved, dropped when loaded).
 Who sings is kept in the lyrics: `Line.singers` (numbers, 1-based; several = together; empty = the style's own colours) and
 `Line.singer_spans: [{start, end, singers}]` (character ranges of `Line.text` sung by others than the line's singers). They
 only change the subtitles' colours, never an alignment; text edits, merging and splitting lines carry them along. In the

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Line } from './types';
 import {
-  assign, coversLine, effective, mergeRanges, mixBackground, newSinger, parseCombo, rangeSingers, union, wordRange, wordsOf,
-  type LineSingers,
+  assign, coversLine, effective, freeKey, keyIds, mergeRanges, mixBackground, newSinger, parseCombo, rangeSingers, union,
+  withCombo, withNewSinger, wordRange, wordsOf, type LineSingers,
 } from './singers';
 
 const ls = (text: string, singers: number[] = [], spans: LineSingers['spans'] = []): LineSingers => ({ line_id: 'L', text, singers, spans });
@@ -53,4 +53,19 @@ describe('assigning singers', () => {
     expect(mixBackground(['#f00', '#00f'], 'split', 'vertical')).toBe('linear-gradient(to bottom, #f00 0% 50%, #00f 50% 100%)');
     expect(mixBackground(['#f00', '#00f'], 'gradient', 'horizontal')).toBe('linear-gradient(to right, #f00, #00f)');
   });
+
+  it('number keys: singers first, then saved combinations; a new singer moves a combination off its key', () => {
+    const two = { members: [newSinger([]), newSinger([newSinger([])])], mix: 'split' as const, direction: 'vertical' as const };
+    const { next, key } = withCombo(two, [1, 2]);
+    expect(key).toBe(3);
+    expect(keyIds(next, 3)).toEqual([1, 2]);
+    expect(keyIds(next, 2)).toEqual([2]);
+    expect(keyIds(next, 4)).toBeNull();
+    expect(withCombo(next, [1, 2]).key).toBe(3);  // saved already
+    const three = withNewSinger(next);
+    expect(keyIds(three, 3)).toEqual([3]);
+    expect(three.combos).toEqual([{ key: 4, singers: [1, 2] }]);
+    expect(freeKey(three)).toBe(5);
+  });
 });
+

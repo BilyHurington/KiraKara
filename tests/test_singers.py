@@ -209,15 +209,17 @@ def test_band_clip_follows_the_sweep_only_inside_the_band():
 
 def test_gradient_and_horizontal_bands():
     cols = {1: {r: "#FF0000" for r in A._ROLES}, 2: {r: "#0000FF" for r in A._ROLES}}
-    grad = A.plan_bands((1, 2), cols, "gradient", "vertical", 800, 880, [], 1920, 1080)
+    grad = A.plan_bands((1, 2), cols, "gradient", "vertical", 800, 880, None, 1920, 1080)
     assert len(grad) >= 4 and all(b.blend for b in grad)
     assert grad[0].rect[1] == 0 and grad[-1].rect[3] == 1080
     reds = [int(b.colors["sung"][1:3], 16) for b in grad]
     assert reds == sorted(reds, reverse=True) and reds[0] > reds[-1]
-    side = A.plan_bands((1, 2), cols, "split", "horizontal", 0, 0, [(100, 180), (180, 260)], 1920, 1080)
-    assert [b.singer for b in side] == [1, 2, 1, 2]
-    assert [b.rect[0] for b in side] == [0, 140, 180, 220] and side[-1].rect[2] == 1920
-    assert A.plan_bands((7,), cols, "split", "vertical", 0, 0, [], 1920, 1080) == [A.BASE_BAND]
+    # side by side: once across the whole run (100–260), not per character
+    side = A.plan_bands((1, 2), cols, "split", "horizontal", 0, 0, (100, 260), 1920, 1080)
+    assert [(b.singer, b.rect[0], b.rect[2]) for b in side] == [(1, 0, 180), (2, 180, 1920)]
+    assert [b.singer for b in A.plan_bands((1, 2), cols, "split", "horizontal", 0, 0, (100, 260), 1920, 1080,
+                                           within=(90, 150))] == [1]
+    assert A.plan_bands((7,), cols, "split", "vertical", 0, 0, None, 1920, 1080) == [A.BASE_BAND]
 
 
 @needs_ffmpeg
@@ -247,9 +249,36 @@ def test_split_parts_glow_blended(tmp_path):
     assert len(fills) == 2  # the text: one band each
     assert len(glows) > 4  # its glow: thin strips blending the two (no seam beside the glyphs)
     assert len({re.search(r"\\3c(&H\w+&)", e).group(1) for e in glows}) > 4
-    # side by side: the glow is one even blend (strips in every character would stripe it)
+    # side by side: 「に舞う」 (both) split once from left to right: に is in singer 1's half, う in singer 2's
     _two_singers(h, direction="horizontal")
     h.project.karaoke.glow.enabled = True
     text, _ = S.karaoke_ass(h)
-    ni = _events(text, "}に")
-    assert len([e for e in ni if ",KGlow," in e]) == 2 and len([e for e in ni if ",KMain_" in e]) == 2  # one character: two halves
+    assert {e.split(",")[3] for e in _events(text, "}に") if ",KMain_" in e} == {"KMain_1"}
+    assert {e.split(",")[3] for e in _events(text, "}う") if ",KMain_" in e} == {"KMain_2"}
+
+
+def test_readings_take_the_top_singer_when_split_top_to_bottom(tmp_path):
+    h = _project(tmp_path)
+    _two_singers(h)
+    text, _ = S.karaoke_ass(h)
+    # 舞 (both) has the reading ま: one copy, singer 1's
+    ruby = [e for e in text.splitlines() if ",KRuby_" in e and e.endswith("ま")]
+    assert ruby and {e.split(",")[3] for e in ruby} == {"KRuby_1"} and not any("\\clip" in e for e in ruby)
+
+
+def test_saved_combinations(tmp_path):
+    from kara_align.models import KaraokeSingers
+
+    members = [{"color": "#ED35B3"}, {"color": "#2F80ED"}, {"color": "#F5C400"}]
+    sg = KaraokeSingers.model_validate({"members": members, "combos": [
+        {"key": 4, "singers": [1, 2]}, {"key": 2, "singers": [1, 3]}, {"key": 4, "singers": [2, 3]},
+        {"key": 5, "singers": [1, 9]}, {"key": 6, "singers": [3, 1]}]})
+    # loading: a singer's own key, a repeated key, fewer than two real singers are dropped
+    assert [(c.key, c.singers) for c in sg.combos] == [(4, [1, 2]), (6, [3, 1])]
+    with pytest.raises(Exception):
+        KaraokeSingers.model_validate({"members": members, "combos": [{"key": 3, "singers": [1, 2]}]},
+                                      context={"strict": True})
+    h = _project(tmp_path)
+    S.set_singers(h, {"members": members, "combos": [{"key": 4, "singers": [1, 3]}, {"key": 5, "singers": [1, 2]}]})
+    S.remove_singer(h, 2)  # 1+3 becomes 1+2; 1+2 has one singer left and goes
+    assert [(c.key, c.singers) for c in h.project.karaoke.singers.combos] == [(4, [1, 2])]
