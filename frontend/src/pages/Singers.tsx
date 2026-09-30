@@ -527,7 +527,10 @@ function PreviewCard({ style, times, hasResult, refresh }: {
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const t = times ? (when === 'before' ? times[0] - 200 : when === 'after' ? times[1] + 150 : Math.round((times[0] + times[1]) / 2)) : null;
+  // the moment of the singing to show (before it starts, half-way, just done); the lyrics are shown
+  // `advance_ms` ahead of the singing, so the frame showing that moment is that much earlier
+  const moment = times ? (when === 'before' ? times[0] - 150 : when === 'after' ? times[1] : Math.round((times[0] + times[1]) / 2)) : null;
+  const t = moment === null ? null : moment - (style?.timing.advance_ms ?? 0);
   const look = JSON.stringify({ ...style, output: undefined });
 
   useEffect(() => {

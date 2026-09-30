@@ -163,6 +163,24 @@ describe('singers page', () => {
     expect(space.className).not.toContain('outline');
   });
 
+  it('the preview shows the selection half-way sung, allowing for the lyrics shown ahead', async () => {
+    seedStore('singers');
+    const { api, pv } = server();
+    pv.project.karaoke!.timing.advance_ms = 150;
+    // (jsdom has no object URLs for the returned picture)
+    URL.createObjectURL = () => 'blob:preview';
+    URL.revokeObjectURL = () => undefined;
+    const { container } = renderUI(<SingersPage />);
+    await screen.findByDisplayValue('Ann');
+    // 星 (line 2) is sung 6180–6440 ms: half-way at 6310, drawn in the frame at 6310 − 150
+    fireEvent.mouseDown(container.querySelector('[data-word="1:2"]')!, { button: 0 });
+    fireEvent.mouseUp(window);
+    await waitFor(() => expect(api.find('POST', '/karaoke/preview').length).toBeGreaterThan(0), { timeout: 2000 });
+    expect(api.find('POST', '/karaoke/preview').at(-1)!.body.t_ms).toBe(6160);
+    fireEvent.click(screen.getByRole('radio', { name: '唱完' }));
+    await waitFor(() => expect(api.find('POST', '/karaoke/preview').at(-1)!.body.t_ms).toBe(6290), { timeout: 2000 });
+  });
+
   it('the singer list is saved; the step shows who sings', async () => {
     seedStore('singers');
     const { api, pv } = server();
