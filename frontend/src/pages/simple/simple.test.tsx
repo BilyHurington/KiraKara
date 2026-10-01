@@ -235,6 +235,43 @@ describe('simple mode settings', () => {
   });
 });
 
+describe('where Claude Code / Codex run from', () => {
+  it('found automatically, chosen from the places found, or a typed path', async () => {
+    seed({ ...SETTINGS, ai: { ...SETTINGS.ai, enabled: true, provider: 'claude' } });
+    const loc = (source: 'path' | 'app' | 'wsl', program: string, distro = '') => ({
+      source, program, distro, version: '2.1.284 (Claude Code)', where: source === 'wsl' ? `wsl:${distro}` : source,
+      label: source === 'wsl' ? `WSL（${distro}）` : source === 'app' ? '桌面应用自带' : '命令行（PATH）' });
+    let providerCalls = 0;
+    const api = mockApi({
+      'GET /api/karaoke/styles': () => [builtinSaved()],
+      'GET /api/fonts': () => ({ default: '', families: [] }),
+      'GET /api/ai/providers': () => {
+        providerCalls++;
+        return [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.284 (Claude Code)', detail: '',
+          locations: [loc('app', 'C:/Users/u/AppData/Roaming/Claude/claude-code/2.1.284/claude.exe'), loc('wsl', '/home/u/.nvm/bin/claude', 'Ubuntu')],
+          where: 'auto', chosen: loc('app', 'C:/Users/u/AppData/Roaming/Claude/claude-code/2.1.284/claude.exe') },
+        { id: 'codex', label: 'Codex', available: false, version: null, detail: '没有找到 codex', locations: [], where: 'auto', chosen: null }];
+      },
+      'PUT /api/settings': (c) => {
+        const s = structuredClone(useSimple.getState().settings!);
+        Object.assign(s.ai, c.body.ai ?? {});
+        return s;
+      },
+    });
+    renderUI(<SimpleSettings />);
+    const where = await screen.findByRole('combobox', { name: '运行位置' });
+    expect(screen.getByText(/正在使用：桌面应用自带 · 2.1.284/)).toBeInTheDocument();
+    expect(within(where).getByRole('option', { name: /WSL（Ubuntu）/ })).toBeInTheDocument();
+    await userEvent.selectOptions(where, 'wsl:Ubuntu');
+    await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body.ai.claude_cli).toEqual({ where: 'wsl:Ubuntu', path: '' }));
+    await waitFor(() => expect(providerCalls).toBeGreaterThan(1));  // detected again for the new choice
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: '运行位置' }), 'custom');
+    const path = await screen.findByRole('textbox', { name: '程序路径' });
+    await userEvent.type(path, '/opt/claude/bin/claude{Enter}');
+    await waitFor(() => expect(api.find('PUT', '/api/settings').at(-1)?.body.ai.claude_cli).toEqual({ where: 'custom', path: '/opt/claude/bin/claude' }));
+  });
+});
+
 describe('subtitle style panel in the simple-mode settings', () => {
   const settingsServer = (extra: Record<string, (c: any) => unknown> = {}) => mockApi({
     'GET /api/karaoke/styles': () => [builtinSaved(), ...savedExtra],

@@ -29,6 +29,22 @@ API_KEY_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*(KEY|TOKEN)$"
 AiProvider = Literal["manual", "claude", "codex", "openai"]
 
 
+class CliChoice(_Base):
+    """Which copy of a CLI to run (reading/cli_locate.py): "auto" (PATH, then a desktop app's own copy,
+    then WSL), "path", "app", "wsl:<distribution>" or "custom" (``path``)."""
+
+    where: str = Field(default="auto", max_length=200)
+    path: str = Field(default="", max_length=1000)
+
+    @field_validator("where")
+    @classmethod
+    def _where(cls, v: str) -> str:
+        v = (v or "auto").strip()
+        if v in ("auto", "path", "app", "custom") or v.startswith("wsl:"):
+            return v
+        raise ValueError(f"未知的运行位置：{v}")
+
+
 class AiSettings(_Base):
     # AI readings on / off (off: rule readings only; the detailed mode's copy / paste round trip is
     # always there); used by the simple mode's tasks and the detailed mode's one-click button
@@ -39,6 +55,9 @@ class AiSettings(_Base):
     api_key: str = ""  # stored locally only; GET returns has_api_key instead
     api_key_env: str = "OPENAI_API_KEY"  # used when no key is stored
     timeout_s: int = Field(default=600, ge=30, le=3600)
+    # where Claude Code / Codex run from (found automatically, or chosen / typed by hand)
+    claude_cli: CliChoice = Field(default_factory=CliChoice)
+    codex_cli: CliChoice = Field(default_factory=CliChoice)
 
     @model_validator(mode="before")
     @classmethod

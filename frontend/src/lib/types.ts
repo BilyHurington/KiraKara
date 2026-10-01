@@ -446,6 +446,7 @@ export interface AppSettings {
     /** AI readings on / off (tasks and the one-click button) */
     enabled: boolean;
     provider: AiProviderId; model: string; base_url: string; api_key_env: string; timeout_s: number;
+    claude_cli?: CliChoice; codex_cli?: CliChoice;
     has_api_key: boolean; env_key_present: boolean;
   };
   simple: {
@@ -495,7 +496,15 @@ export interface SettingsPatch {
   hardware_encoding?: boolean;
 }
 
-export interface AiProviderInfo { id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string }
+/** Where a CLI was found: on PATH, a desktop app's own copy, inside a WSL distribution, or a typed path */
+export interface CliLocation { source: 'path' | 'app' | 'wsl' | 'custom'; program: string; distro: string; version: string; where: string; label: string }
+export interface AiProviderInfo {
+  id: Exclude<AiProviderId, 'none'>; label: string; available: boolean; version: string | null; detail: string;
+  /** a CLI: every place it was found, the setting ("auto" / "path" / "app" / "wsl:<distro>" / "custom") and the one in use */
+  locations?: CliLocation[]; where?: string; chosen?: CliLocation | null;
+}
+/** Which copy of Claude Code / Codex runs */
+export interface CliChoice { where: string; path: string }
 
 export type TaskStatus = 'preparing' | 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
 

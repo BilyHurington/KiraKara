@@ -119,3 +119,5 @@ npm run build      # 类型检查并输出到 kara_align/web/static
 ```
 
 开发时另开一个终端运行 `milikara serve --port 8799`。
+
+AI 命令行（`kara_align/reading/cli_locate.py`）：Claude Code / Codex 可以来自 PATH、桌面应用自带的一份（Claude 桌面版把 Claude Code 放在数据目录 `…/Claude/claude-code/<版本>/`，ChatGPT / Codex 桌面版在资源里带 `codex-cli`），或 Windows 上的 WSL，也可以手动指定或填写路径。WSL 里的程序经 `wsl.exe -e sh -c` 启动，先用用户的登录 shell（`-lic`，标准输入为 /dev/null）读出 PATH，所以 nvm、`~/.local/bin` 里的命令也能找到。输出用标记包住，shell 启动时打印的内容不会混进来。运行时间由 WSL 里的 `timeout` 限制，pid 记在 WSL 的 /tmp，取消时从外面结束它（只结束 `wsl.exe` 不一定能结束里面的进程）；Codex 的 `-o` 回复文件写在 WSL 的临时目录，读完打印在第二个标记之后。

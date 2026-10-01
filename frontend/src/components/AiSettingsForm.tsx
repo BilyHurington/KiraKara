@@ -7,15 +7,15 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/format';
 import { isEnter } from '@/lib/keys';
-import type { AiProviderId, AppSettings } from '@/lib/types';
+import type { AiProviderId, AiProviderInfo, AppSettings, CliChoice } from '@/lib/types';
 import { run, toast } from '@/store/app';
 import { loadProviders, saveSettings, settingsSaved, useSimple } from '@/store/simple';
-import { arrowNav, Badge, Button, Field, Input, Switch } from '@/components/ui';
+import { arrowNav, Badge, Button, Field, Input, Select, Switch } from '@/components/ui';
 
 const CHOICES: { id: AiProviderId; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'manual', label: '手动（网页聊天）', hint: '复制提示词到任意 AI 聊天网页，再粘贴回复；不用安装，也不用 API Key', icon: <MessagesSquare className="size-4" /> },
-  { id: 'claude', label: 'Claude Code', hint: '本机 claude 命令（需已登录）', icon: <TerminalSquare className="size-4" /> },
-  { id: 'codex', label: 'Codex', hint: '本机 codex 命令（需已登录）', icon: <TerminalSquare className="size-4" /> },
+  { id: 'claude', label: 'Claude Code', hint: '本机、桌面应用自带或 WSL 里的 claude（需已登录）', icon: <TerminalSquare className="size-4" /> },
+  { id: 'codex', label: 'Codex', hint: '本机、桌面应用自带或 WSL 里的 codex（需已登录）', icon: <TerminalSquare className="size-4" /> },
   { id: 'openai', label: 'OpenAI 兼容 API', hint: '任意 /chat/completions 接口', icon: <PlugZap className="size-4" /> },
 ];
 
@@ -126,10 +126,15 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
               </Field>
             </div>
           ) : (
-            <Field label="模型（可选）" hint={ai.provider === 'claude' ? '留空使用 Claude Code 的默认模型；例如 sonnet、haiku 更便宜' : '留空使用 Codex 的默认模型'}>
-              <Input defaultValue={ai.model} key={`m-${ai.provider}-${ai.model}`} placeholder="留空使用默认"
-                onBlur={(e) => e.target.value !== ai.model && save({ model: e.target.value.trim() })} />
-            </Field>
+            <>
+              <CliWhere provider={ai.provider} choice={(ai.provider === 'claude' ? ai.claude_cli : ai.codex_cli) ?? { where: 'auto', path: '' }}
+                info={avail(ai.provider) ?? null}
+                onChange={(c) => save({ [`${ai.provider}_cli`]: c } as Partial<AppSettings['ai']>).then(() => loadProviders(true))} />
+              <Field label="模型（可选）" hint={ai.provider === 'claude' ? '留空使用 Claude Code 的默认模型；例如 sonnet、haiku 更便宜' : '留空使用 Codex 的默认模型'}>
+                <Input defaultValue={ai.model} key={`m-${ai.provider}-${ai.model}`} placeholder="留空使用默认"
+                  onBlur={(e) => e.target.value !== ai.model && save({ model: e.target.value.trim() })} />
+              </Field>
+            </>
           )}
           <div className="flex flex-wrap items-center gap-3">
             <Button size="sm" variant="secondary" icon={<Bot className="size-4" />} loading={testing} onClick={runTest}>测试连接</Button>
@@ -149,6 +154,43 @@ export function AiSettingsForm({ compact }: { compact?: boolean }) {
         </div>
       )}
       </>}
+    </div>
+  );
+}
+
+/** Which copy of Claude Code / Codex runs: found automatically (PATH, then a desktop app's own copy,
+ *  then WSL), one of the places it was found, or a program path typed by hand. */
+function CliWhere({ provider, choice, info, onChange }: {
+  provider: 'claude' | 'codex' | 'openai' | 'manual'; choice: CliChoice; info: AiProviderInfo | null;
+  onChange: (c: CliChoice) => void;
+}) {
+  const name = provider === 'claude' ? 'claude' : 'codex';
+  const found = info?.locations ?? [];
+  const chosen = info?.chosen ?? null;
+  const options = [...found.filter((l) => l.source !== 'custom')];
+  // a choice made earlier but not found now stays listed
+  const known = choice.where === 'auto' || choice.where === 'custom' || options.some((l) => l.where === choice.where);
+  return (
+    <div className="space-y-2">
+      <Field label="运行位置" hint={info == null ? '检测中…' : chosen
+        ? `正在使用：${chosen.label}${chosen.version ? ` · ${chosen.version}` : ''} · ${chosen.program}`
+        : info.detail}>
+        <Select aria-label="运行位置" value={choice.where} onChange={(e) => onChange({ ...choice, where: e.target.value })}>
+          <option value="auto">自动（命令行 → 桌面应用自带 → WSL）</option>
+          {options.map((l) => (
+            <option key={l.where} value={l.where}>{l.label}{l.version ? ` · ${l.version}` : ''}</option>
+          ))}
+          {!known && <option value={choice.where}>{choice.where.startsWith('wsl:') ? `WSL（${choice.where.slice(4) || '默认'}）` : choice.where}（现在没有找到）</option>}
+          <option value="custom">自定义路径…</option>
+        </Select>
+      </Field>
+      {choice.where === 'custom' && (
+        <Field label="程序路径" hint={`${name} 程序的完整路径；Windows 上以 / 开头的路径会在 WSL 里运行（例如 /home/你/.nvm/versions/node/v22/bin/${name}）`}>
+          <Input defaultValue={choice.path} key={`p-${provider}-${choice.path}`} placeholder={provider === 'claude' ? '例如 C:\\Users\\你\\.local\\bin\\claude.exe' : '例如 /usr/local/bin/codex'}
+            aria-label="程序路径" onKeyDown={(e) => { if (isEnter(e)) (e.target as HTMLInputElement).blur(); }}
+            onBlur={(e) => e.target.value.trim() !== choice.path && onChange({ ...choice, path: e.target.value.trim() })} />
+        </Field>
+      )}
     </div>
   );
 }

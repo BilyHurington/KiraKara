@@ -345,9 +345,14 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
         from .. import settings as app_settings
 
         try:
-            return app_settings.public(app_settings.update(body or {}))
+            out = app_settings.public(app_settings.update(body or {}))
         except ValueError as e:
             raise HTTPException(400, f"设置无效：{e}") from e
+        if isinstance((body or {}).get("ai"), dict) and {"claude_cli", "codex_cli"} & set(body["ai"]):
+            from ..reading.llm import _detect_cache
+
+            _detect_cache.clear()  # the CLI in use changed: detected again on the next look
+        return out
 
     @app.get("/api/update")
     def update_check(refresh: int = 0):

@@ -36,6 +36,11 @@ def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("KARA_ALIGN_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(ScriptedBackend, "default_script", SCRIPT)
     llm._detect_cache.clear()
+    # this computer's own desktop apps / WSL are not part of the tests
+    from kara_align.reading import cli_locate
+
+    monkeypatch.setattr(cli_locate, "app_candidates", lambda provider: [])
+    monkeypatch.setattr(cli_locate, "wsl_exe", lambda: None)
 
 
 def _wav(path, seconds=7.0, sr=22050):

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -33,6 +32,7 @@ from typing import Callable, Optional
 
 from ..interfaces import CancelToken, Cancelled
 from ..procs import NEW_GROUP, command, kill_tree
+from . import cli_locate as locate
 from ..settings import AiSettings, api_key
 
 PROVIDERS = {
@@ -59,25 +59,37 @@ class LlmReply:
 _detect_cache: dict[str, tuple[float, dict]] = {}
 
 
+def _choice(provider: str):
+    from ..settings import load
+
+    try:
+        return getattr(load().ai, f"{provider}_cli")
+    except Exception:
+        from ..settings import CliChoice
+
+        return CliChoice()
+
+
 def detect(provider: str, *, refresh: bool = False) -> dict:
-    """Availability of one provider: {id, label, available, version, detail}."""
+    """Availability of one provider: {id, label, available, version, detail}; for a CLI also every
+    place it was found (``locations``) and the one in use (``where`` as set, ``chosen``)."""
     info = PROVIDERS[provider]
     now = time.time()
     if not refresh and provider in _detect_cache and now - _detect_cache[provider][0] < 60:
         return _detect_cache[provider][1]
     out = {"id": provider, "label": info["label"], "available": True, "version": None, "detail": ""}
     if info["binary"]:
-        path = shutil.which(info["binary"])
-        if path is None:
-            out.update(available=False, detail=f"没有找到 {info['binary']} 命令（需要先安装并登录）")
+        choice = _choice(provider)
+        found = locate.locations(provider, choice.path if choice.where == "custom" else "", refresh=refresh)
+        loc, why = locate.resolve(provider, choice.where, choice.path)
+        if loc is not None and not loc.version:
+            loc = next((x for x in found if x.where == loc.where and x.program == loc.program), loc)
+        out.update(locations=[x.to_dict() for x in found], where=choice.where,
+                   chosen=loc.to_dict() if loc else None)
+        if loc is None:
+            out.update(available=False, detail=why)
         else:
-            try:
-                v = subprocess.run(command([path, "--version"]), capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=20)
-                out["version"] = (v.stdout or v.stderr).strip().splitlines()[0] if (v.stdout or v.stderr) else None
-                out["detail"] = path
-            except Exception as e:  # installed but broken
-                out.update(available=False, detail=f"{info['binary']} 无法运行：{e}")
+            out.update(version=loc.version or None, detail=f"{loc.label} · {loc.program}")
     _detect_cache[provider] = (now, out)
     return out
 
@@ -109,20 +121,21 @@ def ask(cfg: AiSettings, prompt: str, *, cancel: Optional[CancelToken] = None,
 # ---------------------------------------------------------------------------- CLIs
 
 
-def _run(cmd: list[str], prompt: str, cwd: str, timeout: float, cancel: Optional[CancelToken],
+def _run(inv: "locate.Invocation", prompt: str, timeout: float, cancel: Optional[CancelToken],
          on_wait: Optional[Callable[[float], None]]) -> tuple[int, str, str]:
     """Run a CLI with the prompt on stdin.
 
     The CLI (and anything it started) is killed whenever this does not return normally: a cancel,
     the timeout, or an exception anywhere — also one raised by ``on_wait`` (a progress callback
-    raises :class:`Cancelled` when the job is cancelled)."""
+    raises :class:`Cancelled` when the job is cancelled).  A CLI inside WSL is stopped there too."""
+    name = Path(inv.argv[0]).name
     try:
         # its own process group, so the whole tree can be stopped
-        proc = subprocess.Popen(command(cmd), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(command(inv.argv), cwd=inv.cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                                env={**os.environ, "NO_COLOR": "1"}, **NEW_GROUP)
+                                env={**os.environ, "NO_COLOR": "1", "WSL_UTF8": "1"}, **NEW_GROUP)
     except OSError as e:
-        raise LlmError(f"无法启动 {cmd[0]}：{e}") from e
+        raise LlmError(f"无法启动 {name}：{e}") from e
     out: dict[str, str] = {}
 
     def talk() -> None:
@@ -143,15 +156,34 @@ def _run(cmd: list[str], prompt: str, cwd: str, timeout: float, cancel: Optional
             if cancel is not None and cancel.cancelled:
                 raise Cancelled()
             if waited > timeout:
-                raise LlmError(f"{Path(cmd[0]).name} 超过 {int(timeout)} 秒没有返回")
+                raise LlmError(f"{name} 超过 {int(timeout)} 秒没有返回")
             if on_wait is not None and t.is_alive():
                 on_wait(waited)
         done = True
     finally:
         if not done or proc.poll() is None:
+            locate.stop_wsl(inv)
             _kill_tree(proc)
             t.join(5)
     return proc.returncode, out.get("o", ""), out.get("e", "")
+
+
+def _cli(cfg: AiSettings, provider: str, args: list[str], prompt: str, cancel, on_wait) -> tuple[int, str, str, str]:
+    """Run Claude Code / Codex from where the settings say: (exit code, stdout, stderr, last message
+    written to ``locate.OUT_FILE`` when the args name it)."""
+    choice = getattr(cfg, f"{provider}_cli")
+    loc, why = locate.resolve(provider, choice.where, choice.path)
+    if loc is None:
+        raise LlmError(why)
+    with tempfile.TemporaryDirectory(prefix="kara-ai-") as td:
+        inv = locate.invocation(loc, args, cfg.timeout_s, td)
+        code, o, e = _run(inv, prompt, cfg.timeout_s, cancel, on_wait)
+        if inv.wsl:
+            o, last = locate.split_output(o)
+        else:
+            f = Path(td) / "last.txt"
+            last = f.read_text(encoding="utf-8") if f.exists() else ""
+    return code, o, e, last
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -168,14 +200,10 @@ def _tail(s: str, n: int = 400) -> str:
 
 
 def _claude(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
-    exe = shutil.which("claude")
-    if exe is None:
-        raise LlmError("没有找到 claude 命令：请先安装 Claude Code 并登录")
-    cmd = [exe, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
+    args = ["-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
     if cfg.model:
-        cmd.append(f"--model={cfg.model}")  # one argument: a name starting with "-" is never read as an option
-    with tempfile.TemporaryDirectory(prefix="kara-ai-") as td:
-        code, o, e = _run(cmd, prompt, td, cfg.timeout_s, cancel, on_wait)
+        args.append(f"--model={cfg.model}")  # one argument: a name starting with "-" is never read as an option
+    code, o, e, _ = _cli(cfg, "claude", args, prompt, cancel, on_wait)
     try:
         data = json.loads(o)
     except json.JSONDecodeError:
@@ -188,18 +216,12 @@ def _claude(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
 
 
 def _codex(cfg: AiSettings, prompt: str, cancel, on_wait) -> LlmReply:
-    exe = shutil.which("codex")
-    if exe is None:
-        raise LlmError("没有找到 codex 命令：请先安装 Codex 并登录")
-    with tempfile.TemporaryDirectory(prefix="kara-ai-") as td:
-        last = Path(td) / "last.txt"
-        cmd = [exe, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "--color", "never",
-               "-o", str(last)]
-        if cfg.model:
-            cmd.append(f"--model={cfg.model}")
-        cmd.append("-")
-        code, o, e = _run(cmd, prompt, td, cfg.timeout_s, cancel, on_wait)
-        text = last.read_text(encoding="utf-8") if last.exists() else ""
+    args = ["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "--color", "never",
+            "-o", locate.OUT_FILE]
+    if cfg.model:
+        args.append(f"--model={cfg.model}")
+    args.append("-")
+    code, o, e, text = _cli(cfg, "codex", args, prompt, cancel, on_wait)
     if code != 0 or not text.strip():
         raise LlmError(f"codex 执行失败（退出码 {code}）：{_tail(e or o)}")
     model = cfg.model
