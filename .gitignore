@@ -38,4 +38,5 @@ frontend/*.tsbuildinfo
 
 # promo / tutorial video material (kept local)
 /intro_video/
+/intro_video_v1.1/
 /experiments/
