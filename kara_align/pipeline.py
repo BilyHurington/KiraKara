@@ -1239,7 +1239,7 @@ def stage_export(q, task, cfg, cancel, progress):
         _warn(task, "没有人声分轨，视频使用原声")
         audio = "original"
     out = run_heavy(lambda: S.karaoke_burn(h, background="auto", audio=audio, quality=video.quality,
-                                           vocal_keep_pct=video.vocal_keep_pct, tag=task.id[-6:],
+                                           vocal_keep_pct=video.vocal_keep_pct,
                                            cancel=cancel, progress=progress),
                     lambda m: progress(0.0, m), cancel, holder=_holder(task, "生成视频"))
     for w in out.get("warnings") or []:

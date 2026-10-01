@@ -371,8 +371,10 @@ def test_burn_reduced_vocals_uses_its_own_level(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "burn", fake_burn)
     S.set_karaoke_style(h, {**h.project.karaoke.model_dump(mode="json"), "output": {"vocal_keep_pct": 30}})
     out = S.karaoke_burn(h, background="black", audio="mix")
-    assert out["filename"].endswith("-vocal30.mp4")  # the karaoke page's own level
-    assert S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=0)["filename"].endswith("-vocal0.mp4")
+    assert re.fullmatch(r"k-karaoke-vocal30-\d{8}-\d{6}\.mp4", out["filename"])  # the karaoke page's own level
+    again = S.karaoke_burn(h, background="black", audio="mix")["filename"]
+    assert again != out["filename"] and (h.dir / "exports" / out["filename"]).exists()  # never overwritten
+    assert "-karaoke-vocal0-" in S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=0)["filename"]
     assert h.project.mix.vocal_keep_pct == 80.0  # Export page settings untouched
     with pytest.raises(S.ServiceError):
         S.karaoke_burn(h, background="black", audio="mix", vocal_keep_pct=150)
@@ -785,3 +787,16 @@ def test_alternating_rows_share_one_indent_that_keeps_the_staircase():
     assert alternate_insets(short, [g(600, "left"), g(700, "right")], indent, avail) == [indent, indent]
     # a line longer than the room goes all the way to its edge
     assert alternate_insets([laid[0], laid[1]], [g(1500, "left"), g(400, "right")], indent, avail) == [0.0, 0.0]
+
+
+def test_export_names_never_repeat(tmp_path):
+    h = _project(tmp_path)
+    h.project.name = "My.Song / AC:DC"
+    a = S.export_path(h, S._export_stem(h) + "-karaoke", ".mp4")
+    assert re.fullmatch(r"My\.Song _ AC_DC-karaoke-\d{8}-\d{6}\.mp4", a.name)
+    a.write_bytes(b"x")
+    b = S.export_path(h, S._export_stem(h) + "-karaoke", ".mp4")  # the same second: numbered
+    assert b != a and (b.name.endswith("-2.mp4") or b.name[:-4] != a.name[:-4])
+    # one still being written (its part file) also counts as taken
+    b.with_name(f".{b.stem}.part.mp4").write_bytes(b"")
+    assert S.export_path(h, S._export_stem(h) + "-karaoke", ".mp4") != b

@@ -205,7 +205,7 @@ Mix rule (same in browser and export): `mix = master × (p/100·V + q/100·I)`; 
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/api/projects/{pid}/exports` | `[{filename, url, size, modified}]`: files in the project's `exports/` folder, newest first (partial files whose name starts with `.` are left out) |
+| GET | `/api/projects/{pid}/exports` | `[{filename, url, size, modified}]`: files in the project's `exports/` folder, newest first (partial files whose name starts with `.` are left out). Every export gets a new name, so an earlier one is never overwritten: `<song>-karaoke[-vocal<N>\|-noaudio]-<YYYYMMDD-HHMMSS>.mp4` (burn), `<video name>-vocal<N>-<time>.<ext>` (reduced-vocal video), `<song>-mix-v<N>-i<M>-<time>.wav` (mix); local time, `-2`, `-3` … when two are made in the same second |
 | GET | `/api/projects/{pid}/exports/{filename}` | the file (download); 404 for anything that is not a plain file name in `exports/` |
 
 Every `url` returned for an exported file (mix, video, burn, task video, this list) is

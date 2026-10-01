@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -278,7 +279,7 @@ def test_task_runs_from_upload_to_video(tmp_path, monkeypatch):
     assert (k.timing.lead_in_ms, k.timing.hold_ms, k.layout.margin_v) == (4000, 2000, 40)
     video = h.dir / "exports" / t.outputs["video"]["filename"]
     assert video.exists() and video.stat().st_size > 1000
-    assert video.name.endswith(f"-{t.id[-6:]}.mp4")  # its own name: later burns never overwrite it
+    assert re.fullmatch(r".+-karaoke-\d{8}-\d{6}(-\d+)?\.mp4", video.name)  # its own name: later burns never overwrite it
     # the queue survives a restart; finished tasks stay listed
     q2 = P.TaskQueue(S.Workspace(tmp_path / "projects"))
     deadline = time.time() + 10  # (the final state reaches the disk just after the task finishes)

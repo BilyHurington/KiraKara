@@ -1018,7 +1018,8 @@ def export_video(h: ProjectHandle, settings: dict, cancel: Optional[CancelToken]
         s = h.project.mix
         stem = Path(video.filename or "video").stem
         # the extension is added by mux_audio (a name with dots, "My.Song", stays whole)
-        base = h.dir / "exports" / f"{stem}-vocal{int(round(s.vocal_keep_pct))}"
+        named = export_path(h, f"{stem}-vocal{int(round(s.vocal_keep_pct))}", video.container or ".mp4")
+        base = named.with_name(named.name[: -len(video.container or ".mp4")])
         out = mux_audio(vpath, Path(mix["path"]), base, offset_s=video.audio_offset_s, container=video.container,
                         cancel=cancel)
     return {"filename": out.name, "report": {**mix["report"], "video": {"container": out.suffix,
@@ -1028,6 +1029,14 @@ def export_video(h: ProjectHandle, settings: dict, cancel: Optional[CancelToken]
 # ---------------------------------------------------------------------------
 # karaoke subtitles
 # ---------------------------------------------------------------------------
+
+
+def _export_stem(h: ProjectHandle) -> str:
+    """The song's name as the start of an export's file name (no path separators)."""
+    import re
+
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", (h.project.name or "").strip()).strip(". ")
+    return name[:80] or "song"
 
 
 def set_karaoke_style(h: ProjectHandle, style: dict) -> None:
@@ -1458,7 +1467,7 @@ def karaoke_preview(h: ProjectHandle, t_ms: int, style: Optional[dict] = None, b
 
 
 def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "original", quality: str = "standard",
-                 vocal_keep_pct: Optional[float] = None, tag: str = "",
+                 vocal_keep_pct: Optional[float] = None,
                  cancel: Optional[CancelToken] = None, progress: Optional[Callable[[float, str], None]] = None) -> dict:
     """Burn the karaoke subtitles into a video (the background, the source video, or black).
 
@@ -1484,13 +1493,13 @@ def karaoke_burn(h: ProjectHandle, *, background: str = "auto", audio: str = "or
     # the ASS is laid out for exactly that frame
     size = even_size(frame_size(video, resolution(h.project)) if video else resolution(h.project))
     text, warnings = build_ass(h.project, r, k, time_offset_ms=offset_s * 1000, size=size)
-    stem = Path((h.project.video.filename if video else None) or h.project.name or "karaoke").stem
+    stem = Path(h.project.video.filename).stem if video and h.project.video.filename else _export_stem(h)
     pct = float(k.output.vocal_keep_pct if vocal_keep_pct is None else vocal_keep_pct)
     if not 0.0 <= pct <= 100.0:
         raise ServiceError("人声保留比例必须在 0–100% 之间")
     suffix = {"original": "", "mix": f"-vocal{int(round(pct))}", "none": "-noaudio"}[audio]
-    # ``tag`` gives a video its own name (a simple-mode task's video is never overwritten by later burns)
-    out = h.dir / "exports" / f"{stem}-karaoke{suffix}{'-' + tag if tag else ''}.mp4"
+    # each burn its own file (export_path): an earlier video, a simple-mode task's too, is never overwritten
+    out = export_path(h, f"{stem}-karaoke{suffix}", ".mp4")
     with tempfile.TemporaryDirectory() as td:
         audio_file: Optional[Path] = None
         use_video_audio = False
@@ -1704,6 +1713,22 @@ def mix_bus_gain(h: ProjectHandle, settings: dict) -> dict:
     return {"bus_gain": rep.bus_gain, "peak_before": rep.peak_before}
 
 
+def export_path(h: ProjectHandle, base: str, ext: str) -> Path:
+    """A new file in the project's exports folder, never an earlier export's name: ``base`` (song and
+    kind, e.g. "わたぐも-karaoke-vocal40") + the local time it was made + ``ext``; ``-2``, ``-3`` …
+    when another one was made in the same second.  Sorted by name, they are sorted by time."""
+    import datetime as dt
+
+    folder = h.dir / "exports"
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = f"{base}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    path, n = folder / f"{stem}{ext}", 1
+    while path.exists() or path.with_name(f".{path.stem}.part{ext}").exists():
+        n += 1
+        path = folder / f"{stem}-{n}{ext}"
+    return path
+
+
 def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None, *, save: bool = True,
                cancel: Optional[CancelToken] = None) -> dict:
     from .audio.mix import export_mix_wav
@@ -1711,8 +1736,8 @@ def export_mix(h: ProjectHandle, settings: dict, out_path: Optional[Path] = None
     v, i = require_stems(h, "导出混音")
     s = mix_settings(h.project.mix, settings)
     orig = h.project.asset("original")
-    name = f"mix-v{int(round(s.vocal_keep_pct))}-i{int(round(s.instrumental_pct))}.wav"
-    out = Path(out_path) if out_path else h.dir / "exports" / name
+    out = Path(out_path) if out_path else export_path(
+        h, f"{_export_stem(h)}-mix-v{int(round(s.vocal_keep_pct))}-i{int(round(s.instrumental_pct))}", ".wav")
     out.parent.mkdir(parents=True, exist_ok=True)
     original_n = None
     if orig is not None and orig.sample_rate == v.sample_rate:
