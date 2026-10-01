@@ -453,7 +453,8 @@ def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
     """Give each line a display window and a slot (rows stacked on screen); return how many
     lines had to go to an extra row.
 
-    Lines take the rows in turn.  A line appears ``lead_in_ms`` before its first syllable
+    Lines take the rows in turn; a line with countdown dots takes the top row (when it is free) and
+    the turn goes on from there.  A line appears ``lead_in_ms`` before its first syllable
     (with early show: as soon as its row is free, at most ``early_max_ms`` ahead), but never
     before the previous line in its row has gone; that line's hold is cut short if needed so
     each line is visible at least 0.2 s before it is sung.  A row whose line is still being
@@ -489,7 +490,11 @@ def schedule(lines: list[LaidLine], style: KaraokeStyle) -> int:
         free = [s for s in range(n) if s not in last or last[s].end <= ll.start]
         natural = turn % n
         if free:
-            if natural in free and appear(natural) <= ll.start - 200:
+            if ll.countdown_ms and 0 in free:
+                # a line with countdown dots takes the top row: its dots sit above it, where no other
+                # line is (in a lower row they would cover the line above); the next ones go on in turn
+                slot = 0
+            elif natural in free and appear(natural) <= ll.start - 200:
                 slot = natural
             else:
                 slot = min(free, key=lambda s: (appear(s), s != natural, s))

@@ -93,3 +93,22 @@ def test_simple_mode_switches():
     assert (style.countdown.intro, style.countdown.interlude) == (False, True)
     style, _, _ = resolve_task_style(simple, app_settings.TaskStyleOptions())
     assert (style.countdown.intro, style.countdown.interlude) == (True, True)  # as the style says
+
+
+def test_a_line_with_a_countdown_takes_the_top_row():
+    st = KaraokeStyle()
+    st.layout.lines = 2
+    st.countdown.intro = False
+    # the first line takes the top row; after a long pause the next one would take the lower row in
+    # turn, and its dots would cover the line above: it takes the top row, the one after it the lower
+    laid = _laid((1000, 3000), (12000, 14000), (14500, 16000), (16500, 18000))
+    A.plan_countdowns(laid, st)
+    A.schedule(laid, st)
+    assert [ll.countdown_ms > 0 for ll in laid] == [False, True, False, False]
+    assert [ll.slot for ll in laid] == [0, 0, 1, 0]
+    # a countdown set on a line by hand, while the top row is still being sung: in turn as before
+    laid = _laid((1000, 5000), (4000, 6000))
+    laid[1].line.countdown = True
+    A.plan_countdowns(laid, st)
+    A.schedule(laid, st)
+    assert [ll.slot for ll in laid] == [0, 1]
