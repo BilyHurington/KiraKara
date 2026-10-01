@@ -245,6 +245,8 @@ export interface KaraokeStyle {
   translation: {
     enabled: boolean; position: 'opposite' | 'block' | 'line'; size_pct: number; font: string; bold: boolean;
     color: string; outline_color: string; outline: number; shadow: number; glow: boolean;
+    /** with singers: the glow in the line's singers' colours (several: blended left to right); the text keeps its colour */
+    singer_glow?: boolean;
   };
   glow: { enabled: boolean; color_unsung: string; color_sung: string; size: number; blur: number; strength: number; ruby: boolean };
   timing: {

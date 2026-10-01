@@ -164,7 +164,7 @@ export function SingerList({ singers, onChange, onRemove, onUsePreset, usage, gl
             {singers.direction === 'vertical'
               ? `每个字${singers.mix === 'split' ? '上下分成几段' : '从上到下渐变'}：第一个人在上，依次往下（如 1+2：上半 1 号、下半 2 号）。`
               : `一起唱的一整段${singers.mix === 'split' ? '从左到右分成几段' : '从左到右渐变'}：第一个人在左，依次往右。`}
-            组合可以有自己的效果（在上面的组合里选）。翻译用第一个人的颜色。
+            组合可以有自己的效果（在上面的组合里选）。翻译的文字不变色，荧光跟着这一行的演唱者（几个人时从左到右渐变）。
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-muted">注音</span>

@@ -304,6 +304,7 @@ order, takes the combination's look; the same singers in the same order twice is
 the first free one in that order. A key that is not usable or used twice, or a combination of fewer than two singers, is
 refused when saved; when loaded the key is cleared (the combination dropped). Saved before keys existed: singer n has key n
 (1–9), a combination's number key becomes that character.
+A translation keeps its own colours (`KTrans`); with `translation.singer_glow` (default true) its glow takes the line's singers' glow colours, several blended from left to right in the order they sing (never top to bottom); false: the translation's own glow.
 Who sings is kept in the lyrics: `Line.singers` (numbers, 1-based; several = together; empty = the style's own colours) and
 `Line.singer_spans: [{start, end, singers}]` (character ranges of `Line.text` sung by others than the line's singers;
 blanks belong to nobody: inside a part they join it, between parts they keep the line's own singers). They

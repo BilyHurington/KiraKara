@@ -786,6 +786,9 @@ class KaraokeTranslation(_KaraokeBase):
     outline: float = Field(default=3.0, ge=0, le=12)
     shadow: float = Field(default=1.5, ge=0, le=12)
     glow: bool = True  # also glow when the glow effect is on
+    # with singers: the glow takes the colours of whoever sings the line (several: blended from left to
+    # right, in the order they sing); the text keeps its own colour.  Off: the translation's own look only
+    singer_glow: bool = True
 
 
 class KaraokeGlow(_KaraokeBase):

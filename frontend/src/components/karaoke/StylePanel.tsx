@@ -320,6 +320,10 @@ export function StylePanel({ style, onChange, fonts, defaultFont, defaultSection
             <Row label="描边宽度"><Num name="翻译描边" value={Tr.outline} max={12} step={0.5} onChange={(v) => patch((s) => { s.translation.outline = v; })} /></Row>
             <Row label="阴影距离"><Num name="翻译阴影" value={Tr.shadow} max={12} step={0.5} onChange={(v) => patch((s) => { s.translation.shadow = v; })} /></Row>
             <Switch checked={Tr.glow} onChange={(v) => patch((s) => { s.translation.glow = v; })} label="开启荧光边缘时，翻译也发光" />
+            {Tr.glow && (
+              <Switch checked={Tr.singer_glow ?? true} onChange={(v) => patch((s) => { s.translation.singer_glow = v; })}
+                label={<span>荧光跟随这一句的演唱者<span className="ml-1 text-xs text-muted">（多人演唱时：几个人的颜色从左到右渐变；文字颜色不变）</span></span>} />
+            )}
           </div>
         </Section>
 

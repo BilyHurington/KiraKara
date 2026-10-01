@@ -173,7 +173,7 @@ def test_singers_get_their_own_styles_and_bands(tmp_path):
     h = _project(tmp_path)
     _two_singers(h)
     text, _ = S.karaoke_ass(h)
-    assert re.search(r"^Style: KMain_1,", text, re.M) and re.search(r"^Style: KTrans_2,", text, re.M)
+    assert re.search(r"^Style: KMain_1,", text, re.M) and not re.search(r"^Style: KTrans_", text, re.M)
     # 窓: singer 1 alone (its style, its name as the event's actor; commas left out of the name)
     assert any(",KMain_1,Ann," in e for e in _events(text, "窓"))
     assert any(",KMain_2,Bo b," in e for e in _events(text, "}桜"))
@@ -182,8 +182,8 @@ def test_singers_get_their_own_styles_and_bands(tmp_path):
     assert [e.split(",")[3] for e in ni] == ["KMain_1", "KMain_2"]
     (a0, a1), (b0, b1) = (tuple(map(int, re.search(r"\\clip\(0,(\d+),1920,(\d+)\)", e).groups())) for e in ni)
     assert a0 == 0 and a1 == b0 and b1 == 1080
-    # the translation in the line's first singer's colours
-    assert any(",KTrans_1," in e for e in _events(text, "窗外"))
+    # the translation keeps its own colours (readable), named after the line's first singer
+    assert any(",KTrans,Ann," in e for e in _events(text, "窗外"))
 
 
 def test_following_sweep_bands_partition_each_chunk(tmp_path):
@@ -422,3 +422,34 @@ def test_singer_presets_over_the_api(tmp_path, monkeypatch):
     assert c.post(f"/api/projects/{pid}/karaoke/singers/preset", json={"id": "nope"}).status_code == 404
     assert c.delete(f"/api/karaoke/singer-presets/{sp['id']}").json() == {"ok": True}
     assert c.get("/api/karaoke/singer-presets").json() == []
+
+
+def test_a_translations_glow_takes_the_singers_colours_left_to_right(tmp_path):
+    h = _project(tmp_path)
+    _two_singers(h)  # 窓 Ann, に舞う both, 桜 Bo; split top to bottom
+    h.project.karaoke.glow.enabled = True
+    text, _ = S.karaoke_ass(h)
+    glows = [e for e in _events(text, "窗外") if ",KGlow," in e]
+    rects = [tuple(map(int, re.search(r"\\clip\((\d+),(\d+),(\d+),(\d+)\)", e).groups())) for e in glows]
+    # strips side by side, each the whole height (never top to bottom), blending Ann's glow into Bo's
+    assert len(glows) >= 4 and all(r[1] == 0 and r[3] == 1080 for r in rects)
+    assert [r[0] for r in rects] == sorted(r[0] for r in rects)
+    # under each line too
+    h.project.karaoke.translation.position = "line"
+    under = [e for e in _events(S.karaoke_ass(h)[0], "窗外") if ",KGlow," in e]
+    assert len(under) >= 4 and all("\\clip(" in e for e in under)
+    h.project.karaoke.translation.position = "opposite"
+    colours = [re.search(r"\\3c(&H\w+&)", e).group(1) for e in glows]
+    assert len(set(colours)) >= 3
+    # the text itself: the translation's own colour
+    assert [e for e in _events(text, "窗外") if ",KTrans," in e]
+    # one singer: that singer's glow, no strips; switched off: the translation's own glow
+    l1 = h.project.lyrics.lines[0]
+    l1.singers, l1.singer_spans = [2], []
+    text, _ = S.karaoke_ass(h)
+    one = [e for e in _events(text, "窗外") if ",KGlow," in e]
+    assert len(one) == 1 and "\\clip" not in one[0]
+    h.project.karaoke.translation.singer_glow = False
+    text, _ = S.karaoke_ass(h)
+    own = [e for e in _events(text, "窗外") if ",KGlow," in e]
+    assert len(own) == 1 and own[0] != one[0] and ",KTrans,," in [e for e in _events(text, "窗外") if "KTrans" in e][0]
