@@ -121,6 +121,7 @@ export function SingersPage() {
   const downOnWord = (li: number, wi: number, e: ReactMouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    dropFocus();
     const mod = e.metaKey || e.ctrlKey;
     if (e.shiftKey && anchor.current) {
       select(union(mod ? sel : new Map(), wordRange(rows, anchor.current, [li, wi])));
@@ -400,6 +401,11 @@ export function SingersPage() {
 
 // ------------------------------------------------------------------ one line of the lyrics
 
+/** Selecting with the mouse leaves no control focused: Space then plays (a focused button would take it). */
+function dropFocus() {
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+}
+
 function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, names }: {
   row: Row; li: number; sel: Selection; colorOf: (n: number) => string | undefined; singers: KaraokeSingers;
   onLine: (li: number, e: ReactMouseEvent) => void; onWord: (li: number, wi: number, e: ReactMouseEvent) => void;
@@ -427,7 +433,8 @@ function LyricRow({ row, li, sel, colorOf, singers, onLine, onWord, onSeek, name
   return (
     <div data-row={line.id} className={cn('group flex scroll-mt-32 scroll-mb-8 items-start gap-2 rounded-lg px-2 py-1',
       full ? 'bg-accent-soft' : 'hover:bg-surface-2/60 data-[playing]:bg-surface-2/70')}>
-      <button type="button" onClick={(e) => onLine(li, e)} aria-pressed={full} aria-label={`选择第 ${index} 行`}
+      <button type="button" onMouseDown={(e) => { e.preventDefault(); dropFocus(); }} onClick={(e) => onLine(li, e)}
+        aria-pressed={full} aria-label={`选择第 ${index} 行`}
         className="focus-ring mt-1 w-8 shrink-0 rounded text-right font-mono text-xs text-subtle hover:text-fg">
         {index}
       </button>

@@ -227,6 +227,22 @@ describe('singers page', () => {
     await waitFor(() => expect(container.querySelector('[data-row][data-playing]')?.getAttribute('data-row')).toBe('L0002'));
   });
 
+  it('selecting with the mouse leaves no control focused, so Space plays', async () => {
+    seedStore('singers');
+    server();
+    const { container } = renderUI(<SingersPage />);
+    const name = await screen.findByDisplayValue('Ann');
+    name.focus();
+    const line = screen.getByRole('button', { name: '选择第 1 行' });
+    fireEvent.mouseDown(line);
+    fireEvent.click(line);
+    expect(screen.getByRole('status')).toHaveTextContent('已选 1 行');
+    expect(document.activeElement).toBe(document.body);
+    line.focus();
+    fireEvent.mouseDown(container.querySelector('[data-word="1:2"]')!);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('a space cannot be selected', async () => {
     const pv = fixturePV();
     const l = pv.project.lyrics.lines[0];
