@@ -3,7 +3,7 @@
 // outputs, project-switch resets, colour-template request ordering, undo
 // robustness, readable errors and the waveform's on-demand drawing.
 
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -244,9 +244,10 @@ const job = (over: Partial<Job>): Job => ({
 });
 
 describe('job outputs survive leaving the page (F-H3)', () => {
-  function karaokeRoutes(jobs: Job[]) {
+  function karaokeRoutes(jobs: Job[], exports: { filename: string; url: string; size: number; modified: string }[] = []) {
     return {
       [`GET /api/projects/${PID}/jobs`]: () => jobs,
+      [`GET /api/projects/${PID}/exports`]: () => exports,
       [`GET /api/projects/${PID}/karaoke/info`]: () => ({ fields: {}, labels: {}, text: null }),
       [`GET /api/projects/${PID}/karaoke`]: () => plainStyle(),
       [`POST /api/projects/${PID}/karaoke/preview`]: () => new Response(new Blob(['png']), { status: 200 }),
@@ -267,9 +268,29 @@ describe('job outputs survive leaving the page (F-H3)', () => {
     ]));
     const { KaraokePage } = await import('./Karaoke');
     renderUI(<KaraokePage />);
-    expect(await screen.findByText('song-karaoke.mp4')).toBeInTheDocument();
+    expect((await screen.findAllByText('song-karaoke.mp4')).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /下载视频/ })).toBeInTheDocument();
     expect(screen.queryByText('x.mp4')).toBeNull();
+  });
+
+  it('below the burn: the videos made before, the newest three, the rest folded', async () => {
+    seedStore('karaoke');
+    (URL as any).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = vi.fn();
+    const file = (name: string, day: number) => ({ filename: name, url: `/api/projects/${PID}/exports/${name}`, size: 50 * 1024 * 1024,
+      modified: `2026-09-${String(day).padStart(2, '0')}T10:00:00Z` });
+    mockApi(karaokeRoutes([], [file('a-karaoke-5.mp4', 25), file('a-karaoke-4.mp4', 24), file('mix.wav', 23),
+      file('a-karaoke-3.mp4', 22), file('a-karaoke-2.mp4', 21), file('a-karaoke-1.mp4', 20)]));
+    const { KaraokePage } = await import('./Karaoke');
+    renderUI(<KaraokePage />);
+    const card = (await screen.findByText('导出过的视频')).closest('[class*="radius-card"]') as HTMLElement;
+    expect(within(card).getByText('a-karaoke-5.mp4')).toBeInTheDocument();
+    expect(within(card).getByText('a-karaoke-3.mp4')).toBeInTheDocument();
+    expect(within(card).queryByText('a-karaoke-2.mp4')).toBeNull();
+    expect(within(card).queryByText('mix.wav')).toBeNull();  // only the subtitled videos here
+    fireEvent.click(within(card).getByRole('button', { name: '显示更多（还有 2 个）' }));
+    expect(within(card).getByText('a-karaoke-1.mp4')).toBeInTheDocument();
+    expect(within(card).getAllByRole('button', { name: /下载/ })).toHaveLength(5);
   });
 
   it('the export page restores the mix / video links and lists recent exports', async () => {

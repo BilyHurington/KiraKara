@@ -28,6 +28,14 @@ def _song_ref(s: dict) -> SongRef:
     return SongRef("netease", str(s.get("id")), s.get("name", ""), artists, album, s.get("dt") or s.get("duration"))
 
 
+def _cover(s: dict) -> Optional[str]:
+    """The album picture (https, 1000 px)."""
+    pic = (s.get("al") or s.get("album") or {}).get("picUrl")
+    if not isinstance(pic, str) or not pic.startswith(("http://", "https://")):
+        return None
+    return "https://" + pic.split("://", 1)[1].split("?")[0] + "?param=1000y1000"
+
+
 def normalize_netease_lrc(text: str) -> str:
     """Convert NetEase JSON credit lines (``{"t":0,"c":[{"tx":..}]}``) to LRC lines.
 
@@ -71,7 +79,7 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
         if own:
             client.close()
     song = FetchedSong("netease", str(song_id), ref.title, ref.artists, ref.album, ref.duration_ms,
-                       url=f"{BASE}/song?id={song_id}")
+                       url=f"{BASE}/song?id={song_id}", cover_url=_cover(songs[0]))
     for key, name in (("lrc", "original"), ("tlyric", "translation"), ("romalrc", "romanization")):
         text = ((lyr.get(key) or {}).get("lyric") or "").strip()
         if text:

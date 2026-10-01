@@ -946,3 +946,37 @@ def test_task_effect_is_chosen_on_its_own():
         style, _, _ = P.resolve_task_style(simple, glow.model_copy(update={"effects": kind}))
         assert style.effects.kind == kind
         assert style.glow.enabled == base.glow.enabled  # the rest of the template stays
+
+
+def test_audio_with_lyrics_from_a_link_gets_the_cover_as_its_picture(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from kara_align.karaoke import cover as C
+    from kara_align.lyrics import fetch as F
+    from kara_align.lyrics.fetch.types import FetchedSong
+
+    _scripted_import(monkeypatch)
+    AS.update({"simple": {"separate": False, "auto_export": False}})
+    song = FetchedSong("netease", "7", "君と", ["A"], tracks={"original": "きみと\nあるいた\nそら\n"},
+                       has_timestamps={"original": False}, cover_url="https://p1.music.126.net/c.jpg")
+    monkeypatch.setattr(S, "fetch_link", lambda text: {"kind": "song", "song": {"platform": "netease", "song_id": "7",
+                                                                               "title": "君と", "artists": ["A"]}})
+    monkeypatch.setattr(F, "fetch_song", lambda p, i: song)
+    jpg = io.BytesIO()
+    Image.new("RGB", (300, 300), (200, 30, 90)).save(jpg, "JPEG")
+    monkeypatch.setattr(C, "fetch_cover", lambda url: jpg.getvalue())
+    q = P.TaskQueue(S.Workspace(tmp_path / "projects"))
+    t = q.add(media=_wav(tmp_path / "s.wav"), filename="s.wav", lyrics="https://music.163.com/song?id=7", mode="plain")
+    t = _wait(q, t.id)
+    assert t.status == "succeeded", t.error
+    h = q.ws.get(t.project_id)
+    assert h.project.background is not None and h.project.background.filename == "歌曲封面（模糊背景）.jpg"
+    # no cover to be had: a note, and the black picture
+    monkeypatch.setattr(C, "fetch_cover", lambda url: (_ for _ in ()).throw(C.CoverError("无法下载封面（HTTP 404）")))
+    t2 = _wait(q, q.add(media=_wav(tmp_path / "s2.wav"), filename="s2.wav", lyrics="https://music.163.com/song?id=7",
+                        mode="plain").id)
+    assert t2.status == "succeeded" and any("没能用歌曲封面做背景" in w for w in t2.warnings)
+    assert q.ws.get(t2.project_id).project.background is None
+    q.shutdown()

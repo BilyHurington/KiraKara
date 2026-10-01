@@ -309,6 +309,7 @@ def project_view(h: ProjectHandle) -> dict:
                 "capability_warnings": cap,
                 "audio": audio,
                 "picture": picture(h),
+                "cover": song_source(p) is not None,
                 "singer_markers": _marker_count(p),
             },
         }
@@ -1322,6 +1323,46 @@ def set_background(h: ProjectHandle, src_path: Path, filename: Optional[str] = N
         h.save()
         drop_replaced(h, [old])
     return bg
+
+
+def song_source(p: Project) -> Optional[tuple[str, str, Optional[str]]]:
+    """(platform, song id, cover url) of the music link the lyrics came from (the latest one)."""
+    for snap in reversed(p.sources):
+        if snap.origin in ("netease", "qq") and snap.platform_song_id:
+            return snap.origin, snap.platform_song_id, (snap.fetched_meta or {}).get("cover_url")
+    return None
+
+
+def cover_background(h: ProjectHandle) -> BackgroundAsset:
+    """The song's cover, blurred behind the cover itself, as the picture behind the subtitles
+    (karaoke/cover.py).  The cover comes from the music platform the lyrics were fetched from."""
+    import tempfile
+
+    from .karaoke.cover import CoverError, blurred_cover, fetch_cover
+
+    with h.lock:
+        src = song_source(h.project)
+    if src is None:
+        raise ServiceError("歌词不是从网易云音乐 / QQ 音乐链接获取的，没有封面")
+    platform, song_id, url = src
+    try:
+        if not url:  # lyrics fetched before covers were kept: ask the platform again
+            from .lyrics.fetch import fetch_song
+
+            url = fetch_song(platform, song_id).cover_url
+        if not url:
+            raise ServiceError("音乐平台没有这首歌的封面")
+        jpg = blurred_cover(fetch_cover(url))
+    except CoverError as e:
+        raise ServiceError(str(e)) from e
+    except ServiceError:
+        raise
+    except Exception as e:
+        raise ServiceError(f"无法获取封面：{e}") from e
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "cover.jpg"
+        path.write_bytes(jpg)
+        return set_background(h, path, filename="歌曲封面（模糊背景）.jpg")
 
 
 def clear_background(h: ProjectHandle) -> None:

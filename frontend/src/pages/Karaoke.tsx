@@ -1,7 +1,7 @@
 // Step 7: karaoke subtitles — presets, settings, a live libass preview at any
 // moment, ASS download and one-click burn-in.
 
-import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Download, Film, Flame, Image as ImageIcon, Loader2, Sparkles, Subtitles, Trash2, Upload } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Crosshair, Disc3, Download, Film, Flame, Image as ImageIcon, Loader2, Sparkles, Subtitles, Trash2, Upload } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { fmtMs, fmtRelative, parseTime } from '@/lib/format';
@@ -13,6 +13,7 @@ import {
   ppath, resumeJobs, run, setPV, setStep, toast, trackJob, useActiveResult, useApp, useJob, useProject, useResult,
 } from '@/store/app';
 import { DownloadButton } from '@/components/DownloadButton';
+import { RecentExports } from '@/components/RecentExports';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, Input, PageHeader, Progress, Segmented, Select, SliderField, Tip,
 } from '@/components/ui';
@@ -181,6 +182,8 @@ export function KaraokePage() {
         <div className="min-w-0 space-y-6">
           <PreviewCard style={style} lines={lines} refreshKey={`${songInfo?.text ?? ''}|${lines.map((l) => l.countdown ?? '').join()}`} />
           <BurnCard style={style} patch={patch} beforeBurn={flush} />
+          <RecentExports jobKinds={['burn']} match={(n) => /-karaoke.*\.(mp4|mkv|mov)$/i.test(n)} first={3}
+            title="导出过的视频" description="这个项目生成过的带字幕视频，最新的在前。" />
         </div>
         {/* next to the preview from 1024 px on (not below the burn card), sticky while scrolling */}
         <div ref={styleCol} className="min-w-0 space-y-6 lg:sticky lg:top-4 lg:flex lg:max-h-[var(--fit-h)] lg:flex-col">
@@ -407,6 +410,15 @@ function BackgroundControl({ pic }: { pic: PictureInfo }) {
   const remove = () => run(async () => {
     setPV(await api.del<ProjectView>(ppath('/background')));
   }, '无法移除背景');
+  const [coverBusy, setCoverBusy] = useState(false);
+  const fromCover = () => run(async () => {
+    setCoverBusy(true);
+    try {
+      setPV(await api.post<ProjectView>(ppath('/background/cover'), {}));
+      toast('ok', '已用歌曲封面做背景', '封面模糊铺满画面，封面本身在上方居中');
+    } finally { setCoverBusy(false); }
+  }, '无法使用封面');
+  const hasCover = useApp((s) => !!s.pv?.view.cover);
   const bg = project.background;
   return (
     <div className="space-y-1.5 text-xs text-subtle">
@@ -422,6 +434,12 @@ function BackgroundControl({ pic }: { pic: PictureInfo }) {
         <Button size="xs" variant="outline" loading={busy} icon={<Upload className="size-3.5" />} onClick={() => input.current?.click()}>
           {bg ? '更换背景' : '选择背景…'}
         </Button>
+        {hasCover && (
+          <Button size="xs" variant="outline" loading={coverBusy} icon={<Disc3 className="size-3.5" />} onClick={() => void fromCover()}
+            title="从歌词所用的音乐链接取封面：模糊后铺满画面，封面本身放在上方居中">
+            用歌曲封面
+          </Button>
+        )}
         {bg && <Button size="xs" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => void remove()}>
           移除{project.video ? '（回到原视频）' : ''}
         </Button>}

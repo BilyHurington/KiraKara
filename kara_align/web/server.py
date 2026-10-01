@@ -842,6 +842,13 @@ def create_app(root: Optional[Path] = None, jobs: Optional[JobManager] = None,
                 raise HTTPException(400, _clean(str(e), td, name)) from e
         return view(h)
 
+    @app.post("/api/projects/{pid}/background/cover")
+    def background_from_cover(pid: str):
+        """The song's cover (from the music link of the lyrics), blurred, as the picture."""
+        h = handle(pid)
+        guard(S.cover_background, h)
+        return view(h)
+
     @app.delete("/api/projects/{pid}/background")
     def delete_background(pid: str):
         h = handle(pid)

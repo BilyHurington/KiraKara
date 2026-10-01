@@ -57,6 +57,7 @@ class FetchedSong:
     has_timestamps: dict[str, bool] = field(default_factory=dict)
     url: Optional[str] = None
     notes: list[str] = field(default_factory=list)
+    cover_url: Optional[str] = None  # the album cover on the platform (for a background picture)
 
     def to_snapshot(self, track: TrackName = "original") -> SourceSnapshot:
         """Source snapshot of one track, keeping platform provenance."""
@@ -78,5 +79,6 @@ class FetchedSong:
                 "duration_ms": self.duration_ms,
                 "track": track,
                 "has_timestamps": self.has_timestamps.get(track, False),
+                "cover_url": self.cover_url,
             },
         )

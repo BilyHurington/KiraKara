@@ -31,8 +31,10 @@ ALLOWED_HOSTS = frozenset({
     "y.qq.com",
     "i.y.qq.com",
     "c6.y.qq.com",
+    "y.gtimg.cn",  # QQ Music album covers
 })
-_ALLOWED_PATTERNS = (re.compile(r"^interface\d*\.music\.163\.com$"),)
+_ALLOWED_PATTERNS = (re.compile(r"^interface\d*\.music\.163\.com$"),
+                     re.compile(r"^p\d+\.music\.126\.net$"))  # NetEase album covers
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 

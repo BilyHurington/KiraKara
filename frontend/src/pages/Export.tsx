@@ -1,14 +1,15 @@
 // Step 7: exports. alignment.json is the complete standard output; other
 // formats may lose information and show explicit loss warnings.
 
-import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, History, Music2, Package, Sparkles, Subtitles } from 'lucide-react';
+import { Archive, Check, Copy, Download, Eye, FileJson, FileSpreadsheet, FileText, Film, Headphones, Music2, Package, Sparkles, Subtitles } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { cn, copyText, fmtMs, fmtRelative, ROLE_LABEL } from '@/lib/format';
-import type { ExportFile, ExportInline, Job } from '@/lib/types';
+import type { ExportInline, Job } from '@/lib/types';
 import { player, usePlayer } from '@/audio/player';
-import { ppath, resumeJobs, run, toast, trackJob, useApp, useFinishedJobs, useJob, useProject, useView } from '@/store/app';
+import { ppath, resumeJobs, run, toast, trackJob, useApp, useJob, useProject, useView } from '@/store/app';
 import { DownloadButton } from '@/components/DownloadButton';
+import { RecentExports as SharedRecentExports } from '@/components/RecentExports';
 import {
   Badge, Button, Callout, Card, CardBody, CardHeader, Dialog, EmptyState, Field, PageHeader, Segmented, Select, SliderField,
   Spinner, Tip,
@@ -211,39 +212,9 @@ function PreviewDialog({ preview, onClose, downloadUrl }: {
 
 /** Files in the project's exports folder (kept across server restarts), with their download links. */
 function RecentExports() {
-  const pid = useApp((st) => st.pid);
-  const done = useFinishedJobs(['burn', 'mix', 'video']).filter((j) => j.output?.url);
-  const [files, setFiles] = useState<ExportFile[] | null>(null);
-  const latest = done[0]?.id;
-  useEffect(() => {
-    if (!pid) return;
-    let stop = false;
-    api.get<ExportFile[]>(`/api/projects/${pid}/exports`)
-      .then((f) => { if (!stop) setFiles(Array.isArray(f) ? f : []); }).catch(() => undefined);
-    return () => { stop = true; };
-  }, [pid, latest]);  // listed again when a new export finishes
-  // the folder's files, plus outputs of this run's operations not listed yet
-  const listed = (files ?? []).filter((f) => /\.(mp4|wav|ass|lrc|csv|json)$/i.test(f.filename));
-  const fromJobs: ExportFile[] = done
-    .filter((j) => !listed.some((f) => f.filename === j.output.filename))
-    .map((j) => ({ filename: j.output.filename, url: j.output.url, size: -1, modified: j.finished ?? j.created }));
-  const shown = [...fromJobs, ...listed];
-  if (!shown.length) return null;
-  const kind = (name: string) => /-karaoke/.test(name) ? '带字幕的视频' : /\.wav$/i.test(name) ? '混音 WAV' : /\.mp4$/i.test(name) ? '降低人声的视频' : '导出文件';
   return (
-    <Card>
-      <CardHeader icon={<History className="size-4" />} title="最近导出"
-        description="项目 exports 文件夹里的视频、混音等文件（重启服务后仍在）。" />
-      <div className="p-2">
-        {shown.slice(0, 10).map((f) => (
-          <Row key={f.filename}
-            title={<span className="flex flex-wrap items-center gap-2">{kind(f.filename)}<span className="font-mono text-xs font-normal text-muted">{f.filename}</span></span>}
-            sub={f.size >= 0 ? `${fmtRelative(f.modified)} · ${(f.size / 1024 / 1024).toFixed(1)} MB` : fmtRelative(f.modified)}
-            action={<DownloadButton href={f.url} big filename={f.filename} size="xs" variant="outline" icon={<Download className="size-3.5" />}>下载</DownloadButton>}
-          />
-        ))}
-      </div>
-    </Card>
+    <SharedRecentExports jobKinds={['burn', 'mix', 'video']} match={(n) => /\.(mp4|wav|ass|lrc|csv|json)$/i.test(n)}
+      description="项目 exports 文件夹里的视频、混音等文件（重启服务后仍在）。" />
   );
 }
 

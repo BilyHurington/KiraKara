@@ -332,6 +332,8 @@ export interface ProjectView {
     /** ``outdated``: a stem separated from a replaced original (not usable) */
     audio: Partial<Record<Role, { asset_id: string; available: boolean; outdated?: boolean; duration_ms: number; sample_rate: number }>>;
     picture?: PictureInfo;
+    /** the lyrics came from a music link: its cover can become the picture (POST …/background/cover) */
+    cover?: boolean;
     /** lines starting with singer names ("A：…"), which the 演唱者 page can assign and take out */
     singer_markers?: number;
   };

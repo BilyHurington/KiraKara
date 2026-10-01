@@ -942,6 +942,13 @@ def stage_lyrics(q, task, cfg, cancel, progress):
         _warn(task, w)
     progress(0.7, "整理歌词与读音")
     S.apply_lyrics(h, pv["preview_id"])
+    if task.lyrics_kind == "link" and h.project.video is None and h.project.background is None:
+        # audio only, no picture of its own: the song's cover, blurred behind it
+        progress(0.75, "用歌曲封面做背景")
+        try:
+            S.cover_background(h)
+        except Exception as e:
+            _warn(task, f"没能用歌曲封面做背景（{e}），视频会是纯黑背景")
     if not h.project.lyrics.sung_lines():
         raise S.ServiceError("歌词里没有可以演唱的行")
     n = len(h.project.lyrics.sung_lines())

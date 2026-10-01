@@ -71,8 +71,11 @@ def get_song(song_id: str, client: Optional[SafeClient] = None) -> FetchedSong:
             client.close()
     if not isinstance(lyr, dict) or lyr.get("retcode", lyr.get("code", 0)) not in (0, None):
         raise FetchError("QQ 音乐：歌词获取失败")
+    mid = (info.get("album") or {}).get("mid") or info.get("albummid")
     song = FetchedSong("qq", ref.song_id, ref.title, ref.artists, ref.album, ref.duration_ms,
-                       url=f"https://y.qq.com/n/ryqq/songDetail/{ref.song_id}")
+                       url=f"https://y.qq.com/n/ryqq/songDetail/{ref.song_id}",
+                       cover_url=f"https://y.gtimg.cn/music/photo_new/T002R800x800M000{mid}.jpg"
+                       if isinstance(mid, str) and re.fullmatch(r"[A-Za-z0-9]+", mid) else None)
     for key, name in (("lyric", "original"), ("trans", "translation")):
         text = _decode_lyric(lyr.get(key))
         if text:
