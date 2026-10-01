@@ -103,8 +103,9 @@ export default function App() {
           <Sidebar />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />
-            <main className="min-h-0 flex-1 overflow-y-auto">
-              <div key={`${pid}-${step}`} className="mx-auto max-w-6xl animate-slide-up px-6 py-8 xl:px-10">
+            {/* keyed: another step / project starts at the top of the page, not where the last one was scrolled to */}
+            <main key={`${pid}-${step}`} className="min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto max-w-6xl animate-slide-up px-6 py-8 xl:px-10">
                 <ErrorBoundary resetKey={`${pid}-${step}`}>
                   <TaskBusyBanner />
                   <Page />

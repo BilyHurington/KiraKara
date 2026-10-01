@@ -27,6 +27,14 @@ export function LineList({ stats, selected, onSelect, checked, onToggleCheck, fi
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-line="${selected}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
+  // another filter: the list from its top, or at the selected row when it is still listed
+  const firstFilter = useRef(true);
+  useEffect(() => {
+    if (firstFilter.current) { firstFilter.current = false; return; }
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-line="${selected}"]`);
+    if (row) row.scrollIntoView?.({ block: 'nearest' });
+    else if (listRef.current) listRef.current.scrollTop = 0;
+  }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex min-h-0 flex-col">

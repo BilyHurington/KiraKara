@@ -339,6 +339,22 @@ describe('simple mode shell', () => {
     expect(useSimple.getState().ui).toBe('pro');
     expect(localStorage.getItem('kara.ui')).toBe('pro');
   });
+
+  it('another page, settings category or style category starts at its top', async () => {
+    seed();
+    mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/styles': () => [builtinSaved()], 'GET /api/fonts': () => ({ default: '', families: [] }),
+      'GET /api/ai/providers': () => [], 'GET /api/storage': () => new Response('{}', { status: 404 }) });
+    const { container } = renderUI(<SimpleApp />);
+    await screen.findByText('做一首卡拉OK');
+    container.querySelector('main')!.scrollTop = 900;
+    await userEvent.click(screen.getByRole('button', { name: '设置' }));
+    await screen.findByRole('heading', { level: 1, name: '设置' });
+    expect(container.querySelector('main')!.scrollTop).toBe(0);  // a new page: from the top
+    await userEvent.click(screen.getByRole('tab', { name: '字幕样式' }));
+    container.querySelector('main')!.scrollTop = 700;
+    await userEvent.click(screen.getByRole('tab', { name: '输出视频' }));
+    expect(container.querySelector('main')!.scrollTop).toBe(0);
+  });
 });
 
 describe('one-click AI readings in the detailed mode', () => {

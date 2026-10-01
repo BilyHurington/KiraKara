@@ -60,9 +60,14 @@ export function SimpleSettings() {
   const info = useApp((s) => s.info);
   const [retrying, setRetrying] = useState(false);
   const [tab, setTabState] = useState<Tab>(storedTab);
+  const root = useRef<HTMLDivElement>(null);
   const setTab = (t: Tab) => {
+    if (t === tab) return;
     setTabState(t);
     try { localStorage.setItem(TAB_KEY, t); } catch { /* ignore */ }
+    // the menu stays in view while the page scrolls: another category starts at the top of the page
+    const main = root.current?.closest('main');
+    if (main) main.scrollTop = 0;
   };
   if (!settings) {
     const retry = async () => {
@@ -86,7 +91,7 @@ export function SimpleSettings() {
   const save = (patch: Partial<Simple>) => run(() => saveSettings({ simple: patch }), '保存设置失败');
 
   return (
-    <div className="space-y-6">
+    <div ref={root} className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="mt-1 text-sm text-muted">“开始制作”会按这里的选项自动完成每一步。修改立即保存，只对之后添加的任务生效（已在队列里的任务按添加时的选项完成）。</p>

@@ -482,6 +482,16 @@ describe('colour template requests (F-M12)', () => {
     expect(latest.text.size).toBe(120);  // not reset by the theme answer
   });
 
+  it('in a panel that scrolls on its own, another category starts at its top', async () => {
+    mockApi({ 'GET /api/karaoke/styles': () => [builtinSaved()] });
+    renderUI(<StylePanel style={plainStyle()} onChange={() => undefined} fonts={[]} defaultFont="" fill />);
+    const box = screen.getAllByRole('tabpanel', { hidden: true })[0].parentElement!.parentElement!;
+    await userEvent.click(screen.getByRole('tab', { name: '布局' }));
+    box.scrollTop = 400;
+    await userEvent.click(screen.getByRole('tab', { name: '时间' }));
+    await waitFor(() => expect(box.scrollTop).toBe(0));
+  });
+
   it('mergeThemeColors takes only what a template decides', () => {
     const cur = plainStyle();
     cur.layout.margin_v = 333;

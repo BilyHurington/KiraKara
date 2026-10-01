@@ -111,15 +111,31 @@ function SectionTabs({ active, onSelect, fill, children }: {
 }) {
   const items = Children.toArray(children).filter(isValidElement) as ReactElement<SectionProps>[];
   const current = items.find((c) => c.props.id === active) ?? items[0];
+  const tabs = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // another category starts at its top: the panel's own scroll back to 0, or (in a page that
+  // scrolls) the tabs back into view
+  const picked = useRef(false);
+  const choose = (id: SectionId) => {
+    if (id === current?.props.id) return;
+    picked.current = true;
+    onSelect(id);
+  };
+  useEffect(() => {
+    if (!picked.current) return;  // (not on the first render)
+    picked.current = false;
+    if (fill && box.current) box.current.scrollTop = 0;
+    else tabs.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [active, fill]);
   return (
     <>
-      <div role="tablist" aria-label="样式分类" onKeyDown={(e) => arrowNav(e, 'tab')}
+      <div ref={tabs} role="tablist" aria-label="样式分类" onKeyDown={(e) => arrowNav(e, 'tab')}
         className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1 @xl:grid-cols-8">
         {items.map((c) => {
           const on = c === current;
           return (
             <Tip key={c.props.id} content={on ? null : c.props.summary} keep>
-              <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} onClick={() => onSelect(c.props.id)}
+              <button type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} onClick={() => choose(c.props.id)}
                 className={cn('focus-ring flex flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[12px] font-medium transition',
                   on ? 'bg-surface text-accent shadow-sm' : 'text-muted hover:text-fg')}>
                 {c.props.icon}{c.props.title}
@@ -130,7 +146,7 @@ function SectionTabs({ active, onSelect, fill, children }: {
       </div>
       {/* every category stays mounted (hidden): one still busy (a colour template on its way, a draft
           being typed) keeps working with the current style while another is shown */}
-      <div className={cn(fill && '-mx-1 min-h-0 flex-1 overflow-y-auto px-1')}>
+      <div ref={box} className={cn(fill && '-mx-1 min-h-0 flex-1 overflow-y-auto px-1')}>
         {items.map((c) => <div key={c.props.id} hidden={c !== current}>{c}</div>)}
       </div>
     </>
