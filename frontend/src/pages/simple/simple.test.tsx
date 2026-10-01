@@ -340,14 +340,23 @@ describe('simple mode shell', () => {
     expect(localStorage.getItem('kara.ui')).toBe('pro');
   });
 
-  it('another settings category starts at the top of the page', async () => {
+  it('each page keeps its own scroll position; another settings category starts at the top', async () => {
     seed();
     mockApi({ 'GET /api/tasks': () => [], 'GET /api/karaoke/styles': () => [builtinSaved()], 'GET /api/fonts': () => ({ default: '', families: [] }),
       'GET /api/ai/providers': () => [], 'GET /api/storage': () => new Response('{}', { status: 404 }) });
     const { container } = renderUI(<SimpleApp />);
     await screen.findByText('做一首卡拉OK');
+    const main = container.querySelector('main')!;
+    main.scrollTop = 900;
     await userEvent.click(screen.getByRole('button', { name: '设置' }));
     await screen.findByRole('heading', { level: 1, name: '设置' });
+    expect(main.scrollTop).toBe(0);  // first visit: from the top
+    main.scrollTop = 120;
+    await userEvent.click(screen.getByRole('button', { name: '制作' }));
+    await screen.findByText('做一首卡拉OK');
+    expect(main.scrollTop).toBe(900);  // back where it was on 制作
+    await userEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(main.scrollTop).toBe(120);
     await userEvent.click(screen.getByRole('tab', { name: '字幕样式' }));
     container.querySelector('main')!.scrollTop = 700;
     await userEvent.click(screen.getByRole('tab', { name: '输出视频' }));

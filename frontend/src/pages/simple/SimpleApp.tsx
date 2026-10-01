@@ -2,7 +2,7 @@
 // 需要精细调整时切到详细模式（完成的任务点开也会进入详细模式）。
 
 import { Moon, Settings2, SlidersHorizontal, Sparkles, Sun } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { cn } from '@/lib/format';
 import { run, setTheme, useApp } from '@/store/app';
 import { loadSettings, setSimplePage, setUi, useSimple, type SimplePage } from '@/store/simple';
@@ -15,6 +15,19 @@ export function SimpleApp() {
   const page = useSimple((s) => s.page);
   const settings = useSimple((s) => s.settings);
   const theme = useApp((s) => s.theme);
+  const mainRef = useRef<HTMLElement>(null);
+  const scrolls = useRef<Partial<Record<SimplePage, number>>>({});
+  const shown = useRef(page);
+  // the position is taken as the page changes (the old page is still on screen then), not from
+  // scroll events, which a window in the background may not send
+  useEffect(() => useSimple.subscribe((s, prev) => {
+    if (s.page !== prev.page && mainRef.current) scrolls.current[prev.page] = mainRef.current.scrollTop;
+  }), []);
+  useLayoutEffect(() => {
+    if (shown.current === page) return;
+    shown.current = page;
+    if (mainRef.current) mainRef.current.scrollTop = scrolls.current[page] ?? 0;
+  }, [page]);
 
   useEffect(() => {
     if (!settings) void run(() => loadSettings(), '读取设置失败');
@@ -54,7 +67,8 @@ export function SimpleApp() {
           </button>
         </div>
       </header>
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      {/* each page keeps its own scroll position (going back to 制作 returns to where you were on it) */}
+      <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto">
         <div key={page} className="mx-auto max-w-4xl animate-slide-up px-4 py-8 sm:px-6">
           <ErrorBoundary resetKey={page}>
             {page === 'home' ? <SimpleHome /> : <SimpleSettings />}
