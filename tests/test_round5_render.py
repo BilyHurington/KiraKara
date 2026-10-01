@@ -737,7 +737,8 @@ def test_long_titles_wrap_instead_of_being_squeezed():
     card = [l for l in _events(text, "KInfo") if "\\p1" not in l]
     assert card and not any("\\fscx" in l for l in card)  # no squeezed rows
     texts = list(dict.fromkeys(l.split("}", 1)[1] for l in card))
-    assert texts[0] == "ハイファイ☆デイズ" and any("(M@STER VERSION)" in t for t in texts)  # not inside the brackets
+    # not inside the brackets (where the row breaks depends on the font: Hiragino or the bundled Noto Sans CJK)
+    assert texts[0].startswith("ハイファイ☆デイズ") and any("(M@STER VERSION)" in t for t in texts)
     # rows break outside brackets where they can
     w = lambda s: len(s) * 40  # noqa: E731
     assert wrap_text("ショコラ・ティアラ ～For Miria rearrange MIX～", w, 1100) == ["ショコラ・ティアラ", "～For Miria rearrange MIX～"]

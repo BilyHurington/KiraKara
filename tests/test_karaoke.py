@@ -720,7 +720,8 @@ def test_user_text_with_backslashes_and_missing_fonts(tmp_path):
 def test_translation_under_each_line_stays_inside_the_margins(tmp_path):
     h = _project(tmp_path)
     for ln in h.project.lyrics.sung_lines():
-        ln.translation = "a very long English translation that is certainly much wider than the lyric line above it"
+        # (twice over: too wide for the margins in any font, Hiragino or the bundled Noto Sans CJK)
+        ln.translation = "a very long English translation that is certainly much wider than the lyric line above it " * 2
     h.save()
     st = h.project.karaoke.model_copy(deep=True)
     st.translation.enabled, st.translation.position = True, "line"

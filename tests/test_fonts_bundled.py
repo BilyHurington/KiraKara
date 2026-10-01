@@ -2,6 +2,7 @@
 
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -89,7 +90,8 @@ def test_font_folder_scan_is_cached(tmp_path, monkeypatch):
 def test_fontsdir_is_escaped_for_the_filter_graph(tmp_path, monkeypatch):
     from kara_align.karaoke.render import _subtitles_filter, filter_path
 
-    d = tmp_path / "字体 a:b'c [1],y;z"
+    # (Windows allows no ":" in a name; there the drive's "C:" is the colon to escape)
+    d = tmp_path / ("字体 a" + ("" if sys.platform == "win32" else ":") + "b'c [1],y;z")
     d.mkdir()
     (d / "x.ttf").write_bytes(b"")
     monkeypatch.setenv("KARA_ALIGN_FONTS", str(d))
