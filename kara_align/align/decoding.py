@@ -7,6 +7,8 @@ repeated choruses and repeated syllables stay distinct.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
@@ -30,6 +32,7 @@ class UnitInfo:
     text: str = ""
     token_ids: list[int] = field(default_factory=list)
     unknown: list[str] = field(default_factory=list)
+    english: bool = False  # aligned on the letters of an English word (_english_texts)
 
 
 @dataclass
@@ -87,11 +90,13 @@ def prepare(
             flags = {u.id: list(u.flags) for u in lines[lid].units()}
             texts += profile.unit_texts([i.reading for i in li], [i.lang for i in li],
                                         [flags.get(i.unit_id, []) for i in li])
+    texts, english = _english_texts(lines, order, line_units, texts)
     toks = tokenize(ids, list(texts)) if infos else []
     by_id = {t.unit_id: t for t in toks}
     held = held_units([(i.unit_id, i.line_id, i.reading) for i in infos], {t.unit_id for t in toks if t.token_ids})
     for i, text in zip(infos, texts):
         i.text = text
+        i.english = i.unit_id in english
         t = by_id.get(i.unit_id)
         if t is not None:
             i.token_ids = list(t.token_ids)
@@ -107,6 +112,109 @@ def prepare(
                                 message=f"单元「{i.reading}」中的字符 {i.unknown} 不在模型词表中",
                                 data={"unknown": i.unknown}))
     return Prepared(lines, order, units, line_units, issues)
+
+
+# ---------------------------------------------------------------------------
+# English words: the model writes what it hears of them in English spelling ("i will give you all
+# my love"), not in the romaji of their katakana reading ("yuu ooru mai rabu"), so their units are
+# aligned on the word's own letters, split over the units (ら "lo" ぶ "ve")
+
+
+def _is_word(surface: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z'’\-]*", surface))
+
+
+def _spelled(word: str, reading: str) -> bool:
+    """A single letter, or capitals read letter by letter (OK = おーけー): sung as the letters'
+    Japanese names, which the model hears as such (R = "aaru"), not as English."""
+    from ..reading.japanese import LETTER_NAMES, to_hiragana
+
+    if len(word) == 1:
+        return True
+    if not word.isupper():
+        return False
+    r = to_hiragana(reading or "")
+
+    def match(i: int, j: int) -> bool:
+        if i == len(word):
+            return j == len(r)
+        return any(r.startswith(n, j) and match(i + 1, j + len(n)) for n in LETTER_NAMES.get(word[i], []))
+
+    return match(0, 0)
+
+
+_SIMILAR = [set("rl"), set("bvp"), set("szct"), set("uowy"), set("ieyj"), set("kcqgx"), set("fh"), set("ae"), set("dt"), set("mn")]
+
+
+def _sub_cost(a: str, b: str) -> float:
+    if a == b:
+        return 0.0
+    return 0.5 if any(a in g and b in g for g in _SIMILAR) else 1.0
+
+
+def _distance(piece: str, romaji: str) -> float:
+    """Edit distance, letters that sound alike substituted cheaply."""
+    prev = [float(j) for j in range(len(romaji) + 1)]
+    for i, a in enumerate(piece, 1):
+        cur = [float(i)] + [0.0] * len(romaji)
+        for j, b in enumerate(romaji, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + _sub_cost(a, b))
+        prev = cur
+    return prev[-1]
+
+
+def split_letters(letters: str, romaji: Sequence[str]) -> list[str]:
+    """Split ``letters`` into one contiguous piece per unit, following the units' romaji (a unit
+    without romaji, ー, gets none; every other unit at least one letter while there are enough)."""
+    n, m = len(romaji), len(letters)
+    need = [bool(r) for r in romaji]
+    strict = m >= sum(need)
+    INF = float("inf")
+    # best[i][j]: units 0..i-1 took letters 0..j-1
+    best = [[INF] * (m + 1) for _ in range(n + 1)]
+    back = [[0] * (m + 1) for _ in range(n + 1)]
+    best[0][0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(m + 1):
+            for k in (range(j + 1) if need[i - 1] else (j,)):
+                if best[i - 1][k] == INF:
+                    continue
+                piece = letters[k:j]
+                if need[i - 1] and strict and not piece:
+                    continue
+                c = best[i - 1][k] + (_distance(piece, romaji[i - 1]) if need[i - 1] else 0.0)
+                if c < best[i][j]:
+                    best[i][j], back[i][j] = c, k
+    if best[n][m] == INF:
+        return list(romaji)
+    out, j = [], m
+    for i in range(n, 0, -1):
+        k = back[i][j]
+        out.append(letters[k:j])
+        j = k
+    return out[::-1]
+
+
+def _english_texts(lines: dict, order: list[str], line_units: dict[str, list[str]],
+                   texts: list[str]) -> tuple[list[str], set[str]]:
+    """The texts of units of English words (Latin letters written with a kana reading): the word's
+    letters, split over its units; and the ids of those units."""
+    out = list(texts)
+    english: set[str] = set()
+    pos = {u: i for i, u in enumerate(u for lid in order for u in line_units[lid])}
+    for lid in order:
+        for seg in lines[lid].segments:
+            word = seg.surface.strip()
+            if not _is_word(word) or _spelled(word, seg.reading or "".join(u.reading for u in seg.units)):
+                continue
+            idx = [pos[u.id] for u in seg.units if u.id in pos]
+            if not idx:
+                continue
+            letters = re.sub(r"[^a-z]", "", word.lower())
+            for i, piece in zip(idx, split_letters(letters, [out[i] for i in idx])):
+                out[i] = piece
+            english.update(u.id for u in seg.units if u.id in pos)
+    return out, english
 
 
 def held_units(units: Sequence[tuple[str, str, str]], with_tokens: set[str]) -> set[str]:
@@ -155,6 +263,10 @@ def apply_holds(uts: list[UnitTiming]) -> None:
                 h.acoustic_score = p.acoustic_score
                 h.flags = [f for f in h.flags if f != "partial_tokens"] + ["held"]
         i = max(j, i + 1)
+
+
+# per frame, what singing after the last line (a free tail) costs beyond what the model heard there
+TAIL_FILLER_COST = 1.0
 
 
 @dataclass
@@ -246,7 +358,8 @@ def decode_task(
     priors = frame_priors(pos_line, em.num_frames, frame_ms, cfg,
                           activity.for_frames(fm, 0, em.num_frames) if activity is not None else None)
     try:
-        path = ctc_align(em.logp, targets, em.blank_id, anchors, band=cfg.band_frames, priors=priors)
+        path = ctc_align(em.logp, targets, em.blank_id, anchors, band=cfg.band_frames, priors=priors,
+                         tail_penalty=TAIL_FILLER_COST if task.free_tail else None)
     except NoFeasiblePath as e:
         out.reason = e.reason
         return out
@@ -327,6 +440,8 @@ def unit_timings_for_line(prep: Prepared, outcome: Optional[TaskOutcome], line_i
             ut.acoustic_score = sp.score
             if info.unknown:
                 ut.flags.append("partial_tokens")
+            if info.english and info.text and not any(c in "aeiouy" for c in info.text):
+                ut.flags.append("consonant")  # (ん "n", ぐ "g" of "Spring"): a few frames is right
             if sp.max_gap_ms >= TOKEN_GAP_MS:
                 ut.flags.append("token_gap")
         res.append(ut)

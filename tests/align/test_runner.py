@@ -64,6 +64,7 @@ def test_lrc_invalid_anchor_raises():
 def test_untokenizable_unit_reported_not_invented():
     doc = _doc()
     doc.lines[1].segments[1].units[0].reading = "ル"  # not in vocab
+    doc.lines[1].segments[1].surface = "ル"  # (a Latin surface would be aligned on its letters, as English)
     res = run_alignment(inputs(doc, _emission()))
     u = next(u for u in res.units if u.reading == "ル")
     assert u.status == "unaligned" and u.start_ms is None and u.end_ms is None and u.reason

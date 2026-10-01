@@ -553,6 +553,7 @@ def test_plain_local_rerun_decodes_only_the_neighbourhood():
 def test_lock_needs_times_and_clear_restores_status():
     doc = make_doc([["ki", "mi"]])
     doc.lines[0].segments[1].units[0].reading = "ル"  # no tokens
+    doc.lines[0].segments[1].surface = "ル"  # (a Latin surface would be aligned on its letters, as English)
     res = run_alignment(inputs(doc, make_emission([("ki", 1000, 1400)], 3000)))
     bad = next(u for u in res.units if u.reading == "ル")
     with pytest.raises(edits.EditError):

@@ -2,4 +2,4 @@
 
 __version__ = "1.1.0"
 # 2: per-line っ/ー, windows before the first anchor, skipped tail lines; 3: ー held (no tokens of its own)
-ALGORITHM_VERSION = "kara-align-decoder/3"
+ALGORITHM_VERSION = "kara-align-decoder/4"

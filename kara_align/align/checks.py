@@ -30,7 +30,7 @@ def check_units(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:
             _flag(u, "illegal_interval")
             issues.append(Issue(code="illegal_interval", severity="error", line_id=u.line_id, unit_id=u.unit_id,
                                 message=f"终点 {u.end_ms} ≤ 起点 {u.start_ms}"))
-        elif d < cfg.min_unit_ms:
+        elif d < cfg.min_unit_ms and "consonant" not in u.flags:
             _flag(u, "short_unit")
             issues.append(Issue(code="short_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
                                 message=f"单元「{u.reading}」只有 {d} ms", data={"duration_ms": d}))
@@ -77,6 +77,21 @@ def check_confidence(units: list[UnitTiming], min_units: int = 40, z_low: float 
                                     "常见于英文、括号里的和声或读音不对，建议试听检查",
                             data={"low_units": len(low), "units": len(us)}))
     return issues
+
+
+# a unit whose frames the model scores this low (mean log-probability) was not heard there: on any
+# audio, the vocals stem or the original with accompaniment (well matched units are around -0.3 … -1.5)
+WEAK_UNIT_LOGP = -4.0
+
+
+def weak_units(units: list[UnitTiming]) -> list[Issue]:
+    """For comparing retry variants only (never reported): units the model clearly did not hear where
+    a variant put them, so a variant that squeezes a few units somewhere wrong does not win just
+    because it raised no other warning."""
+    return [Issue(code="weak_unit", severity="warning", line_id=u.line_id, unit_id=u.unit_id,
+                  message=f"单元「{u.reading}」的声学分数很低（{u.acoustic_score:.1f}）")
+            for u in units if u.acoustic_score is not None and u.start_ms is not None and u.manual is None
+            and u.acoustic_score < WEAK_UNIT_LOGP]
 
 
 def check_line_gaps(units: list[UnitTiming], cfg: CheckConfig) -> list[Issue]:

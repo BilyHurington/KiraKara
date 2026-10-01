@@ -53,6 +53,9 @@ class Task:
     anchors: list[TaskAnchor] = field(default_factory=list)
     kind: str = "plain"  # plain | window | joint
     sigma_scale: float = 1.0
+    # no lyrics follow inside the window (it runs to the end of the audio): singing after the last
+    # line (an outro the lyrics do not have) may stay unexplained (ctc free tail)
+    free_tail: bool = False
 
     @property
     def context_line_ids(self) -> list[str]:
@@ -83,7 +86,7 @@ def plan_plain(doc: LyricsDoc, num_frames: int, line_ids: Optional[list[str]] = 
         if not retained:
             continue
         # participating = the whole ordered stream; lyrics are never split by chunk
-        tasks.append(Task(f"plain-{voice}", voice, ids, retained, 0, num_frames, [], "plain"))
+        tasks.append(Task(f"plain-{voice}", voice, ids, retained, 0, num_frames, [], "plain", free_tail=True))
     return tasks
 
 
@@ -202,6 +205,7 @@ def plan_lrc(
                 lo_ms = 0
             hi_ms = (nxt + cfg.right_margin_ms) if nxt is not None else audio_duration_ms
             last_end = ends.get(part_lines[-1].id)
+            free_tail = nxt is None and last_end is None
             if last_end is not None:
                 hi_ms = min(hi_ms, last_end + cfg.end_marker_margin_ms)
             anchors = []
@@ -216,7 +220,8 @@ def plan_lrc(
             hi_ms = min(audio_duration_ms, max(hi_ms, lo_ms))
             s, e = _frames(lo_ms, hi_ms, frame_map, num_frames)
             kind = "joint" if len(part_lines) > len(retained) or len(grp) > 1 else "window"
-            tasks.append(Task(f"lrc-{voice}-{gi}", voice, [ln.id for ln in part_lines], retained, s, e, anchors, kind))
+            tasks.append(Task(f"lrc-{voice}-{gi}", voice, [ln.id for ln in part_lines], retained, s, e, anchors, kind,
+                              free_tail=free_tail))
     return tasks
 
 
@@ -229,4 +234,5 @@ def merge_tasks(a: Task, b: Task, doc: LyricsDoc) -> Task:
     return Task(
         f"{a.id}+{b.id}", a.voice, part, ret, min(a.start_frame, b.start_frame), max(a.end_frame, b.end_frame),
         [anchors[i] for i in part if i in anchors], "joint", max(a.sigma_scale, b.sigma_scale),
+        free_tail=(a if a.end_frame >= b.end_frame else b).free_tail,
     )

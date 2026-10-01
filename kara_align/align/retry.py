@@ -9,7 +9,8 @@ Variants per flagged line (limited by :class:`RetryConfig` budgets):
                      these change the unit grouping, so they are **never
                      committed automatically** and only kept for listening.
 
-Selection: feasibility, coverage, error / warning count, anchor residual; the
+Selection: feasibility, coverage, error / warning count (a line more than ``FAR_RESIDUAL_MS`` from its
+anchor counts as an error), anchor residual; the
 normalised acoustic score is only used to break ties between variants decoded
 with the same model on the same audio slice.  Residuals closer than
 ``RESIDUAL_TIE_MS`` count as equal: a soft LRC anchor is not precise enough to
@@ -30,6 +31,9 @@ from .decoding import Prepared, TaskOutcome, apply_holds, unit_timings_for_line
 from .planning import Task
 
 RESIDUAL_TIE_MS = 150
+# a line this far from its LRC anchor is almost surely somewhere else (a repeated chorus, an outro the
+# lyrics do not have): when variants are compared it counts as an error, not one warning among others
+FAR_RESIDUAL_MS = 3000
 
 
 @dataclass
@@ -55,9 +59,10 @@ class Scored:
     committable: bool = True
 
     def key(self, line_id: str) -> tuple:
-        errors = sum(1 for i in self.issues if i.severity == "error")
-        warns = sum(1 for i in self.issues if i.severity == "warning")
         res = self.outcome.residual(line_id)
+        far = res is not None and abs(res) > FAR_RESIDUAL_MS
+        errors = sum(1 for i in self.issues if i.severity == "error") + far
+        warns = sum(1 for i in self.issues if i.severity == "warning" and not (far and i.code == "anchor_deviation"))
         return (self.outcome.feasible, round(self.coverage, 6), -errors, -warns, -abs(res) if res is not None else 0)
 
     def better_than(self, other: "Scored", line_id: str) -> bool:

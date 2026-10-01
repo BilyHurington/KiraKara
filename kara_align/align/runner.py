@@ -361,7 +361,8 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
                     if r and voices[order[j]] == voices[lid]:
                         neigh.append(LineTiming(line_id=order[j], start_ms=r[0], end_ms=r[1]))
             iss = (chk.check_units(uts, cfg.checks) + chk.check_line_gaps(uts, cfg.checks)
-                   + chk.check_rest(uts, activity) + chk.check_lines(neigh + [lt], cfg.checks, voices, audio_end_ms))
+                   + chk.check_rest(uts, activity) + chk.check_lines(neigh + [lt], cfg.checks, voices, audio_end_ms)
+                   + chk.weak_units(uts))
             iss = [i for i in iss if i.line_id == lid and counts(i)]
             alignable = [u for u in uts if chk.alignable(u)]
             timed = sum(1 for u in alignable if u.start_ms is not None)
@@ -388,7 +389,8 @@ def run_alignment(inp: AlignInputs, cancel: Optional[CancelToken] = None,
             hi = max(r[1] for r in rng) + cfg.decode.right_margin_ms
             s = max(0, int(np.floor(fm.ms_to_frame(max(0, lo)))))
             e = min(nf, int(np.ceil(fm.ms_to_frame(min(inp.audio_duration_ms, hi)))))
-            return Task(f"local-{lid}", voices[lid], ids, [lid], s, e, [], "joint")
+            last = [x for x in order if voices[x] == voices[lid]][-1]
+            return Task(f"local-{lid}", voices[lid], ids, [lid], s, e, [], "joint", free_tail=ids[-1] == last and e >= nf)
 
         ctx = RetryContext(prep=prep, mode=inp.mode, decode=decode, evaluate=evaluate, expand_task=expand,
                            available_roles=[r for r in inp.available_roles if r in ("original", "vocals")],

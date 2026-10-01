@@ -28,6 +28,12 @@ emission score of a state at frame ``t``:
   across an interlude for free.  Leading / trailing / between-line blanks stay
   free.
 
+Free tail (``tail_penalty``, for a window no lyrics follow, e.g. the end of a song with an outro the
+lyrics do not have): after the last token the path may leave into a filler state that explains every
+remaining frame at ``max_k logp[t, k] - tail_penalty``, instead of forcing them all to blank (singing
+labelled blank costs so much that the last lines would be stretched over the outro).  Lyric tokens
+still prefer the frames that match them; the filler frames are reported as the trailing blank.
+
 Tie-breaking (deterministic, identical in both implementations): among equal
 predecessor scores prefer *stay*, then ``s-1``, then ``s-2``; at the end prefer
 the trailing blank ``S-1`` over the last token ``S-2`` when scores are equal.
@@ -225,9 +231,30 @@ def _backtrack(bp: np.ndarray, end_state: int) -> np.ndarray:
     return states
 
 
-def _path_from_states(logp, z, states, anchors_by_state, U, pri=(None, None, None)) -> CtcPath:
+def _tail_states(bp: np.ndarray, fbp: np.ndarray, S: int) -> tuple[np.ndarray, int]:
+    """States of a path ending in the filler (reported as the trailing blank) and its first filler frame."""
+    T = bp.shape[0]
+    states = np.empty(T, dtype=np.int64)
+    t = T - 1
+    while fbp[t] == 0:
+        states[t] = S - 1
+        t -= 1
+    states[t] = S - 1
+    tail_from = t
+    s = S - 1 if fbp[t] == 1 else S - 2
+    for tt in range(t - 1, -1, -1):
+        states[tt] = s
+        if tt > 0:
+            s -= int(bp[tt, s])
+    return states, tail_from
+
+
+def _path_from_states(logp, z, states, anchors_by_state, U, pri=(None, None, None), tail_from: Optional[int] = None) -> CtcPath:
     T = len(states)
     frame_scores = logp[np.arange(T), z[states]]
+    if tail_from is not None:
+        frame_scores = frame_scores.copy()
+        frame_scores[tail_from:] = logp[tail_from:].max(axis=1)  # what the model heard there
     acoustic = float(frame_scores.sum())
     prior_cost = _path_prior_cost(pri, states)
     anchor_cost = 0.0
@@ -253,6 +280,7 @@ def ctc_align(
     anchors: Sequence[AnchorSpec] = (),
     band: Optional[int] = None,
     priors: Optional[FramePriors] = None,
+    tail_penalty: Optional[float] = None,
 ) -> CtcPath:
     """Vectorised Viterbi forced alignment. Raises :class:`NoFeasiblePath`."""
     logp = np.asarray(logp, dtype=np.float64)
@@ -294,7 +322,15 @@ def ctc_align(
 
     cand = np.empty((3, S))
     ecost = np.zeros(S)
+    filler = (logp.max(axis=1) - float(tail_penalty)) if tail_penalty is not None else None
+    F = NEG_INF
+    fbp = np.zeros(T, dtype=np.int8)
     for t in range(1, T):
+        if filler is not None:
+            opts = (F, D[S - 1], D[S - 2])
+            k = int(np.argmax(opts))  # first max wins: stay > trailing blank > last token
+            F = opts[k] + filler[t]
+            fbp[t] = k
         cand[0] = D
         cand[1, 0] = NEG_INF
         cand[1, 1:] = D[:-1]
@@ -316,6 +352,9 @@ def ctc_align(
             D[outside] = NEG_INF
 
     end_state = S - 1 if D[S - 1] >= D[S - 2] else S - 2
+    if filler is not None and F > D[end_state]:
+        states, tail_from = _tail_states(bp, fbp, S)
+        return _path_from_states(logp, z, states, entry, U, pri, tail_from)
     if not np.isfinite(D[end_state]):
         reason = "没有满足硬锚点约束的路径" if any(a.kind == "hard" for a in anchors) else "没有可行的 CTC 路径"
         if band is not None:
@@ -331,6 +370,7 @@ def ctc_align_reference(
     blank: int,
     anchors: Sequence[AnchorSpec] = (),
     priors: Optional[FramePriors] = None,
+    tail_penalty: Optional[float] = None,
 ) -> CtcPath:
     """Plain-loop reference implementation with identical semantics."""
     logp = np.asarray(logp, dtype=np.float64)
@@ -353,7 +393,17 @@ def ctc_align_reference(
     bp = np.zeros((T, S), dtype=np.int8)
     D[0][0] = E(0, 0)
     D[0][1] = E(0, 1) + A(0, 1)
+    F = [NEG_INF] * T
+    fbp = np.zeros(T, dtype=np.int8)
     for t in range(1, T):
+        if tail_penalty is not None:
+            best, arg = F[t - 1], 0
+            if D[t - 1][S - 1] > best:
+                best, arg = D[t - 1][S - 1], 1
+            if D[t - 1][S - 2] > best:
+                best, arg = D[t - 1][S - 2], 2
+            F[t] = best + float(max(logp[t])) - float(tail_penalty)
+            fbp[t] = arg
         for s in range(S):
             best, arg = D[t - 1][s], 0
             if s >= 1:
@@ -367,6 +417,9 @@ def ctc_align_reference(
             D[t][s] = best + E(t, s)
             bp[t, s] = arg
     end_state = S - 1 if D[T - 1][S - 1] >= D[T - 1][S - 2] else S - 2
+    if tail_penalty is not None and F[T - 1] > D[T - 1][end_state]:
+        states, tail_from = _tail_states(bp, fbp, S)
+        return _path_from_states(logp, z, states, entry, U, pri, tail_from)
     if not math.isfinite(D[T - 1][end_state]):
         raise NoFeasiblePath("没有可行的 CTC 路径")
     states = _backtrack(bp, end_state)
