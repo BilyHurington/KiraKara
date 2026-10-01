@@ -54,9 +54,8 @@ export function SimpleApp() {
           </button>
         </div>
       </header>
-      {/* keyed: the other page starts at its top */}
-      <main key={page} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-4xl animate-slide-up px-4 py-8 sm:px-6">
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div key={page} className="mx-auto max-w-4xl animate-slide-up px-4 py-8 sm:px-6">
           <ErrorBoundary resetKey={page}>
             {page === 'home' ? <SimpleHome /> : <SimpleSettings />}
           </ErrorBoundary>
